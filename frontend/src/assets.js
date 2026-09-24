@@ -1,0 +1,68 @@
+import { normalizeDigits } from './persianDate.js';
+
+export const number = value => {
+  const parsed = Number(normalizeDigits(value ?? '').replace(/[٬,\s]/g, '').replace(/٫/g, '.'));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+export const coinCatalog = [
+  { name: 'امامی بانکی ۸۶', price: 'bankEmami86Price' },
+  { name: 'نیم سکه بانکی ۸۶', price: 'bankHalf86Price' },
+  { name: 'ربع سکه بانکی ۸۶', price: 'bankQuarter86Price' },
+  { name: 'سکه یک گرمی بانکی ۸۶', price: 'bankOneGram86Price' },
+  { name: 'امامی', price: 'emamiCoinPrice' },
+  { name: 'تمام', price: 'tamamCoinPrice' },
+  { name: 'نیم', price: 'halfCoinPrice' },
+  { name: 'ربع', price: 'quarterCoinPrice' },
+  { name: 'پارسیان' },
+];
+export const currencyCatalog = [
+  { code: 'USD', name: 'دلار آمریکا', price: 'usdPrice' },
+  { code: 'EUR', name: 'یورو', price: 'eurPrice' },
+  { code: 'AED', name: 'درهم امارات', price: 'aedPrice' },
+  { code: 'GBP', name: 'پوند انگلیس', price: 'gbpPrice' },
+  { code: 'TRY', name: 'لیر ترکیه', price: 'tryPrice' },
+];
+export const currencyName = code => currencyCatalog.find(item => item.code === code)?.name || code;
+export const currencyRate = (code, prices) => number(prices[currencyCatalog.find(item => item.code === code)?.price]);
+export const coinRate = (name, prices) => number(prices[coinCatalog.find(item => item.name === name)?.price]);
+export const marketPriceFields = [
+  ['goldGramPrice', 'قیمت هر گرم طلای ۷۵۰'],
+  ...coinCatalog.filter(item => item.price).map(item => [item.price, item.name]),
+  ...currencyCatalog.map(item => [item.price, `نرخ ${item.name}`]),
+];
+export const quantity = doc => number(doc.category === 'currency' ? doc.currencyAmount : doc.category === 'coin' ? (doc.coinCount ?? 1) : (doc.itemCount ?? 1));
+
+// All persisted money and rates use tomans, matching the existing ledger.
+// The rial equivalent is converted once, at the asset-report boundary.
+export function documentBreakdown(doc, prices = null) {
+  const count = quantity(doc);
+  let base = 0;
+  if (doc.category === 'crafted') base = count * number(doc.weight) * number(doc.ayar || 750) / 750 * (number(prices?.goldGramPrice) || number(doc.gramPrice));
+  if (doc.category === 'melted') base = count * number(doc.meltedWeight) * number(doc.meltedAyar || 750) / 750 * (number(prices?.goldGramPrice) || number(doc.meltedGramPrice));
+  if (doc.category === 'coin') base = count * (doc.coinType === 'پارسیان' ? number(doc.parsianPrice) : (prices && coinRate(doc.coinType, prices)) || number(doc.coinPrice));
+  if (doc.category === 'currency') base = count * ((prices && currencyRate(doc.currencyType, prices)) || number(doc.currencyRate));
+  const wage = doc.category === 'currency' ? 0 : base * number(doc.wagePercent) / 100 + count * number(doc.wageFixed);
+  const costs = count * number(doc.otherCosts);
+  const profit = (base + wage + costs) * number(doc.profitPercent) / 100;
+  const discount = String(doc.type).endsWith('-sale') || doc.direction === 'فروش' ? number(doc.discountRial) : 0;
+  return { base, wage, costs, profit, discount, total: Math.max(0, base + wage + costs + profit - discount) };
+}
+
+export function assetReport(stock, prices) {
+  const result = { totalToman: 0, totalRial: 0, equivalentGrams: null, equivalentUsd: null, goldGrams750: 0, wage: 0, costs: 0, profit: 0, currencies: {}, coins: {}, items: {} };
+  for (const item of stock.available) {
+    const remaining = { ...item, itemCount: item.remaining, coinCount: item.remaining, currencyAmount: item.remaining };
+    const value = documentBreakdown(remaining, prices);
+    result.items[item.id] = value;
+    result.totalToman += value.total;
+    result.wage += value.wage; result.costs += value.costs; result.profit += value.profit;
+    if (item.category === 'crafted') result.goldGrams750 += item.remaining * number(item.weight) * number(item.ayar || 750) / 750;
+    if (item.category === 'melted') result.goldGrams750 += item.remaining * number(item.meltedWeight) * number(item.meltedAyar || 750) / 750;
+    if (item.category === 'currency') result.currencies[item.currencyType] = (result.currencies[item.currencyType] || 0) + item.remaining;
+    if (item.category === 'coin') result.coins[item.coinType] = (result.coins[item.coinType] || 0) + item.remaining;
+  }
+  result.totalRial = result.totalToman * 10;
+  if (number(prices.goldGramPrice) > 0) result.equivalentGrams = result.totalToman / number(prices.goldGramPrice);
+  if (currencyRate('USD', prices) > 0) result.equivalentUsd = result.totalToman / currencyRate('USD', prices);
+  return result;
+}

@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import { isoToPersian, persianToIso, todayInTehran } from './src/persianDate.js';
+
+export async function runWorkspaceChecks({ cdp, evaluate, ready, click, fill, navigate, screenshot, noOverflow, pause, errors }) {
+  const today = todayInTehran();
+  const birthday = persianToIso('1370' + isoToPersian(today).slice(4)) || persianToIso('1399' + isoToPersian(today).slice(4));
+  const customerA = { id: 'a', name: 'مریم رضایی', phone: '09120000001', birthDate: birthday, followUpDate: today, note: 'علاقه‌مند به النگو', rialDebt: 100, settlements: [{ id:'r', direction:'received', date:today, rialAmount:100, gramAmount:0 }] };
+  const customerB = { id: 'b', name: 'بهار احمدی', rialDebt: 0 };
+  const lot = { id:'lot', type:'crafted-purchase', category:'crafted', direction:'خرید', customerName:'فروشنده', itemName:'النگو', craftedKind:'النگو', itemCount:5, weight:2, ayar:750, gramPrice:100, wagePercent:10, amount:1100, date:today };
+  const sale = { ...lot, id:'sale-a', type:'crafted-sale', direction:'فروش', customerId:'a', customerName:customerA.name, inventorySourceId:'lot', itemCount:1, amount:300, typeLabel:'فروش کار ساخته' };
+  const docs = [{ ...sale, id:'sale-b', customerId:'b', customerName:customerB.name, itemCount:2, amount:600 }, sale, lot];
+  const cheque = { id:'check', direction:'received', counterparty:customerA.name, amount:700, bank:'ملت', number:'123', status:'pending', issueDate:today, dueDate:today };
+  await cdp('Runtime.enable'); await cdp('Page.enable');
+  await cdp('Emulation.setDeviceMetricsOverride', {width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+  await cdp('Page.navigate',{url:'http://127.0.0.1:4190'});await ready('.site-shell');
+  await evaluate(`localStorage.setItem('zarngarCurrentUser','workspace-browser-test');localStorage.setItem('zarngarDocuments:workspace-browser-test',${JSON.stringify(JSON.stringify(docs))});localStorage.setItem('zarngarCustomers:workspace-browser-test',${JSON.stringify(JSON.stringify([customerA,customerB]))});localStorage.setItem('zarngarCheques:workspace-browser-test',${JSON.stringify(JSON.stringify([cheque]))});localStorage.setItem('zarngarPrices:workspace-browser-test',JSON.stringify({goldGramPrice:'100',usdPrice:'10',bankEmami86Price:'200'}));location.reload()`);
+  await ready('.home-page');
+  assert.equal(await evaluate(`document.querySelectorAll('.workspace-rail [data-section]').length`),4);
+  assert.equal(await evaluate(`document.querySelectorAll('.home-rates article').length`),3);
+  assert.equal(await evaluate(`document.querySelectorAll('.home-page form,.home-page table').length`),0);
+  assert.ok(await evaluate(`document.querySelector('.home-metrics').textContent.includes('۹۰۰')`));
+  assert.ok(await evaluate(`document.querySelector('.home-metrics').textContent.includes('۲۴۰')`));
+  await noOverflow('home desktop');await screenshot('workspace-home-desktop');
+  await click('.workspace-notifications summary');
+  assert.ok(await evaluate(`document.querySelector('.workspace-notifications').open`));
+  await click('.workspace-notifications button:first-of-type');await ready('.customer-occasions');
+  assert.ok(await evaluate(`document.querySelector('[data-birthday-customer="a"]').textContent.includes('امروز')`));
+  await click('[data-birthday-customer="a"]');await ready('.crm-profile');
+  assert.equal(await evaluate(`document.querySelector('.crm-profile-header h2').textContent`),customerA.name);
+  assert.equal(await evaluate(`document.querySelectorAll('.crm-ranking,.crm-customer-insights').length`),0,'profile starts without full analytics');
+  await click('[data-profile-tab="preferences"]');await ready('.crm-customer-insights');
+  assert.ok(await evaluate(`document.querySelector('.crm-preference-cards').textContent.includes('النگو')`));
+  await click('[data-crm-view="analytics"]');await ready('.crm-ranking');
+  assert.equal(await evaluate(`document.querySelector('.crm-ranking tbody tr').dataset.rankingCustomer`),'b');
+  await fill('[aria-label="مرتب‌سازی مشتریان"]','received');
+  assert.equal(await evaluate(`document.querySelector('.crm-ranking tbody tr').dataset.rankingCustomer`),'a');
+  await navigate('customer-reports');await ready('.crm-ranking');
+  await click('[data-ranking-customer="a"] .crm-open-profile');await ready('.crm-profile');
+  assert.equal(await evaluate(`document.querySelector('.workspace-rail [aria-current="page"]').dataset.section`),'crm');
+
+  await navigate('entries');await ready('.tool-cards');
+  assert.equal(await evaluate(`document.querySelectorAll('.tool-cards button').length`),7);
+  await screenshot('workspace-entries-desktop');
+  await navigate('opening');await ready('.opening-shell');
+  await fill('.opening-item-card:first-child input','پیش‌نویس محفوظ');
+  await navigate('home');await navigate('opening');
+  assert.equal(await evaluate(`document.querySelector('.opening-item-card:first-child input').value`),'پیش‌نویس محفوظ');
+  await navigate('register');
+  await fill('.document-form [name="type"]','crafted-purchase');
+  for(const [name,value] of Object.entries({customerName:'فروشنده جدید',itemName:'مدل جدید',craftedKind:'گردنبند',itemCount:'1',weight:'1',gramPrice:'100',wagePercent:'0'}))await fill(`.document-form [name="${name}"]`,value);
+  await click('.document-form button[type="submit"]');await ready('.document-form .form-message.success');
+  const entered=await evaluate(`JSON.parse(localStorage.getItem('zarngarDocuments:workspace-browser-test'))[0]`);
+  assert.equal(entered.craftedKind,'گردنبند');
+  await fill('.document-form [name="type"]','crafted-sale');await fill('.document-form [name="productCode"]',entered.productCode);
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="craftedKind"]').disabled`),true);
+
+  await navigate('customer-entry');await ready('.crm-editor');
+  await fill('.crm-editor [name="name"]','مشتری جدید');await fill('.crm-editor [name="phone"]','09120000003');
+  await click('.crm-editor button[type="submit"]');await ready('.crm-profile');
+  assert.ok((await evaluate(`JSON.parse(localStorage.getItem('zarngarCustomers:workspace-browser-test'))`)).some(item=>item.name==='مشتری جدید'));
+  await navigate('settlement-entry');await click('[data-customer-id="a"]');await ready('.crm-settlement-form');
+  await fill('[name="settlement-rialAmount"]','25');await click('.crm-settlement-form button[type="submit"]');
+  assert.equal((await evaluate(`JSON.parse(localStorage.getItem('zarngarCustomers:workspace-browser-test'))`)).find(item=>item.id==='a').rialDebt,75);
+  await navigate('cheque-reports');await ready('.standalone-report .occasion-list');
+  await click('.occasion-list button');await ready('.cheque-editor');
+  assert.equal(await evaluate(`document.querySelector('.cheque-editor [name="number"]').value`),'123');
+  await navigate('pricing');await fill('.price-form [name="usdPrice"]','20');await click('.price-form button[type="submit"]');await ready('.price-form .form-message.success');
+  await navigate('rates');await ready('.rate-cards');assert.ok(await evaluate(`document.querySelector('.rate-cards').textContent.includes('۲۰')`));
+  assert.equal(await evaluate(`document.querySelectorAll('.standalone-report form').length`),0);
+
+  await navigate('reports');await screenshot('workspace-reports-desktop');
+  await navigate('profit');await ready('.home-metrics');assert.ok(await evaluate(`document.querySelector('.home-metrics').textContent.includes('۲۴۰')`));
+  await screenshot('workspace-profit-desktop');
+  await navigate('dashboard');await ready('.sd-trend');assert.equal(await evaluate(`document.querySelectorAll('.sd-gold-balance,.sd-rates,.sd-products').length`),0);
+  await navigate('products');await ready('.sd-products');await fill('[aria-label="ترتیب کالاهای پرفروش"]','quantity');
+  assert.ok(await evaluate(`document.querySelector('.sd-products tbody').textContent.includes('النگو')`));
+  await navigate('gold-entry');await ready('.sd-purchase-form');await fill('.sd-purchase-form [name="grams"]','2');await click('.sd-purchase-form button');
+  await ready('.sd-gold-purchases .form-message.success');
+  await navigate('balance');await ready('[data-testid="gold-balance"]');assert.ok(await evaluate(`document.querySelector('[data-testid="gold-balance"]').textContent.includes('۷')`));
+  assert.equal(await evaluate(`document.querySelectorAll('.sd-purchase-form').length`),0);
+  await navigate('vault');await ready('.vault-assets');await navigate('search');await ready('.search-controls');
+  await fill('.search-controls input','النگو');assert.ok(await evaluate(`document.querySelectorAll('.document-card').length > 0`));
+
+  await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await pause(300);
+  for(const [tool,selector] of [['home','.home-page'],['entries','.tool-cards'],['reports','.tool-cards'],['crm','.crm-workspace']]){
+    await navigate(tool);await ready(selector);await noOverflow(`mobile ${tool}`);await screenshot(`workspace-${tool}-mobile`);
+    assert.equal(await evaluate(`document.querySelector('.workspace-menu-toggle').getAttribute('aria-expanded')`),'false');
+  }
+  await click('[data-crm-view="occasions"]');await noOverflow('mobile birthdays');await screenshot('workspace-birthdays-mobile');
+  await click('[data-birthday-customer="a"]');await click('[data-profile-tab="preferences"]');await noOverflow('mobile customer preferences');
+  await click('.workspace-menu-toggle');await pause(260);assert.equal(await evaluate(`document.querySelectorAll('.workspace-rail [data-section]').length`),4);await screenshot('workspace-navigation-mobile');
+  await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await pause(200);
+  assert.equal(await evaluate(`document.querySelector('.workspace-menu-toggle').getAttribute('aria-expanded')`),'false');
+  await evaluate('location.reload()');await ready('.home-page');
+  assert.equal(await evaluate(`JSON.parse(localStorage.getItem('zarngarGoldPurchases:workspace-browser-test'))[0].grams`),2);
+  await evaluate(`localStorage.setItem('zarngarCurrentUser','workspace-empty-account');location.reload()`);await ready('.home-page');
+  assert.ok(await evaluate(`document.querySelector('.home-start') !== null`));
+  await navigate('crm');await click('[data-crm-view="occasions"]');assert.equal(await evaluate(`document.querySelectorAll('[data-birthday-customer]').length`),0);
+  assert.equal(errors.length,0,JSON.stringify(errors));
+  console.log('Workspace browser checks passed: four sections, compact home, all entry paths, isolated reports, historical profit, birthdays, CRM preferences/rankings/settlements, draft preservation, responsive layout, account isolation and persistence.');
+}

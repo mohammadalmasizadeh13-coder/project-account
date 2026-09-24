@@ -1,0 +1,5 @@
+.persian-date-control{display:flex;flex-direction:column;gap:6px;min-width:0;width:100%;text-align:right}
+.persian-date-control>input{width:100%;min-width:0;font-variant-numeric:tabular-nums;text-align:left;letter-spacing:.04em}
+.persian-date-control>input[aria-invalid=true]{border-color:#b94336;background:#fff8f6}
+.persian-date-hint{display:block;color:#65716a;font-size:11px;font-weight:400;line-height:1.75;letter-spacing:0;direction:rtl;white-space:normal}
+.persian-date-error{color:#ae352c}
