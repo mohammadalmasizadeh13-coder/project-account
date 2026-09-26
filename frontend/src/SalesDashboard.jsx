@@ -4,6 +4,7 @@ import { goldBalance, goldPurchasesReport, iranDate, salesReport } from './sales
 import './dashboard.css';
 import PersianDateInput from './PersianDateInput';
 import { PeriodSelect } from './WorkspacePages';
+import { formatRecordDate, formatRecordTimestamp, newRecordTimestamp } from './recordTime';
 
 const number = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(value || 0);
 const money = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value || 0);
@@ -38,7 +39,8 @@ export default function SalesDashboard({ documents, prices, helpers, username, g
       return;
     }
     try {
-      onSaveGoldPurchases([{ id: crypto.randomUUID(), date, grams, note: purchaseForm.note.trim(), createdAt: new Date().toISOString() }, ...goldPurchases]);
+      const recordedAt = newRecordTimestamp();
+      onSaveGoldPurchases([{ id: crypto.randomUUID(), date, grams, note: purchaseForm.note.trim(), createdAt: recordedAt, recordedAt }, ...goldPurchases]);
       setPurchaseForm(current => ({ ...current, grams: '', note: '' }));
       setPurchaseMessage({ type: 'success', text: 'خرید ثبت شد؛ از تراز بازه‌ای که این تاریخ را شامل شود کم می‌شود.' });
     } catch {
@@ -105,7 +107,7 @@ export default function SalesDashboard({ documents, prices, helpers, username, g
         </form>
         {purchaseMessage && <div role="status" className={`form-message ${purchaseMessage.type}`}>{purchaseMessage.text}</div>}
         <details className="sd-purchase-history"><summary>همه خریدهای ثبت‌شده ({number(purchaseHistory.length)})</summary>
-          {purchaseHistory.length ? <ul>{purchaseHistory.map(item => <li key={item.id}><time dateTime={item.date}>{dateLabel(item.date)}</time><b>{number(item.grams)} گرم</b><p>{item.note || 'بدون توضیح'}</p><button type="button" onClick={() => removePurchase(item.id)} aria-label={`حذف خرید ${number(item.grams)} گرم در ${dateLabel(item.date)}`}>حذف</button></li>)}</ul> : <p>هنوز خریدی ثبت نشده است.</p>}
+          {purchaseHistory.length ? <ul>{purchaseHistory.map(item => <li key={item.id}><time dateTime={item.date}>{formatRecordTimestamp(item) ? formatRecordDate(item) : dateLabel(item.date)}</time><b>{number(item.grams)} گرم</b><p>{item.note || 'بدون توضیح'}</p><button type="button" onClick={() => removePurchase(item.id)} aria-label={`حذف خرید ${number(item.grams)} گرم در ${dateLabel(item.date)}`}>حذف</button></li>)}</ul> : <p>هنوز خریدی ثبت نشده است.</p>}
         </details>
       </div>
 </section>}

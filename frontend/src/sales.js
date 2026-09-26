@@ -29,6 +29,11 @@ export function goldPurchasesReport(purchases, period, today = iranDate()) {
   return { records, total: records.reduce((sum, item) => sum + Number(item.grams), 0) };
 }
 
+// A transaction may contain several physical pieces. Legacy documents remain
+// individual invoices, and old rows without IDs retain their own identity.
+export const transactionKey = document => document.transactionId || document.id || document;
+export const invoiceCount = documents => new Set(documents.map(transactionKey)).size;
+
 export function salesReport(documents, period, helpers, today = iranDate()) {
   const { quantity, weight, amount } = helpers;
   const days = period === 'week' ? 7 : period === 'month' ? 30 : 1;
@@ -36,6 +41,7 @@ export function salesReport(documents, period, helpers, today = iranDate()) {
   const sales = documents.filter(doc => (String(doc.type).endsWith('-sale') || doc.direction === 'فروش') && doc.date >= start && doc.date <= today && doc.source !== 'opening-inventory');
   const categories = saleCategories.map(category => ({ ...category, amount: 0, quantity: 0, weight: 0 }));
   const products = new Map();
+  const productTransactions = new Map();
   const series = Array.from({ length: days }, (_, index) => ({ date: dateBefore(today, days - index - 1), amount: 0 }));
   let total = 0;
   let count = 0;
@@ -52,10 +58,13 @@ export function salesReport(documents, period, helpers, today = iranDate()) {
     const name = doc.category === 'currency' ? currencyName(doc.currencyType) : doc.category === 'coin' ? `سکه ${doc.coinType || ''}`.trim() : (String(doc.itemName || '').trim() || String(doc.description || '').trim() || category?.label || 'سایر');
     const key = `${doc.category}:${name}`;
     const product = products.get(key) || { key, name, category: category?.label || 'سایر', unit: doc.category === 'currency' ? doc.currencyType : 'عدد / قطعه', amount: 0, quantity: 0, weight: 0, invoices: 0 };
-    product.amount += value; product.quantity += qty; product.weight += grams; product.invoices += 1;
+    const invoices = productTransactions.get(key) || new Set();
+    invoices.add(transactionKey(doc));
+    productTransactions.set(key, invoices);
+    product.amount += value; product.quantity += qty; product.weight += grams; product.invoices = invoices.size;
     products.set(key, product);
     const bucket = series.find(item => item.date === doc.date);
     if (bucket) bucket.amount += value;
   }
-  return { total, count, totalWeight, invoices: sales.length, categories, products: [...products.values()].sort((a, b) => b.amount - a.amount), series };
+  return { total, count, totalWeight, invoices: invoiceCount(sales), categories, products: [...products.values()].sort((a, b) => b.amount - a.amount), series };
 }

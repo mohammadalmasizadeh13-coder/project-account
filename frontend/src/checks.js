@@ -1,4 +1,5 @@
 import { iranDate } from './sales.js';
+import { newRecordTimestamp } from './recordTime.js';
 
 export const chequeStatuses = { pending: 'در انتظار', cleared: 'پاس‌شده', bounced: 'برگشتی', cancelled: 'لغوشده' };
 export const chequeDirections = { received: 'دریافتی', issued: 'پرداختی' };
@@ -86,5 +87,8 @@ export function upsertCheque(cheques, form, { parseNumber = Number, now = new Da
   const existing = cheques.find(cheque => cheque.id === record.id);
   if (record.id && !existing) throw new Error('چک موردنظر پیدا نشد؛ فهرست را تازه کنید.');
   const saved = { ...existing, ...record, id: existing?.id || id || crypto.randomUUID(), createdAt: existing?.createdAt || now, updatedAt: now };
+  if (!existing) saved.recordedAt = newRecordTimestamp(now);
+  else if (Object.hasOwn(existing, 'recordedAt')) saved.recordedAt = existing.recordedAt;
+  else delete saved.recordedAt;
   return existing ? cheques.map(cheque => cheque.id === existing.id ? saved : cheque) : [saved, ...cheques];
 }

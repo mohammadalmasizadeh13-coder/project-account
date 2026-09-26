@@ -14,3 +14,6 @@
 
 .workspace-rail>button[data-section]{gap:10px}.workspace-rail>button[data-section] span{white-space:nowrap;font-size:13px}.crm-section-page{color:#34594b}
 @media(min-width:1001px){.workspace-page.account-page{grid-template-columns:230px minmax(0,1fr)}}
+
+.document-record-time{display:block;font-size:11px;line-height:1.9;color:#687e6c;margin-top:7px;overflow-wrap:anywhere}
+.expense-unit-totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:0 0 16px}.expense-unit-totals>div{background:#f5f8f2;border:1px solid #e3ebdf;border-radius:9px;padding:14px;min-width:0}.expense-unit-totals dt{font-size:12px;color:#718367}.expense-unit-totals dd{font-size:16px;font-weight:700;margin:9px 0 0;overflow-wrap:anywhere}.expense-unit-totals small{display:block;font-weight:400;font-size:11px;line-height:1.8;margin-top:7px}

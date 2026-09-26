@@ -113,3 +113,36 @@ test('CSV preserves Persian text, quoting, phone leading zeros and neutralizes s
   assert.ok(csv.includes('"\'=HYPERLINK(""x"")"'));
   assert.ok(csv.includes("'09120000000"));
 });
+
+test('set component batches share invoice counts and averages without merging physical or financial lines', () => {
+  const metadata = { setId: 'rose', setKind: 'نیم‌ست', setName: 'رز', setMode: 'separate', transactionId: 'batch-one' };
+  const bracelet = sale('bracelet', { ...metadata, itemName: 'دستبند رز', craftedKind: 'دستبند', amount: 200, weight: 3, discountRial: 10 });
+  const row = report([
+    bracelet, bracelet,
+    sale('bracelet-two', { ...metadata, itemName: 'دستبند رز', craftedKind: 'دستبند', amount: 300, weight: 4, discountRial: 15 }),
+    sale('necklace', { ...metadata, itemName: 'گردنبند رز', craftedKind: 'گردنبند', amount: 400, weight: 5 }),
+    sale('legacy', { amount: 100, weight: 1 }),
+  ]);
+  assert.equal(row.purchased, 1000);
+  assert.equal(row.lifetimePurchased, 1000);
+  assert.equal(row.itemCount, 4);
+  assert.equal(row.craftedQuantity, 4);
+  assert.equal(row.goldGrams, 13);
+  assert.equal(row.discounts, 25);
+  assert.equal(row.invoices, 2);
+  assert.equal(row.averagePurchase, 500);
+  assert.equal(row.groups[0].invoices, 2);
+  assert.equal(row.crafted.find(kind => kind.label === 'دستبند').invoices, 1);
+  assert.equal(row.products.find(product => product.label === 'دستبند رز').invoices, 1);
+  assert.equal(row.products.find(product => product.label === 'دستبند رز').quantity, 2);
+  assert.equal(row.groups.reduce((sum, group) => sum + group.amount, 0), 1000);
+});
+
+test('explicit sets and legacy half sets, services and bracelets preserve their kinds', () => {
+  assert.equal(craftedKind({ craftedKind: 'ست', itemName: 'طرح جدید' }), 'ست');
+  assert.equal(craftedKind({ itemName: 'ست گل' }), 'ست');
+  assert.equal(craftedKind({ itemName: 'نیم ست گل' }), 'نیم‌ست');
+  assert.equal(craftedKind({ itemName: 'سرویس مروارید' }), 'سرویس');
+  assert.equal(craftedKind({ itemName: 'دستبند طلا' }), 'دستبند');
+  assert.equal(craftedKind({ craftedKind: 'گردنبند', setKind: 'نیم‌ست', setMode: 'separate' }), 'گردنبند');
+});

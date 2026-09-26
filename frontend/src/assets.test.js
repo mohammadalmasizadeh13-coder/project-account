@@ -16,13 +16,58 @@ test('remaining assets include proportional labor, costs, profit and purity; sol
   assert.equal(report.wage, 90);
   assert.equal(report.costs, 6);
   assert.equal(report.profit, 44.8);
+  assert.equal(report.goldWeightGrams, 4);
   assert.equal(report.goldGrams750, 4);
+  assert.equal(report.goldWithWageGrams750, 4.45);
+  assert.equal(report.goldWithWageAndProfitGrams750, 4.674);
   assert.equal(report.totalRial, 9408);
   assert.equal(report.equivalentUsd, 47.04);
   assert.equal(report.equivalentGrams, 4.704);
   assert.deepEqual(before, [gold, sale]);
   assert.equal(documentBreakdown({ ...gold, itemCount: 1, ayar: 900 }).base, 240);
   assert.equal(assetReport(inventoryReport([gold, { ...sale, itemCount: 3 }]), {}).totalToman, 0);
+});
+
+test('gold weight stages distinguish scale weight, purity, labor and profit for remaining gold only', () => {
+  const crafted = { ...gold, ayar: 900 };
+  const melted = { id: 'melted', type: 'melted-purchase', category: 'melted', itemCount: 2, meltedWeight: 5, meltedAyar: 600, meltedGramPrice: 100, wagePercent: 2, wageFixed: 2, otherCosts: 4, profitPercent: 7, date: gold.date };
+  const documents = [crafted, melted,
+    { ...crafted, id: 'crafted-sold', type: 'crafted-sale', inventorySourceId: crafted.id, itemCount: 1 },
+    { ...melted, id: 'melted-sold', type: 'melted-sale', inventorySourceId: melted.id, itemCount: 1 },
+  ];
+  const before = structuredClone(documents);
+  const prices = { goldGramPrice: 200, usdPrice: 20, emamiCoinPrice: 1000 };
+  const report = assetReport(inventoryReport(documents), prices);
+  assert.equal(report.goldWeightGrams, 9);
+  assert.equal(report.goldGrams750, 8.8);
+  assert.ok(Math.abs(report.goldWithWageGrams750 - 9.42) < 1e-10);
+  assert.ok(Math.abs(report.goldWithWageAndProfitGrams750 - 9.9757) < 1e-10);
+  // The ten tomans of other costs remain in total valuation, outside staged grams.
+  assert.equal(report.costs, 10);
+  assert.ok(Math.abs(report.totalToman - 2005.14) < 1e-10);
+  const withOtherAssets = assetReport(inventoryReport([...documents, usd,
+    { id: 'coin', category: 'coin', type: 'coin-purchase', coinType: 'امامی', coinCount: 3, coinPrice: 500, wagePercent: 10, profitPercent: 7 },
+    { id: 'parsian', category: 'coin', type: 'coin-purchase', coinType: 'پارسیان', coinCount: 5, parsianWeight: 1.2, parsianPrice: 300, profitPercent: 10 },
+  ]), prices);
+  for (const key of ['goldWeightGrams', 'goldGrams750', 'goldWithWageGrams750', 'goldWithWageAndProfitGrams750']) assert.equal(withOtherAssets[key], report[key]);
+  assert.ok(withOtherAssets.totalToman > report.totalToman);
+  assert.deepEqual(documents, before);
+});
+
+test('physical grams stay available without a market rate and remain stable when rates change', () => {
+  const stock = inventoryReport([gold]);
+  const historical = assetReport(stock);
+  assert.equal(historical.goldWeightGrams, 6);
+  assert.equal(historical.goldGrams750, 6);
+  assert.equal(historical.goldWithWageGrams750, null);
+  assert.equal(historical.goldWithWageAndProfitGrams750, null);
+  const repriced = assetReport(stock, { goldGramPrice: '۲۰۰' });
+  assert.equal(repriced.goldWeightGrams, historical.goldWeightGrams);
+  assert.equal(repriced.goldGrams750, historical.goldGrams750);
+  assert.equal(repriced.goldWithWageGrams750, 6.675);
+  assert.equal(repriced.goldWithWageAndProfitGrams750, 7.011);
+  const empty = assetReport(inventoryReport([gold, { ...gold, id: 'sold-all', type: 'crafted-sale', inventorySourceId: gold.id }]), { goldGramPrice: 200 });
+  for (const key of ['goldWeightGrams', 'goldGrams750', 'goldWithWageGrams750', 'goldWithWageAndProfitGrams750']) assert.equal(empty[key], 0);
 });
 
 test('foreign currencies retain separate fractional stock and historical rates after repricing', () => {
@@ -66,7 +111,7 @@ test('all four bank 86 coins use distinct rates, retaining older types and Parsi
 });
 
 test('currency forms reject unknown types and invalid rates, quantities and costs', () => {
-  const form = { ...usd, customerName: 'مشتری', type: 'currency-purchase' };
+  const form = { ...usd, customerName: 'مشتری', type: 'currency-purchase', gold18Price: '10000000' };
   assert.deepEqual(validateDocument(form, 'currency', number), {});
   for (const field of ['currencyRate', 'currencyAmount']) {
     for (const value of ['', '0', '-1', 'abc', 'Infinity']) assert.ok(validateDocument({ ...form, [field]: value }, 'currency', number)[field]);

@@ -1,4 +1,6 @@
-import { coinCatalog, currencyCatalog } from './assets.js';
+import { coinCatalog, currencyCatalog, documentBreakdown } from './assets.js';
+import { validateExpense } from './expenses.js';
+import { isTradeDocument } from './tradeGoldPrice.js';
 
 export function validateDocument(form, category, parseNumber) {
   const errors = {};
@@ -10,9 +12,13 @@ export function validateDocument(form, category, parseNumber) {
     const value = parseNumber(raw);
     if (!normalized || !Number.isFinite(Number(normalized)) || (allowZero ? value < 0 : value <= 0)) errors[name] = `${label} باید ${allowZero ? 'صفر یا بیشتر' : 'بیشتر از صفر'} باشد.`;
   };
-  required('customerName', 'نام طرف حساب');
   const date = new Date(`${form.date}T12:00:00Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(form.date || '') || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== form.date) errors.date = 'تاریخ معتبر سند را وارد کنید.';
+  if (category === 'expense') {
+    return { ...errors, ...validateExpense(form) };
+  }
+  required('customerName', 'نام طرف حساب');
+  if (isTradeDocument(form)) numeric('gold18Price', 'قیمت طلای ۱۸ عیار هنگام ثبت');
   if (category === 'crafted') {
     for (const [name, label] of [['itemCount', 'تعداد'], ['weight', 'وزن'], ['gramPrice', 'قیمت هر گرم'], ['ayar', 'عیار']]) numeric(name, label);
     numeric('wagePercent', 'اجرت درصدی', true);
@@ -36,6 +42,10 @@ export function validateDocument(form, category, parseNumber) {
   for (const [name, label] of [['profitPercent', 'سود درصدی'], ['gramDebt', 'بدهی گرمی'], ['rialDebt', 'بدهی ریالی']]) numeric(name, label, true, true);
   for (const [name, label] of [['wageFixed', 'اجرت ثابت'], ['otherCosts', 'هزینه‌های دیگر']]) numeric(name, label, true, true);
   if (category !== 'crafted') numeric('wagePercent', 'اجرت درصدی', true, true);
-  if (String(form.type).endsWith('-sale')) numeric('discountRial', 'تخفیف', true, true);
+  if (String(form.type).endsWith('-sale')) {
+    numeric('discountRial', 'تخفیف', true, true);
+    const beforeDiscount = documentBreakdown({ ...form, category, discountRial: 0 }).total;
+    if (!errors.discountRial && parseNumber(form.discountRial) > beforeDiscount) errors.discountRial = 'تخفیف نمی‌تواند بیشتر از مبلغ سند پیش از تخفیف باشد.';
+  }
   return errors;
 }

@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
-import { isoToPersian, persianToIso, todayInTehran } from './src/persianDate.js';
+import { isoToPersian, normalizeDigits, persianToIso, todayInTehran } from './src/persianDate.js';
 
 export async function runWorkspaceChecks({ cdp, evaluate, ready, click, fill, navigate, screenshot, noOverflow, pause, errors }) {
   const today = todayInTehran();
+  const recordedTime = record => {
+    assert.match(record.recordedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'new financial records have an exact ISO timestamp');
+    assert.equal(new Date(record.recordedAt).toISOString(), record.recordedAt);
+    return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(record.recordedAt));
+  };
+  const assertTimeVisible = async (selector, record) => assert.ok(normalizeDigits(await evaluate(`document.querySelector(${JSON.stringify(selector)}).textContent`)).includes(`ساعت ${recordedTime(record)}`), `${selector} shows the saved Tehran hour and minute`);
   const birthday = persianToIso('1370' + isoToPersian(today).slice(4)) || persianToIso('1399' + isoToPersian(today).slice(4));
   const customerA = { id: 'a', name: 'مریم رضایی', phone: '09120000001', birthDate: birthday, followUpDate: today, note: 'علاقه‌مند به النگو', rialDebt: 100, settlements: [{ id:'r', direction:'received', date:today, rialAmount:100, gramAmount:0 }] };
   const customerB = { id: 'b', name: 'بهار احمدی', rialDebt: 0 };
-  const lot = { id:'lot', type:'crafted-purchase', category:'crafted', direction:'خرید', customerName:'فروشنده', itemName:'النگو', craftedKind:'النگو', itemCount:5, weight:2, ayar:750, gramPrice:100, wagePercent:10, amount:1100, date:today };
+  const lot = { id:'lot', type:'crafted-purchase', category:'crafted', direction:'خرید', customerName:'فروشنده', itemName:'النگو', craftedKind:'النگو', itemCount:5, weight:2, ayar:750, gramPrice:100, wagePercent:10, amount:1100, date:today, createdAt:'2026-09-01T08:15:00.000Z' };
   const sale = { ...lot, id:'sale-a', type:'crafted-sale', direction:'فروش', customerId:'a', customerName:customerA.name, inventorySourceId:'lot', itemCount:1, amount:300, typeLabel:'فروش کار ساخته' };
   const docs = [{ ...sale, id:'sale-b', customerId:'b', customerName:customerB.name, itemCount:2, amount:600 }, sale, lot];
   const cheque = { id:'check', direction:'received', counterparty:customerA.name, amount:700, bank:'ملت', number:'123', status:'pending', issueDate:today, dueDate:today };
@@ -15,6 +21,8 @@ export async function runWorkspaceChecks({ cdp, evaluate, ready, click, fill, na
   await cdp('Page.navigate',{url:'http://127.0.0.1:4190'});await ready('.site-shell');
   await evaluate(`localStorage.setItem('zarngarCurrentUser','workspace-browser-test');localStorage.setItem('zarngarDocuments:workspace-browser-test',${JSON.stringify(JSON.stringify(docs))});localStorage.setItem('zarngarCustomers:workspace-browser-test',${JSON.stringify(JSON.stringify([customerA,customerB]))});localStorage.setItem('zarngarCheques:workspace-browser-test',${JSON.stringify(JSON.stringify([cheque]))});localStorage.setItem('zarngarPrices:workspace-browser-test',JSON.stringify({goldGramPrice:'100',usdPrice:'10',bankEmami86Price:'200'}));location.reload()`);
   await ready('.home-page');
+  assert.equal(await evaluate(`document.querySelector('.home-recent').textContent.includes('ساعت')`),false,'legacy createdAt does not invent a display time');
+  assert.equal((await evaluate(`JSON.parse(localStorage.getItem('zarngarDocuments:workspace-browser-test'))`)).some(doc=>doc.recordedAt),false,'loading legacy documents does not backfill timestamps');
   assert.equal(await evaluate(`document.querySelectorAll('.workspace-rail [data-section]').length`),4);
   assert.equal(await evaluate(`document.querySelectorAll('.home-rates article').length`),3);
   assert.equal(await evaluate(`document.querySelectorAll('.home-page form,.home-page table').length`),0);
@@ -39,7 +47,7 @@ export async function runWorkspaceChecks({ cdp, evaluate, ready, click, fill, na
   assert.equal(await evaluate(`document.querySelector('.workspace-rail [aria-current="page"]').dataset.section`),'crm');
 
   await navigate('entries');await ready('.tool-cards');
-  assert.equal(await evaluate(`document.querySelectorAll('.tool-cards button').length`),7);
+  assert.equal(await evaluate(`document.querySelectorAll('.tool-cards button').length`),8);
   await screenshot('workspace-entries-desktop');
   await navigate('opening');await ready('.opening-shell');
   await fill('.opening-item-card:first-child input','پیش‌نویس محفوظ');
@@ -51,6 +59,7 @@ export async function runWorkspaceChecks({ cdp, evaluate, ready, click, fill, na
   await click('.document-form button[type="submit"]');await ready('.document-form .form-message.success');
   const entered=await evaluate(`JSON.parse(localStorage.getItem('zarngarDocuments:workspace-browser-test'))[0]`);
   assert.equal(entered.craftedKind,'گردنبند');
+  recordedTime(entered);
   await fill('.document-form [name="type"]','crafted-sale');await fill('.document-form [name="productCode"]',entered.productCode);
   assert.equal(await evaluate(`document.querySelector('.document-form [name="craftedKind"]').disabled`),true);
 
@@ -61,6 +70,9 @@ export async function runWorkspaceChecks({ cdp, evaluate, ready, click, fill, na
   await navigate('settlement-entry');await click('[data-customer-id="a"]');await ready('.crm-settlement-form');
   await fill('[name="settlement-rialAmount"]','25');await click('.crm-settlement-form button[type="submit"]');
   assert.equal((await evaluate(`JSON.parse(localStorage.getItem('zarngarCustomers:workspace-browser-test'))`)).find(item=>item.id==='a').rialDebt,75);
+  const settled=(await evaluate(`JSON.parse(localStorage.getItem('zarngarCustomers:workspace-browser-test'))`)).find(item=>item.id==='a').settlements;
+  recordedTime(settled[0]);assert.equal(settled.find(item=>item.id==='r').recordedAt,undefined,'older settlements are not backfilled');
+  await assertTimeVisible('.crm-profile',settled[0]);
   await navigate('cheque-reports');await ready('.standalone-report .occasion-list');
   await click('.occasion-list button');await ready('.cheque-editor');
   assert.equal(await evaluate(`document.querySelector('.cheque-editor [name="number"]').value`),'123');
@@ -69,13 +81,16 @@ export async function runWorkspaceChecks({ cdp, evaluate, ready, click, fill, na
   assert.equal(await evaluate(`document.querySelectorAll('.standalone-report form').length`),0);
 
   await navigate('reports');await screenshot('workspace-reports-desktop');
-  await navigate('profit');await ready('.home-metrics');assert.ok(await evaluate(`document.querySelector('.home-metrics').textContent.includes('۲۴۰')`));
+  await navigate('profit');await ready('.profit-history');assert.ok(await evaluate(`document.querySelector('.profit-history').textContent.includes('۲۴۰')`));
+  assert.ok(await evaluate(`document.querySelector('[data-testid="seller-profit-coverage"]') !== null`),'legacy sales without recorded percentages are identified');
   await screenshot('workspace-profit-desktop');
   await navigate('dashboard');await ready('.sd-trend');assert.equal(await evaluate(`document.querySelectorAll('.sd-gold-balance,.sd-rates,.sd-products').length`),0);
   await navigate('products');await ready('.sd-products');await fill('[aria-label="ترتیب کالاهای پرفروش"]','quantity');
   assert.ok(await evaluate(`document.querySelector('.sd-products tbody').textContent.includes('النگو')`));
   await navigate('gold-entry');await ready('.sd-purchase-form');await fill('.sd-purchase-form [name="grams"]','2');await click('.sd-purchase-form button');
   await ready('.sd-gold-purchases .form-message.success');
+  const goldPurchase=await evaluate(`JSON.parse(localStorage.getItem('zarngarGoldPurchases:workspace-browser-test'))[0]`);
+  recordedTime(goldPurchase);await assertTimeVisible('.sd-gold-purchases',goldPurchase);
   await navigate('balance');await ready('[data-testid="gold-balance"]');assert.ok(await evaluate(`document.querySelector('[data-testid="gold-balance"]').textContent.includes('۷')`));
   assert.equal(await evaluate(`document.querySelectorAll('.sd-purchase-form').length`),0);
   await navigate('vault');await ready('.vault-assets');await navigate('search');await ready('.search-controls');
@@ -92,10 +107,112 @@ export async function runWorkspaceChecks({ cdp, evaluate, ready, click, fill, na
   await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await pause(200);
   assert.equal(await evaluate(`document.querySelector('.workspace-menu-toggle').getAttribute('aria-expanded')`),'false');
   await evaluate('location.reload()');await ready('.home-page');
+  const reloadedDocs=await evaluate(`JSON.parse(localStorage.getItem('zarngarDocuments:workspace-browser-test'))`);
+  for(const old of docs){const saved=reloadedDocs.find(doc=>doc.id===old.id);assert.equal(saved.recordedAt,undefined);assert.equal(saved.createdAt,old.createdAt);}
+  assert.equal(reloadedDocs.find(doc=>doc.id===entered.id).recordedAt,entered.recordedAt);
   assert.equal(await evaluate(`JSON.parse(localStorage.getItem('zarngarGoldPurchases:workspace-browser-test'))[0].grams`),2);
   await evaluate(`localStorage.setItem('zarngarCurrentUser','workspace-empty-account');location.reload()`);await ready('.home-page');
   assert.ok(await evaluate(`document.querySelector('.home-start') !== null`));
   await navigate('crm');await click('[data-crm-view="occasions"]');assert.equal(await evaluate(`document.querySelectorAll('[data-birthday-customer]').length`),0);
+
+  // Exercise the actual expense and seven-percent sale forms in a fresh account.
+  const expenseAccount='workspace-expense-test';
+  const expenseDocsKey=`zarngarDocuments:${expenseAccount}`;
+  const expenseCustomersKey=`zarngarCustomers:${expenseAccount}`;
+  const expenseDocs=()=>evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(expenseDocsKey)}) || '[]')`);
+  const expenseCustomers=()=>evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(expenseCustomersKey)}) || '[]')`);
+  const enter=async values=>{for(const [name,value]of Object.entries(values))await fill(`.document-form [name="${name}"]`,value);};
+  const save=async()=>{await click('.document-form button[type="submit"]');await ready('.document-form .form-message.success');};
+  await evaluate(`localStorage.setItem('zarngarCurrentUser',${JSON.stringify(expenseAccount)});localStorage.setItem('zarngarPrices:'+${JSON.stringify(expenseAccount)},JSON.stringify({goldGramPrice:'100',usdPrice:'10'}));location.reload()`);await ready('.home-page');
+  await navigate('register');await fill('.document-form [name="type"]','crafted-purchase');
+  await enter({customerName:'فروشنده هزینه',itemName:'مدل سود هفت درصد',itemCount:'1',weight:'1',ayar:'750',gramPrice:'100',wagePercent:'0'});
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="profitPercent"]').value`),'0','new purchases have no automatic seller profit');
+  await save();
+  const expenseLot=(await expenseDocs())[0];
+  assert.equal(expenseLot.amount,100);
+  recordedTime(expenseLot);
+  await fill('.document-form [name="type"]','crafted-sale');await fill('.document-form [name="productCode"]',expenseLot.productCode);
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="profitPercent"]').value`),'7');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="profitPercent"]').readOnly`),false,'seller profit remains editable');
+  await enter({customerName:'خریدار هزینه',discountRial:'108'});await click('.document-form button[type="submit"]');await ready('#document-error-discountRial');
+  assert.equal((await expenseDocs()).length,1,'discount above the invoice cannot save a sale');
+  await enter({discountRial:'0'});await save();
+  const newSale=(await expenseDocs())[0];
+  assert.equal(newSale.amount,107);assert.equal(newSale.profitPercent,'7');assert.equal(newSale.inventorySourceId,expenseLot.id);
+  recordedTime(newSale);
+  const customersBeforeExpense=await expenseCustomers();
+  const tradesBeforeExpense=await expenseDocs();
+  await navigate('expense');await ready('.document-form [name="expenseAmount"]');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="type"]').value`),'expense','expense shortcut opens its standalone form');
+  assert.equal(await evaluate(`document.querySelectorAll('.document-form [name="customerName"],.document-form [name="productCode"],.document-form [name="gramDebt"]').length`),0);
+  await enter({expenseUnit:'toman',description:'هزینه حمل فروشگاه',expenseAmount:'۳',expensePayee:'پیک'});
+  await noOverflow('mobile expense form');await screenshot('workspace-expense-mobile');await save();
+  const expense=(await expenseDocs())[0];
+  assert.equal(expense.type,'expense');assert.equal(expense.amount,3);assert.equal(expense.date,today);assert.equal(expense.expensePayee,'پیک');
+  assert.equal(expense.expenseUnit,'toman');assert.equal(expense.expenseAmount,3);recordedTime(expense);
+  assert.equal(Boolean(expense.productCode || expense.inventorySourceId || expense.customerId || expense.gramDebt || expense.rialDebt),false,'expense creates no stock or customer debt');
+  assert.deepEqual(await expenseCustomers(),customersBeforeExpense,'expense payee does not create a customer');
+  assert.deepEqual((await expenseDocs()).slice(1),tradesBeforeExpense,'expense preserves all purchase and sale records');
+  await enter({expenseUnit:'gold'});
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="expenseRate"]').value`),'100','gold expenses offer the current gold rate as an editable starting value');
+  await enter({description:'هزینه کارگاه',expenseAmount:'۰٫۵',expenseGoldPurity:'۷۵۰',expenseRate:''});
+  await click('.document-form button[type="submit"]');await ready('#document-error-expenseRate');
+  assert.equal((await expenseDocs()).length,3,'gold expenses cannot save without their conversion rate');
+  await enter({expenseRate:'100'});await save();
+  const goldExpense=(await expenseDocs())[0];
+  assert.equal(goldExpense.amount,50);assert.equal(goldExpense.expenseAmount,0.5);assert.equal(goldExpense.expenseGoldPurity,750);assert.equal(goldExpense.expenseRate,100);recordedTime(goldExpense);
+  await enter({expenseUnit:'currency'});
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="expenseRate"]').value`),'10','currency expenses offer the current currency rate as an editable starting value');
+  await enter({description:'هزینه ارزی',expenseAmount:'۲',expenseCurrency:'USD',expenseRate:''});
+  await click('.document-form button[type="submit"]');await ready('#document-error-expenseRate');
+  assert.equal((await expenseDocs()).length,4,'currency expenses cannot save without their conversion rate');
+  await enter({expenseRate:'10'});await save();
+  const currencyExpense=(await expenseDocs())[0];
+  assert.equal(currencyExpense.amount,20);assert.equal(currencyExpense.expenseAmount,2);assert.equal(currencyExpense.expenseCurrency,'USD');assert.equal(currencyExpense.expenseRate,10);recordedTime(currencyExpense);
+  await enter({expenseUnit:'rial',description:'هزینه ریالی',expenseAmount:'۲۰'});await save();
+  const rialExpense=(await expenseDocs())[0];
+  assert.equal(rialExpense.amount,2);assert.equal(rialExpense.expenseAmount,20);recordedTime(rialExpense);
+  assert.deepEqual(await expenseCustomers(),customersBeforeExpense,'gold and currency expense payees create no customers or customer debt');
+  assert.deepEqual((await expenseDocs()).filter(doc=>doc.type!=='expense'),tradesBeforeExpense,'mixed expense units do not change inventory documents');
+  await navigate('vault');assert.equal(await evaluate(`document.querySelectorAll('.vault-item').length`),0,'mixed expenses create no inventory');
+  const assertNetProfit=async()=>{
+    await navigate('profit');await ready('[data-testid="net-profit"]');
+    for(const [id,expected]of [['seller-profit','۷'],['report-expenses','۷۵'],['net-profit','−۶۸']]){
+      const value=await evaluate(`(() => { const metric=document.querySelector('[data-testid="${id}"]'); return (metric.querySelector('strong') || metric).textContent.trim(); })()`);
+      assert.equal(value.replace(/[\u200e\u200f]/g,'').replace(/\s+/g,' '),`${expected} تومان`,id);
+    }
+    assert.ok(await evaluate(`document.querySelector('[data-testid="report-discounts"]').textContent.includes('۰ تومان')`));
+    assert.equal(await evaluate(`document.querySelectorAll('.profit-expenses tbody tr').length`),4);
+    assert.ok(await evaluate(`document.querySelector('.profit-expenses tbody').textContent.includes('هزینه حمل فروشگاه')`));
+    assert.equal(await evaluate(`document.querySelector('[data-testid="seller-profit-coverage"]') === null`),true,'new sale has a recorded percentage');
+    const originalTotals=normalizeDigits(await evaluate(`document.querySelector('[data-testid="expense-original-totals"]').textContent`)).replace(/٫/g,'.');
+    for(const quantity of ['0.5','2','20','3'])assert.ok(originalTotals.includes(quantity),`original expense totals include ${quantity}`);
+    for(const unit of ['گرم','دلار','ریال','تومان'])assert.ok(originalTotals.includes(unit),`original expense totals label ${unit}`);
+    await assertTimeVisible('.profit-expenses tbody',goldExpense);
+    await assertTimeVisible('.profit-sales',newSale);
+  };
+  await assertNetProfit();await noOverflow('mobile net seller profit');await screenshot('workspace-net-profit-mobile');
+  await navigate('search');await fill('.search-controls input','هزینه حمل');assert.equal(await evaluate(`document.querySelectorAll('.document-card').length`),1,'expense appears in document search');
+  await assertTimeVisible('.document-card',expense);
+  await fill('.search-controls input','پیک');assert.equal(await evaluate(`document.querySelectorAll('.document-card').length`),1,'expense payee is searchable');
+  const savedExpenseDocs=await expenseDocs();
+  await navigate('pricing');await fill('.price-form [name="goldGramPrice"]','200');await fill('.price-form [name="usdPrice"]','40');await click('.price-form button[type="submit"]');await ready('.price-form .form-message.success');
+  assert.deepEqual(await expenseDocs(),savedExpenseDocs,'market rates preserve expenses and recorded sale profit');
+  await assertNetProfit();
+  await evaluate('location.reload()');await ready('.home-page');assert.deepEqual(await expenseDocs(),savedExpenseDocs);await assertNetProfit();
+  await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});await pause(250);await noOverflow('desktop net seller profit');await screenshot('workspace-net-profit-desktop');
+  const legacyExpense={id:'legacy-cash-expense',type:'expense',category:'expense',date:today,amount:3,expenseAmount:'۳',description:'هزینه قدیمی',createdAt:'2026-09-01T08:15:00.000Z'};
+  await evaluate(`localStorage.setItem('zarngarCurrentUser','workspace-legacy-expense-test');localStorage.setItem('zarngarDocuments:workspace-legacy-expense-test',${JSON.stringify(JSON.stringify([legacyExpense]))});location.reload()`);await ready('.home-page');
+  assert.equal(await evaluate(`document.querySelector('.home-recent').textContent.includes('ساعت')`),false,'legacy expense createdAt alone stays date-only');
+  await navigate('profit');await ready('.profit-expenses tbody');
+  assert.equal(await evaluate(`document.querySelector('.profit-expenses tbody').textContent.includes('ساعت')`),false);
+  assert.ok(normalizeDigits(await evaluate(`document.querySelector('[data-testid="report-expenses"] strong').textContent`)).includes('3 تومان'),'legacy expenses still count as tomans');
+  assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem('zarngarDocuments:workspace-legacy-expense-test'))`),[legacyExpense],'reports never migrate or backfill historical expenses');
+  await evaluate('location.reload()');await ready('.home-page');
+  assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem('zarngarDocuments:workspace-legacy-expense-test'))`),[legacyExpense],'old expenses remain unchanged after reload');
+  await evaluate(`localStorage.setItem('zarngarCurrentUser','workspace-browser-test');location.reload()`);await ready('.home-page');
+  assert.equal((await evaluate(`JSON.parse(localStorage.getItem('zarngarDocuments:workspace-browser-test'))`)).some(doc=>doc.type==='expense'),false,'expenses remain isolated by account');
+  await navigate('profit');assert.ok(await evaluate(`document.querySelector('.profit-history').textContent.includes('۲۴۰')`),'original historical profit remains unchanged');
   assert.equal(errors.length,0,JSON.stringify(errors));
-  console.log('Workspace browser checks passed: four sections, compact home, all entry paths, isolated reports, historical profit, birthdays, CRM preferences/rankings/settlements, draft preservation, responsive layout, account isolation and persistence.');
+  console.log('Workspace browser checks passed: new record timestamps and legacy preservation; mixed toman/rial/gold/currency expenses, frozen conversion rates, net profit, account isolation, persistence, entry paths, CRM and responsive layout.');
 }

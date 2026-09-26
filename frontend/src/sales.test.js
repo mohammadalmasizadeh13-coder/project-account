@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { goldBalance, goldPurchasesReport, iranDate, salesReport } from './sales.js';
+import { goldBalance, goldPurchasesReport, invoiceCount, iranDate, salesReport } from './sales.js';
 import { quantity, documentBreakdown, currencyName, currencyRate, coinCatalog } from './assets.js';
 import { validateDocument } from './documentValidation.js';
-const dependencies = { quantity, documentBreakdown, currencyName, currencyRate, validateDocument, stockQuantity: quantity, coinPriceFields: Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price])), CircleDollarSign: null };
-const dependencySource = 'const { quantity, documentBreakdown, currencyName, currencyRate, validateDocument, stockQuantity, coinPriceFields, CircleDollarSign } = dependencies;';
+import { expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm } from './jewelrySets.js';
+const dependencies = { quantity, documentBreakdown, currencyName, currencyRate, validateDocument, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity: quantity, coinPriceFields: Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price])), CircleDollarSign: null };
+const dependencySource = 'const { quantity, documentBreakdown, currencyName, currencyRate, validateDocument, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity, coinPriceFields, CircleDollarSign } = dependencies;';
 
 // Exercise the existing ledger's financial calculations, not copies of them.
 const source = readFileSync(new URL('./main.jsx', import.meta.url), 'utf8');
@@ -59,6 +60,33 @@ test('empty reports and zero-valued discounted sales remain valid', () => {
   assert.equal(salesReport([{ ...crafted, amount: 0 }], 'today', helpers, today).total, 0);
 });
 
+test('joint sales count one invoice while retaining each piece amount, quantity, weight and product', () => {
+  const common = { ...crafted, setId: 'set', transactionId: 'sale-batch', itemCount: 1, setMode: 'separate' };
+  const lines = [
+    { ...common, id: 'bracelet-a', amount: 100, weight: 2 },
+    { ...common, id: 'bracelet-b', amount: 150, weight: 3 },
+    { ...common, id: 'necklace', itemName: 'Necklace', amount: 200, weight: 4 },
+    { ...common, id: 'later-sale', transactionId: 'second-sale', amount: 75, weight: 1 },
+    { ...crafted, id: 'legacy-sale', itemCount: 1, amount: 50, weight: 1 },
+  ];
+  const report = salesReport(lines, 'today', helpers, today);
+  assert.equal(report.total, 575);
+  assert.equal(report.count, 5);
+  assert.equal(report.totalWeight, 11);
+  assert.equal(report.invoices, 3);
+  assert.equal(report.products.find(product => product.name === 'Bracelet').invoices, 3);
+  assert.equal(report.products.find(product => product.name === 'Bracelet').amount, 375);
+  assert.equal(report.products.find(product => product.name === 'Necklace').invoices, 1);
+  assert.equal(report.categories.reduce((sum, category) => sum + category.amount, 0), 575);
+  assert.equal(report.series.reduce((sum, day) => sum + day.amount, 0), 575);
+});
+
+test('invoice counting preserves independent legacy rows and unifies only explicit transaction identities', () => {
+  assert.equal(invoiceCount([{ id: 'old-a' }, { id: 'old-b' }, {}, {}]), 4);
+  assert.equal(invoiceCount([{ id: 'a', transactionId: 'one' }, { id: 'b', transactionId: 'one' }, { id: 'c', transactionId: 'two' }]), 2);
+  assert.equal(invoiceCount([]), 0);
+});
+
 test('gold balance converts invoice totals at the current gram rate, including all sale types', () => {
   assert.equal(goldBalance(680, 200), 3.4);
   assert.equal(goldBalance(680, 400), 1.7);
@@ -85,13 +113,14 @@ test('gold purchases use the same inclusive date windows as sales', () => {
 test('melted documents preserve the laboratory in opening stock and summaries', () => {
   const openingFunctions = source.slice(source.indexOf('function isOpeningItemBlank'), source.indexOf('function App('));
   const constants = source.slice(source.indexOf('const openingCategoryMeta'), source.indexOf('const digitMap'));
-  const functions = new Function('dependencies', 'iranDate', 'Gem', 'Coins', 'FileText', `${dependencySource}\n${constants}\n${digitMap}\n${calculations}\n${openingFunctions}\nreturn { describeDocumentItem, isOpeningItemBlank, validateOpeningItem, createOpeningDocumentFromItem };`)(dependencies, () => today, null, null, null);
+  const functions = new Function('dependencies', 'iranDate', 'Gem', 'Coins', 'FileText', 'newRecordTimestamp', `${dependencySource}\n${constants}\n${digitMap}\n${calculations}\n${openingFunctions}\nreturn { describeDocumentItem, isOpeningItemBlank, validateOpeningItem, createOpeningDocumentFromItem };`)(dependencies, () => today, null, null, null, () => '2026-09-24T10:15:00.000Z');
   const item = { category: 'melted', itemCount: '1', meltedWeight: '10', meltedAyar: '750', assayCode: '123', laboratoryName: '  آزمایشگاه تهران  ' };
   assert.equal(functions.validateOpeningItem(item, { goldGramPrice: '100' }), '');
   assert.match(functions.validateOpeningItem({ ...item, laboratoryName: ' ' }, { goldGramPrice: '100' }), /آزمایشگاه/);
   assert.equal(functions.isOpeningItemBlank({ category: 'melted', laboratoryName: 'تهران' }), false);
   const document = functions.createOpeningDocumentFromItem(item, { goldGramPrice: '100' }, 0);
   assert.equal(document.laboratoryName, 'آزمایشگاه تهران');
+  assert.equal(document.recordedAt, '2026-09-24T10:15:00.000Z');
   assert.match(document.itemSummary, /آزمایشگاه تهران/);
   assert.doesNotThrow(() => functions.describeDocumentItem({ ...item, laboratoryName: undefined }));
 });

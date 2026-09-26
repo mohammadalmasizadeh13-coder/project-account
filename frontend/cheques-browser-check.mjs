@@ -137,15 +137,28 @@ try {
   const field = name => `.cheque-editor [name="${name}"]`;
   const submit = () => click('.cheque-editor button[type="submit"]');
   const tab = direction => click(`.cheque-tabs button:nth-child(${direction === 'received' ? 1 : 2})`);
-  const beginCheque = async ({ direction, counterparty, amount, number, dueDate, note = '' }) => {
+  const beginCheque = async ({ direction, counterparty, amount, number, dueDate, issueDate = today, note = '' }) => {
     await tab(direction);
     await click('.cheque-heading .button-primary');
     await ready('.cheque-editor');
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(field('direction'))}).value`), direction, 'new cheque inherits the active direction');
-    for (const [name, value] of Object.entries({ counterparty, amount, bank: 'ملت', number, issueDate: jalali(today), dueDate: jalali(dueDate), note })) await fill(field(name), value);
+    for (const [name, value] of Object.entries({ counterparty, amount, bank: 'ملت', number, issueDate: jalali(issueDate), dueDate: jalali(dueDate), note })) await fill(field(name), value);
   };
   const saveCheque = async count => { await submit(); await until(`!document.querySelector('.cheque-editor')`, 'cheque form closes after save'); assert.equal((await stored()).length, count); };
   const findRecord = async number => (await stored()).find(record => record.number === String(number));
+  const registrationLabel = record => evaluate(`document.querySelector('[data-cheque-id="${record.id}"] .cheque-date-cell > small').textContent`);
+  const assertRegistration = async record => {
+    assert.match(record.recordedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'new cheques persist their exact registration instant');
+    const registered = new Date(record.recordedAt);
+    assert.ok(Number.isFinite(registered.getTime()));
+    const time = new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(registered);
+    const label = await registrationLabel(record);
+    assert.ok(label.includes(`ساعت ${time}`), 'cheque register displays the stored Tehran hour and minute');
+    assert.ok(label.includes(jalali(record.issueDate)), 'cheque register retains the chosen business date');
+    if (record.issueDate !== todayInTehran(registered)) {
+      assert.ok(label.includes(` · ثبت: ${jalali(todayInTehran(registered))}`), 'backdated cheques also display their actual registration date');
+    }
+  };
   const editCheque = async (number, changes) => {
     const record = await findRecord(number);
     assert.ok(record, `stored cheque ${number}`);
@@ -184,16 +197,18 @@ try {
   assert.equal(record.dueDate, today);
   assert.equal(record.issueDate, today);
   assert.equal(record.status, 'pending', 'today does not automatically clear a cheque');
+  await assertRegistration(record);
 
   await beginCheque({ direction: 'issued', counterparty: 'پرداختی معوق', amount: '۲٬۵۰۰٬۰۰۰', number: '۲۰۲', dueDate: dateAt(-1) });
   await saveCheque(2);
   await beginCheque({ direction: 'received', counterparty: 'دریافتی سه روز آینده', amount: '۳۵۰۰۰۰۰', number: '۳۰۳', dueDate: dateAt(3) });
   await saveCheque(3);
-  await beginCheque({ direction: 'issued', counterparty: 'پرداختی چهار روز آینده', amount: '۴۵۰۰۰۰۰', number: '۴۰۴', dueDate: dateAt(4) });
+  await beginCheque({ direction: 'issued', counterparty: 'پرداختی چهار روز آینده', amount: '۴۵۰۰۰۰۰', number: '۴۰۴', dueDate: dateAt(4), issueDate: dateAt(-2) });
   await saveCheque(4);
   record = await findRecord(404);
   assert.equal(record.direction, 'issued');
   assert.equal(record.dueDate, dateAt(4), 'future due dates remain exact ISO dates');
+  await assertRegistration(record);
 
   await navigate('cheque-reports');
   await ready('.cheque-report-item');
@@ -230,8 +245,10 @@ try {
   record = await editCheque(404, { amount: '۴٬۷۵۰٬۰۰۰', dueDate: jalali(dateAt(2)), note: 'تاریخ و مبلغ اصلاح شد' });
   assert.equal(record.id, beforeEdit.id);
   assert.equal(record.createdAt, beforeEdit.createdAt);
+  assert.equal(record.recordedAt, beforeEdit.recordedAt, 'editing never replaces the original registration instant');
   assert.equal(record.amount, 4_750_000);
   assert.equal(record.dueDate, dateAt(2));
+  await assertRegistration(record);
   await fill('[aria-label="جستجوی چک"]', '۴۰۴');
   assert.equal(await evaluate(`document.querySelectorAll('.cheque-table tbody tr').length`), 1, 'Persian number search matches normalized cheque numbers');
   await fill('[aria-label="جستجوی چک"]', '');
@@ -251,6 +268,7 @@ try {
   assert.deepEqual(await alertNumbers(), ['پرداختی چهار روز آینده', 'دریافتی سه روز آینده'], 'edited dates and statuses persist after reload');
   assert.equal((await stored()).length, 4);
   assert.equal((await findRecord(404)).amount, 4_750_000);
+  assert.equal((await findRecord(404)).recordedAt, beforeEdit.recordedAt, 'registration timestamp survives reload');
   await evaluate(`localStorage.setItem('zarngarCurrentUser', 'cheques-other-test'); location.reload()`);
   await ready('.workspace-rail');
   await navigate('cheques');
@@ -260,8 +278,24 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('.cheque-table tbody tr').length`), 0, 'another account has no issued cheques');
   await navigate('cheque-reports');
   assert.equal(await evaluate(`document.querySelectorAll('.cheque-report-item').length`), 0, 'alerts are isolated by account');
-  await evaluate(`localStorage.setItem('zarngarCurrentUser', ${JSON.stringify(account)}); location.reload()`);
+  const legacyCheque = { id: 'legacy-created-only', direction: 'received', counterparty: 'چک قدیمی بدون ساعت ثبت', amount: 1000, bank: 'ملت', number: '505', status: 'cleared', issueDate: dateAt(-5), dueDate: dateAt(-4), createdAt: `${dateAt(-5)}T07:08:09.000Z` };
+  await evaluate(`localStorage.setItem('zarngarCurrentUser', ${JSON.stringify(account)}); localStorage.setItem(${JSON.stringify(storageKey)}, JSON.stringify([${JSON.stringify(legacyCheque)}, ...JSON.parse(localStorage.getItem(${JSON.stringify(storageKey)}))])); location.reload()`);
   await ready('.workspace-rail');
+  await navigate('cheques');
+  await ready(`[data-cheque-id="${legacyCheque.id}"]`);
+  assert.deepEqual(await findRecord(505), legacyCheque, 'loading old cheques does not backfill recordedAt');
+  const legacyLabel = `ثبت: ${jalali(legacyCheque.issueDate)}`;
+  assert.equal(await registrationLabel(legacyCheque), legacyLabel, 'createdAt alone never adds a time to old cheque display');
+  const editedLegacy = await editCheque(505, { note: 'ویرایش چک قدیمی' });
+  assert.equal(Object.hasOwn(editedLegacy, 'recordedAt'), false, 'editing legacy cheques does not backfill recordedAt');
+  assert.equal(editedLegacy.createdAt, legacyCheque.createdAt);
+  assert.equal(await registrationLabel(editedLegacy), legacyLabel, 'legacy cheque display remains date-only after editing');
+  await evaluate('location.reload()');
+  await ready('.workspace-rail');
+  await navigate('cheques');
+  await ready(`[data-cheque-id="${legacyCheque.id}"]`);
+  assert.equal(Object.hasOwn(await findRecord(505), 'recordedAt'), false);
+  assert.equal(await registrationLabel(legacyCheque), legacyLabel, 'legacy date-only display survives edit and reload');
   await navigate('cheque-reports');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await until(`document.querySelector('.workspace-rail').getAttribute('aria-hidden') === 'true'`, 'mobile menu starts collapsed');
@@ -274,6 +308,9 @@ try {
   assert.ok(await evaluate(`Array.from(document.querySelectorAll('.cheque-table tbody tr')).every(row => getComputedStyle(row).display !== 'table-row')`), 'mobile cheques render as cards');
   await screenshot('cheques-mobile');
   const mobileRecord = await findRecord(404);
+  await assertRegistration(mobileRecord);
+  assert.equal(mobileRecord.recordedAt, beforeEdit.recordedAt);
+  assert.ok(await evaluate(`(() => { const element = document.querySelector('[data-cheque-id="${mobileRecord.id}"] .cheque-date-cell > small'); return element.scrollWidth <= element.clientWidth; })()`), 'backdated registration date and time wrap within the mobile card');
   await click(`[data-cheque-id="${mobileRecord.id}"] .cheque-edit-button`);
   await ready('.cheque-editor');
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(field('dueDate'))}).value`), jalali(dateAt(2)), 'mobile editor displays a Persian date');
@@ -312,7 +349,7 @@ try {
   await until(`document.querySelector('.workspace-rail').getAttribute('aria-hidden') !== 'true'`, 'desktop navigation reappears');
   await screenshot('cheques-document-desktop');
   assert.equal(errors.length, 0, JSON.stringify(errors));
-  console.log('Cheque browser checks passed: received/issued creation, Persian amounts and dates, invalid dates and amounts, edits, manual status changes, overdue/today/+3/+4 reminders, filters, reload/account isolation, 390px card/editor layouts, mobile navigation focus, and desktop/mobile screenshots.');
+  console.log('Cheque browser checks passed: received/issued creation with exact registration timestamps, Tehran hour/minute display, backdated registration labels, timestamp preservation across edits/reloads, legacy createdAt-only cheques unchanged, Persian amounts and dates, invalid dates and amounts, edits, manual status changes, overdue/today/+3/+4 reminders, filters, reload/account isolation, 390px card/editor layouts, mobile navigation focus, and desktop/mobile screenshots.');
 } catch (error) {
   if (cdp && socket?.readyState === WebSocket.OPEN) {
     try {

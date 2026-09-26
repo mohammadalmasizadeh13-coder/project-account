@@ -61,7 +61,7 @@
 .cheque-number { font-size: 12px; overflow-wrap: anywhere; display: inline-block; max-width: 155px; font-variant-numeric: tabular-nums; }
 .cheque-money { white-space: nowrap; font-size: 14px; font-variant-numeric: tabular-nums; }
 .cheque-date-cell > time { display: block; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.cheque-date-cell > small { display: block; font-size: 10px; color: #7a877d; white-space: nowrap; }
+.cheque-date-cell > small { display: block; font-size: 10px; color: #7a877d; white-space: normal; }
 .cheque-due-label { display: block; font-size: 11px; color: #68816e; }
 .cheque-due-label.overdue { color: #a24d38; }
 .cheque-due-label.today { color: #967120; }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assignProductCodes, inventoryReport, linkHistoricalSale, normalizeProductCode, saveLedgerRecords, stockSaleForm, validateStockSale } from './inventory.js';
+import { assignProductCodes, inventoryReport, linkHistoricalSale, normalizeProductCode, saveLedgerRecords, stockSaleForm, validateStockSale, validateStockSales } from './inventory.js';
 
 const entry = { id: 'entry-1', type: 'crafted-purchase', category: 'crafted', date: '2026-09-24', itemName: 'النگو', itemCount: '۳', weight: '2', ayar: '750', gramPrice: '100', wagePercent: '5' };
 const sale = { id: 'sale-1', type: 'crafted-sale', category: 'crafted', inventorySourceId: 'entry-1', itemCount: '1', date: '2026-09-24' };
@@ -42,6 +42,17 @@ test('selecting stock copies identity and laboratory, uses latest price, preserv
   assert.equal(form.customerName, 'خریدار'); assert.equal(form.laboratoryName, 'تهران'); assert.equal(form.meltedGramPrice, '200');
   assert.equal(form.inventorySourceId, entry.id); assert.equal(form.type, 'melted-sale'); assert.equal(form.gramDebt, '');
 });
+
+test('new sales default to seven percent profit without changing recorded stock', () => {
+  for (const category of ['crafted', 'melted', 'coin', 'currency']) {
+    const item = Object.freeze({ ...entry, category, profitPercent: '2' });
+    const draft = Object.freeze({ customerName: 'خریدار', profitPercent: '11' });
+    const form = stockSaleForm(item, draft);
+    assert.equal(form.profitPercent, '7');
+    assert.equal(item.profitPercent, '2');
+    assert.equal(draft.profitPercent, '11');
+  }
+});
 test('legacy sales require explicit linking; linking affects stock once and preserves accounting', () => {
   const oldSale = { ...sale, inventorySourceId: '', amount: 500, gramDebt: 1, itemSummary: 'old summary' };
   const docs = assignProductCodes([oldSale, entry]);
@@ -57,4 +68,28 @@ test('storage failure rolls back customer change and cannot create stock movemen
   const storage = { getItem: key => data.get(key) ?? null, setItem: (key, value) => { if (key === 'docs') throw Error('quota'); data.set(key, value); }, removeItem: key => data.delete(key) };
   assert.throws(() => saveLedgerRecords(storage, 'docs', 'customers', [sale], [{ id: 'new' }]), /quota/);
   assert.equal(data.get('customers'), '[{"id":"old"}]'); assert.equal(data.get('docs'), '[]');
+});
+
+test('batch validation accumulates repeated stock picks and leaves the input ledger untouched', () => {
+  const first = { ...sale, id: undefined, itemCount: '2' };
+  const second = { ...sale, id: undefined, itemCount: '2' };
+  const documents = [{ ...entry }];
+  const before = JSON.stringify(documents);
+  assert.ok(validateStockSales([first, second], documents));
+  assert.equal(validateStockSales([first, { ...second, itemCount: '1' }], documents), '');
+  assert.equal(JSON.stringify(documents), before);
+});
+
+test('batch replacement removes the old sale quantities once before validating the replacement', () => {
+  const old = { ...sale, itemCount: '3' };
+  assert.equal(validateStockSales([{ ...old, itemCount: '2' }, { ...sale, id: 'sale-2' }], [entry, old]), '');
+  assert.ok(validateStockSales([{ ...old, itemCount: '2' }, { ...sale, id: 'sale-2', itemCount: '2' }], [entry, old]));
+});
+
+test('individual stock selection preserves group identity and clears any previous batch draft', () => {
+  const item = { ...entry, setId: 'set-1', setName: 'نیم‌ست', setKind: 'نیم‌ست', setMode: 'separate', setPieceCount: 3 };
+  const draft = stockSaleForm(item, { setParts: [{ id: 'old-piece' }] });
+  for (const key of ['setId', 'setName', 'setKind', 'setMode', 'setPieceCount']) assert.equal(draft[key], item[key]);
+  assert.deepEqual(draft.setParts, []);
+  assert.equal(stockSaleForm(entry, draft).setId, '', 'selecting an unrelated lot clears the prior membership');
 });

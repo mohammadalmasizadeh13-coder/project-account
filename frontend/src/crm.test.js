@@ -34,3 +34,18 @@ test('settlements reject negative, missing, infinite and empty amounts', () => {
   for (const amount of [-1, NaN, Infinity, undefined]) assert.throws(() => settleCustomer({}, { rialAmount: amount, gramAmount: 0, direction: 'received' }));
   assert.throws(() => settleCustomer({}, { rialAmount: 0, gramAmount: 0, direction: 'received' }));
 });
+
+test('new settlements record the current instant while legacy settlements stay unchanged', () => {
+  const legacy = { id: 'legacy', date: '2026-09-20', createdAt: '2026-09-20T07:00:00Z', rialAmount: 10, gramAmount: 0, direction: 'received' };
+  const customer = { id: 'a', rialDebt: 300, gramDebt: 2, settlements: [legacy] };
+  const before = structuredClone(customer);
+  const now = '2026-09-24T20:30:12.345Z';
+  const result = settleCustomer(customer, { rialAmount: 100, gramAmount: .5, direction: 'received', date: '2026-09-22', note: 'Backdated receipt' }, 'new', now);
+  assert.equal(result.settlements[0].recordedAt, now);
+  assert.equal(result.settlements[0].createdAt, now);
+  assert.equal(result.settlements[0].date, '2026-09-22');
+  assert.equal(result.updatedAt, now);
+  assert.deepEqual(result.settlements[1], legacy);
+  assert.equal(Object.hasOwn(result.settlements[1], 'recordedAt'), false);
+  assert.deepEqual(customer, before);
+});

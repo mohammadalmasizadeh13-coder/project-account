@@ -1,3 +1,5 @@
+import { newRecordTimestamp } from './recordTime.js';
+
 export function customerTransactions(customer, documents) {
   return documents.filter(doc => doc.source !== 'opening-inventory' && (doc.customerId ? doc.customerId === customer.id : doc.customerName?.trim() === customer.name.trim()))
     .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
@@ -11,10 +13,11 @@ export function customerSummary(customer, documents) {
   return { transactions, purchases, sales, purchased: total(purchases), sold: total(sales), lastVisit: transactions[0]?.date || '' };
 }
 
-export function settleCustomer(customer, { rialAmount, gramAmount, direction, date, note }, id = crypto.randomUUID()) {
+export function settleCustomer(customer, { rialAmount, gramAmount, direction, date, note }, id = crypto.randomUUID(), now = new Date()) {
   if (![rialAmount, gramAmount].every(value => Number.isFinite(value) && value >= 0) || !(rialAmount || gramAmount)) throw new Error('مبلغ یا وزن معتبر وارد کنید.');
   if (!['received', 'paid'].includes(direction)) throw new Error('نوع تسویه معتبر نیست.');
   const sign = direction === 'received' ? -1 : 1;
+  const recordedAt = newRecordTimestamp(now);
   return { ...customer, rialDebt: (Number(customer.rialDebt) || 0) + sign * rialAmount, gramDebt: (Number(customer.gramDebt) || 0) + sign * gramAmount,
-    settlements: [{ id, rialAmount, gramAmount, direction, date, note, createdAt: new Date().toISOString() }, ...(customer.settlements || [])], updatedAt: new Date().toISOString() };
+    settlements: [{ id, rialAmount, gramAmount, direction, date, note, createdAt: recordedAt, recordedAt }, ...(customer.settlements || [])], updatedAt: recordedAt };
 }

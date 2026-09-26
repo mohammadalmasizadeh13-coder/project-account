@@ -50,18 +50,33 @@ export function validateStockSale(sale, documents) {
   return '';
 }
 
-export const stockIdentityFields = ['itemName', 'craftedKind', 'weight', 'ayar', 'coinType', 'currencyType', 'parsianWeight', 'meltedWeight', 'meltedAyar', 'assayCode', 'laboratoryName'];
+// Validate a whole invoice against the same balances, including repeat picks of
+// one source. Give draft rows distinct identities so an unpersisted row cannot
+// accidentally hide another unpersisted sale during validation.
+export function validateStockSales(sales, documents) {
+  const replacingIds = new Set(sales.map(sale => sale.id).filter(Boolean));
+  const staged = documents.filter(doc => !replacingIds.has(doc.id));
+  for (const sale of sales) {
+    const draft = { ...sale, id: Symbol('stock-sale-draft') };
+    const error = validateStockSale(draft, staged);
+    if (error) return error;
+    staged.push(draft);
+  }
+  return '';
+}
+
+export const stockIdentityFields = ['itemName', 'craftedKind', 'weight', 'ayar', 'coinType', 'currencyType', 'parsianWeight', 'meltedWeight', 'meltedAyar', 'assayCode', 'laboratoryName', 'setId', 'setName', 'setKind', 'setMode', 'setPieceCount'];
 
 export function stockSaleForm(item, form, prices = {}) {
   const fields = Object.fromEntries(stockIdentityFields.map(key => [key, item[key] ?? '']));
   const coinRates = Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price]));
   return { ...form, ...fields, itemName: item.itemName || item.description || stockCategories[item.category],
     type: `${item.category}-sale`, inventorySourceId: item.id, productCode: item.productCode,
-    itemCount: '1', coinCount: '1', description: '',
+    itemCount: '1', coinCount: '1', description: '', setParts: [],
     currencyAmount: '1', currencyRate: String(currencyRate(item.currencyType, prices) || item.currencyRate || ''),
     gramPrice: prices.goldGramPrice || item.gramPrice || '', meltedGramPrice: prices.goldGramPrice || item.meltedGramPrice || '',
     coinPrice: prices[coinRates[item.coinType]] || item.coinPrice || '', parsianPrice: item.parsianPrice || '',
-    wagePercent: item.wagePercent || '0', wageFixed: item.wageFixed || '0', otherCosts: item.otherCosts || '0', profitPercent: '0', discountRial: '',
+    wagePercent: item.wagePercent || '0', wageFixed: item.wageFixed || '0', otherCosts: item.otherCosts || '0', profitPercent: '7', discountRial: '',
   };
 }
 

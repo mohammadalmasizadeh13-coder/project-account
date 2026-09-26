@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, BellRing, CalendarClock, CheckCheck, CircleAlert, Landmark, Pencil, Plus, Search, Wallet, X } from 'lucide-react';
 import PersianDateInput from './PersianDateInput';
 import { formatPersianDate } from './persianDate';
+import { formatRecordDate, formatRecordTimestamp } from './recordTime';
 import { iranDate } from './sales';
 import { chequeDaysUntilDue, chequeDirections, chequeStatuses, chequeSummary, getChequeReminders, isOutstandingCheque, normalizeChequeText, upsertCheque } from './checks';
 import './checks.css';
@@ -92,7 +93,7 @@ export default function ChequeManager({ cheques = [], customers = [], onSave, pa
     </div>
     {message && <div role={message.type === 'error' ? 'alert' : 'status'} className={`form-message ${message.type}`}>{message.text}</div>}
     {form && <form ref={editorRef} className="cheque-editor" onSubmit={save} noValidate aria-labelledby="cheque-form-title">
-      <div className="cheque-section-heading"><div><h2 id="cheque-form-title">{form.id ? 'ویرایش چک' : 'ثبت چک جدید'}</h2><p>مبلغ را به تومان و تاریخ‌ها را به شمسی وارد کنید.</p></div><button type="button" className="cheque-icon-button" onClick={closeEditor} disabled={saving} aria-label="بستن فرم چک"><X size={19}/></button></div>
+      <div className="cheque-section-heading"><div><h2 id="cheque-form-title">{form.id ? 'ویرایش چک' : 'ثبت چک جدید'}</h2><p>مبلغ را به تومان و تاریخ‌ها را به شمسی وارد کنید.</p>{!form.id ? <p>ساعت و دقیقه ثبت به وقت تهران، هنگام ذخیره ثبت می‌شود.</p> : formatRecordTimestamp(form) && <p>زمان ثبت: {formatRecordTimestamp(form)}</p>}</div><button type="button" className="cheque-icon-button" onClick={closeEditor} disabled={saving} aria-label="بستن فرم چک"><X size={19}/></button></div>
       <fieldset disabled={saving}><legend>مشخصات چک و طرف حساب</legend><div className="cheque-form-grid">
         <label>نوع چک<select {...fieldProps('direction')}><option value="received">دریافتی · از طرف حساب</option><option value="issued">پرداختی · به طرف حساب</option></select>{fieldError('direction')}</label>
         <label>نام طرف حساب<input {...fieldProps('counterparty')} list="cheque-customers" required maxLength={120} placeholder="انتخاب مشتری یا نوشتن نام" autoComplete="off"/>{fieldError('counterparty')}<datalist id="cheque-customers">{customers.map(customer => <option key={customer.id} value={customer.name}/>)}</datalist></label>
@@ -117,7 +118,7 @@ export default function ChequeManager({ cheques = [], customers = [], onSave, pa
           <td className="cheque-party-cell" data-label="طرف حساب / بانک"><strong>{cheque.counterparty}</strong><small><Landmark size={12}/>{cheque.bank}</small>{cheque.note && <small className="cheque-note">{cheque.note}</small>}</td>
           <td data-label="شماره چک"><bdi className="cheque-number" dir="ltr">{normalizeChequeText(cheque.number).replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[digit])}</bdi></td>
           <td data-label="مبلغ (تومان)"><strong className="cheque-money">{number(cheque.amount)}</strong></td>
-          <td className="cheque-date-cell" data-label="سررسید / تاریخ ثبت"><time dateTime={cheque.dueDate}>{dateText(cheque.dueDate)}</time>{outstanding && <span className={`cheque-due-label ${days !== null && days < 0 ? 'overdue' : days === 0 ? 'today' : ''}`}>{dueText(days)}</span>}<small>ثبت: <time dateTime={cheque.issueDate}>{dateText(cheque.issueDate)}</time></small></td>
+          <td className="cheque-date-cell" data-label="سررسید / تاریخ ثبت"><time dateTime={cheque.dueDate}>{dateText(cheque.dueDate)}</time>{outstanding && <span className={`cheque-due-label ${days !== null && days < 0 ? 'overdue' : days === 0 ? 'today' : ''}`}>{dueText(days)}</span>}<small>ثبت: <time dateTime={cheque.issueDate}>{formatRecordDate(cheque, 'issueDate')}</time></small></td>
           <td data-label="وضعیت"><span className={`cheque-status ${cheque.status}`}>{chequeStatuses[cheque.status]}</span></td>
           <td className="cheque-row-actions"><button type="button" className="cheque-edit-button" onClick={() => openEditor(cheque)} aria-label={`ویرایش چک ${cheque.number} ${cheque.counterparty}`}><Pencil size={15}/><span>ویرایش</span></button></td>
         </tr>;

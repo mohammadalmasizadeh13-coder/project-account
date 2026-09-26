@@ -26,9 +26,9 @@ The sidebar has four primary destinations:
 
 - Home: today's sales and gross profit, inventory value, three main rates, recent
   documents and compact reminders. It contains no data-entry forms or full reports.
-- Entries: purchase/sale documents, opening inventory, cheques, market prices,
+- Entries: purchase/sale and store expense documents, opening inventory, cheques, market prices,
   customers, customer settlements and purchases for the gold balance.
-- Store reports: sales, gross profit, top products, gold balance, best customers,
+- Store reports: sales, seller profit and expenses, top products, gold balance, best customers,
   rates, inventory, the document ledger and cheque status. Each report opens
   independently; entry/edit buttons lead to the relevant entry screen.
 - CRM: customer profiles, customer reports, and birthdays/follow-ups in separate
@@ -45,7 +45,44 @@ years. Home and the notification bell show birthdays through the next seven days
 clicking a reminder opens the customer profile. These are in-app reminders, with
 no automatic messages or external notifications.
 
-Gross profit uses the original sale amount less the proportional historical cost
+The profit report shows the recorded seller percentage, invoice discounts, store
+expenses and net seller profit for today, the last seven days or the last 30 days.
+New sales start at an editable 7%; saved historical percentages are preserved.
+Percentage profit uses the invoice's original base value plus labor and item costs.
+Net seller profit subtracts invoice discounts and dated store expenses once. Missing
+historical percentages or prices are marked as incomplete, rather than supplied
+with a default. Market repricing never changes these recorded profit calculations.
+
+Store expenses can be entered from Entries or as the Expense document type, with
+a title, positive quantity, unit, Persian date, optional payee and note. Units are
+tomans, rials, gold grams, or USD/EUR/AED/GBP/TRY. Gold costs record purity and the
+toman rate per gram of 750 gold; currency costs record their rate per unit. Saved
+market rates prefill these editable conversion fields. Both the original quantity
+and the fixed toman equivalent are saved. Reports subtract that saved equivalent
+and show original amounts separately; later market rates never reprice expenses.
+They
+persist in the account's document ledger without creating a stock lot, customer
+debt or sales revenue. General expenses are separate from the per-unit item costs
+already included in invoice prices; item costs are not deducted again as expenses.
+
+New purchase/sale documents, opening inventory, expenses, cheques, customer
+settlements and gold-balance purchases also save a precise registration instant.
+Their dates display hours and minutes in Asia/Tehran. If the selected business
+date differs from the registration date, both dates are identified separately.
+Older records retain their previous date-only display; existing creation metadata
+is not used to backfill registration times. Cheque edits preserve the original
+registration instant and never add one to legacy records.
+
+New purchase and sale documents also require the price per gram of 18-karat gold
+at registration, in tomans. The editable field defaults to the latest saved manual
+gold rate, independently of the negotiated item price. The numeric `gold18Price`
+is saved with `recordedAt`; later market changes never rewrite either value.
+The ledger, recent entries and customer transaction history show the recorded
+invoice amount and this gold rate. Older trades without this field display that
+the rate was not recorded; historical rates are never inferred from current prices.
+Opening inventory and expense records do not receive this trade metadata.
+
+The separate historical inventory-gain detail uses the original sale amount less the proportional historical cost
 of its linked stock lot, including recorded labor and other entry costs. Opening
 stock uses its recorded entry valuation. Unlinked sales or lots with unknown costs
 are explicitly excluded, with their count and revenue shown separately. General
@@ -114,6 +151,41 @@ for cheque entry, date validation, editing, alerts, persistence and responsive U
 
 ## Inventory vault
 
+Crafted half sets (`نیم‌ست`), sets (`ست`) and services (`سرویس`) offer together and
+separate modes in purchase and opening inventory. Together mode records one stock
+item with one weight and wage. Separate mode accepts any composition of two or
+more independently typed rows, with no fixed upper limit. Each row records its
+own count, weight, purity, gram price, percentage/fixed wage, costs and profit.
+Rows share set metadata but each has its own product code and stock balance;
+there is no additional parent inventory or money row.
+
+The vault groups these pieces under the set name. A piece can be sold individually,
+or the group action opens all remaining pieces for selecting any subset. Joint
+sales keep each piece's price and discount, validate all quantities together and
+save the whole batch atomically with customer balances. Shared customer debt is
+counted once. A shared transaction ID makes reports count one invoice while sums
+still include each sold piece. Completed pieces remain in stock history, and the
+remaining set is marked partial. Existing records are not automatically split.
+
+The vault list shows each item's name and current price per piece or currency unit,
+including its labor, costs and profit. Click or keyboard-toggle an item to see its
+weight, purity, other specifications, stock quantities, price breakdown and history.
+The expanded total inventory value covers all remaining units in that lot.
+
+Vault filters combine text search, category, availability, crafted type or coin/
+currency type, and inclusive price and weight ranges. Open the Filters button to
+edit criteria, then select Apply filters to update the list. Cancel or Escape
+discards pending edits; the panel starts collapsed. There are no suggested filters.
+The price range is in tomans
+per piece or currency unit, using the same current valuation as the item list.
+Weight ranges use
+the recorded physical weight per piece for crafted gold, melted gold and Parsian;
+items without a recorded weight are excluded when a weight bound is active.
+Persian and Arabic digits are accepted. Invalid or reversed bounds show field
+errors and leave the applied results unchanged. Active filters can be removed individually or reset together; filtering
+does not change documents or the whole-vault asset totals. Older crafted names
+and descriptions use the existing type classification, including rings and bands.
+
 Opening inventory and purchase documents create independent stock lots with stable
 codes such as `ZG-000001`. Existing incoming documents receive codes on first load.
 Each row represents identical pieces with the recorded per-piece specifications;
@@ -137,7 +209,12 @@ account data, the vault persists per account in this browser's local storage.
 
 After building, run `node inventory-browser-check.mjs` for opening inventory,
 purchase/sale linkage, code lookup, partial/final sales, historical reconciliation,
-overselling protection, persistence, account isolation and responsive layout checks.
+overselling protection, persistence, account isolation, combined filters and
+responsive layout checks. Filter screenshots are saved as
+`artifacts/inventory-filters-desktop.png` and `artifacts/inventory-filters-mobile.png`.
+The same check also covers flexible jewelry sets, independent and grouped sales,
+and opening set components; use `--sets-only` to run those scenarios alone.
+Set editor, grouped vault and sale screenshots use `artifacts/jewelry-set-*.png`.
 
 ## Currencies and asset valuation
 
@@ -154,10 +231,16 @@ Parsian uses its recorded price per piece. Sale discounts and sale-specific cost
 do not change the value of unsold pieces. Original invoice amounts stay unchanged
 when rates are updated.
 
-The total appears in rials (tomans multiplied by ten), equivalent grams of 750 gold
-and equivalent USD. These are alternative valuations of the same inventory, not
-cash balances; unavailable conversion rates display a prompt instead of zero.
-Physical gold excluding coins, currency quantities and coin counts appear separately.
+The total appears in rials (tomans multiplied by ten) and equivalent USD. These
+are alternative valuations of the same inventory, not cash balances. Gold weights
+show actual scale grams, actual grams normalized to purity 750, equivalent grams
+including labor, and equivalent grams including labor plus recorded profit.
+These weights include only remaining crafted and melted gold, excluding coins and
+currencies. Other item costs stay separate in tomans and are included in the overall
+monetary valuation; the profit component retains the lot's recorded calculation.
+Physical grams remain available without a gold rate; conversions including labor
+or profit require a saved gold rate and otherwise display a prompt. Currency
+quantities and coin counts appear separately.
 Receivables, payments and cheques are not included in this inventory valuation.
 Bank Emami 86, half 86, quarter 86 and one-gram 86 coins each have independent
 rates throughout opening inventory, trading, the vault and the dashboard. Existing

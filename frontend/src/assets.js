@@ -48,21 +48,36 @@ export function documentBreakdown(doc, prices = null) {
   return { base, wage, costs, profit, discount, total: Math.max(0, base + wage + costs + profit - discount) };
 }
 
-export function assetReport(stock, prices) {
-  const result = { totalToman: 0, totalRial: 0, equivalentGrams: null, equivalentUsd: null, goldGrams750: 0, wage: 0, costs: 0, profit: 0, currencies: {}, coins: {}, items: {} };
+export function assetReport(stock, prices = {}) {
+  const result = { totalToman: 0, totalRial: 0, equivalentGrams: null, equivalentUsd: null, goldWeightGrams: 0, goldGrams750: 0, goldWithWageGrams750: null, goldWithWageAndProfitGrams750: null, wage: 0, costs: 0, profit: 0, currencies: {}, coins: {}, items: {} };
+  let goldWage = 0;
+  let goldProfit = 0;
   for (const item of stock.available) {
     const remaining = { ...item, itemCount: item.remaining, coinCount: item.remaining, currencyAmount: item.remaining };
     const value = documentBreakdown(remaining, prices);
     result.items[item.id] = value;
     result.totalToman += value.total;
     result.wage += value.wage; result.costs += value.costs; result.profit += value.profit;
-    if (item.category === 'crafted') result.goldGrams750 += item.remaining * number(item.weight) * number(item.ayar || 750) / 750;
-    if (item.category === 'melted') result.goldGrams750 += item.remaining * number(item.meltedWeight) * number(item.meltedAyar || 750) / 750;
+    if (item.category === 'crafted' || item.category === 'melted') {
+      const weight = item.remaining * number(item.category === 'crafted' ? item.weight : item.meltedWeight);
+      const purity = number((item.category === 'crafted' ? item.ayar : item.meltedAyar) || 750);
+      result.goldWeightGrams += weight;
+      result.goldGrams750 += weight * purity / 750;
+      goldWage += value.wage;
+      goldProfit += value.profit;
+    }
     if (item.category === 'currency') result.currencies[item.currencyType] = (result.currencies[item.currencyType] || 0) + item.remaining;
     if (item.category === 'coin') result.coins[item.coinType] = (result.coins[item.coinType] || 0) + item.remaining;
   }
   result.totalRial = result.totalToman * 10;
-  if (number(prices.goldGramPrice) > 0) result.equivalentGrams = result.totalToman / number(prices.goldGramPrice);
+  const goldRate = number(prices.goldGramPrice);
+  if (goldRate > 0) {
+    result.equivalentGrams = result.totalToman / goldRate;
+    // Only crafted and melted gold belongs in these staged gold weights.
+    // Other costs stay separate; profit retains each lot's recorded formula.
+    result.goldWithWageGrams750 = result.goldGrams750 + goldWage / goldRate;
+    result.goldWithWageAndProfitGrams750 = result.goldGrams750 + (goldWage + goldProfit) / goldRate;
+  }
   if (currencyRate('USD', prices) > 0) result.equivalentUsd = result.totalToman / currencyRate('USD', prices);
   return result;
 }

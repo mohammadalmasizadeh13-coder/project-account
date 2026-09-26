@@ -1,21 +1,182 @@
-import React, { useState } from 'react';
-import { Archive, PackageOpen, Search } from 'lucide-react';
-import { formatPersianDate } from './persianDate';
-import { normalizeProductCode, stockCategories, stockQuantity, stockUnit } from './inventory';
-import { currencyName } from './assets';
+import React, { useRef, useState } from 'react';
+import { Archive, ChevronDown, PackageOpen, Search, SlidersHorizontal, X } from 'lucide-react';
+import { formatRecordDate } from './recordTime';
+import { stockCategories, stockQuantity, stockUnit } from './inventory';
+import { coinCatalog, currencyCatalog, currencyName, documentBreakdown, number as parseNumber } from './assets';
+import { craftedKinds } from './crmAnalytics';
+import { defaultVaultFilters, filterInventoryItems, inventoryDisplayGroups } from './inventoryFilters';
 import './inventory.css';
 
-const number = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(value || 0);
+const number = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(parseNumber(value));
 
-export default function InventoryVault({ report, assets, prices, onPrices, onSell, onReceive, onLinkSale, helpers }) {
-  const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('all');
-  const [status, setStatus] = useState('available');
+const statusLabels = { available: 'موجود در صندوق', empty: 'اتمام موجودی', all: 'همه سوابق' };
+const rangeGroups = [
+  { title: 'قیمت هر عدد یا واحد (تومان)', fields: [['minPrice', 'از قیمت', 'بدون حداقل'], ['maxPrice', 'تا قیمت', 'بدون حداکثر']] },
+  { title: 'وزن هر عدد یا قطعه (گرم)', fields: [['minWeight', 'از وزن', 'بدون حداقل'], ['maxWeight', 'تا وزن', 'بدون حداکثر']] },
+];
+
+function changeVaultFilter(previous, key, value) {
+  const next = { ...previous, [key]: value };
+  if (key === 'category') {
+    if (value !== 'all' && value !== 'crafted') next.craftedKind = 'all';
+    if (value !== 'coin') next.coinType = 'all';
+    if (value !== 'currency') next.currencyType = 'all';
+  }
+  return next;
+}
+
+function VaultFilters({ filters, setFilters, errors, count }) {
+  const [expanded, setExpanded] = useState(false);
+  const [draft, setDraft] = useState(() => ({ ...filters }));
+  const toggleRef = useRef(null);
+  const { errors: draftErrors } = filterInventoryItems([], draft);
+  const updateDraft = (key, value) => setDraft(previous => changeVaultFilter(previous, key, value));
+  const close = () => {
+    setDraft({ ...filters });
+    setExpanded(false);
+    toggleRef.current?.focus();
+  };
+  const toggle = () => {
+    if (expanded) close();
+    else { setDraft({ ...filters }); setExpanded(true); }
+  };
+  const apply = event => {
+    event.preventDefault();
+    const invalid = Object.keys(draftErrors)[0];
+    if (invalid) { event.currentTarget.elements.namedItem(invalid)?.focus(); return; }
+    setFilters({ ...draft });
+    setExpanded(false);
+    toggleRef.current?.focus();
+  };
+  const reset = () => { setFilters({ ...defaultVaultFilters }); setDraft({ ...defaultVaultFilters }); };
+  const clear = key => {
+    setFilters(previous => changeVaultFilter(previous, key, defaultVaultFilters[key]));
+    setDraft(previous => changeVaultFilter(previous, key, defaultVaultFilters[key]));
+  };
+  const numericLabel = (key, unit) => `${errors[key] ? filters[key] : number(filters[key])} ${unit}`;
+  const labels = {
+    query: `جستجو: ${filters.query}`, category: `گروه: ${stockCategories[filters.category]}`,
+    status: `وضعیت: ${statusLabels[filters.status]}`, craftedKind: `نوع کار: ${filters.craftedKind}`,
+    coinType: `نوع سکه: ${filters.coinType}`, currencyType: `نوع ارز: ${currencyName(filters.currencyType)}`,
+    minPrice: `از ${numericLabel('minPrice', 'تومان')}`, maxPrice: `تا ${numericLabel('maxPrice', 'تومان')}`,
+    minWeight: `از ${numericLabel('minWeight', 'گرم')}`, maxWeight: `تا ${numericLabel('maxWeight', 'گرم')}`,
+  };
+  const active = Object.keys(defaultVaultFilters).filter(key => String(filters[key]).trim() !== String(defaultVaultFilters[key]));
+  const hasDraftFilters = Object.keys(defaultVaultFilters).some(key => String(draft[key]).trim() !== String(defaultVaultFilters[key]));
+  return <section className="vault-filters" aria-labelledby="vault-filters-title">
+    <div className="vault-filters-heading">
+      <h2 id="vault-filters-title">فهرست اجناس</h2>
+      <div className="vault-filter-toolbar">
+        <button ref={toggleRef} type="button" className="button button-ghost vault-filter-toggle" data-toggle-vault-filters aria-expanded={expanded} aria-controls="vault-filter-panel" onClick={toggle}><SlidersHorizontal size={18} aria-hidden="true"/> فیلترها{!!active.length && <span className="vault-filter-badge" aria-label={`${number(active.length)} فیلتر فعال`}>{number(active.length)}</span>}<ChevronDown className="vault-filter-chevron" size={16} aria-hidden="true"/></button>
+        <button type="button" className="button button-ghost" data-reset-vault-filters disabled={!active.length && !(expanded && hasDraftFilters)} onClick={reset}>پاک کردن فیلترها</button>
+      </div>
+    </div>
+    <form id="vault-filter-panel" className="vault-filter-panel" aria-label="فیلترهای صندوق" hidden={!expanded} onSubmit={apply} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); close(); } }}>
+      <p className="vault-filter-help">فیلترهای موردنظر را انتخاب کنید و «اعمال فیلترها» را بزنید.</p>
+      <div className="vault-filter-main">
+        <label className="vault-search"><Search size={18} aria-hidden="true"/><input name="query" aria-label="جستجو در صندوق" value={draft.query} onChange={event => updateDraft('query', event.target.value)} placeholder="نام، کد جنس، انگ یا آزمایشگاه…"/></label>
+        <label>گروه<select name="category" value={draft.category} onChange={event => updateDraft('category', event.target.value)}><option value="all">همه اجناس</option>{Object.entries(stockCategories).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <label>وضعیت<select name="status" aria-label="وضعیت موجودی" value={draft.status} onChange={event => updateDraft('status', event.target.value)}>{Object.entries(statusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        {(draft.category === 'all' || draft.category === 'crafted') && <label>نوع کار<select name="craftedKind" value={draft.craftedKind} onChange={event => updateDraft('craftedKind', event.target.value)}><option value="all">همه نوع‌ها</option>{craftedKinds.map(kind => <option key={kind} value={kind}>{kind}</option>)}</select></label>}
+        {draft.category === 'coin' && <label>نوع سکه<select name="coinType" value={draft.coinType} onChange={event => updateDraft('coinType', event.target.value)}><option value="all">همه سکه‌ها</option>{coinCatalog.map(coin => <option key={coin.name} value={coin.name}>{coin.name}</option>)}</select></label>}
+        {draft.category === 'currency' && <label>نوع ارز<select name="currencyType" value={draft.currencyType} onChange={event => updateDraft('currencyType', event.target.value)}><option value="all">همه ارزها</option>{currencyCatalog.map(currency => <option key={currency.code} value={currency.code}>{currency.name}</option>)}</select></label>}
+      </div>
+      <div className="vault-filter-ranges">
+        {rangeGroups.map(group => <fieldset key={group.title}><legend>{group.title}</legend><div className="vault-range-inputs">{group.fields.map(([key, label, placeholder]) => <label key={key} htmlFor={`vault-${key}`}>{label}<input id={`vault-${key}`} name={key} type="text" inputMode="decimal" value={draft[key]} placeholder={placeholder} aria-invalid={!!draftErrors[key]} aria-describedby={draftErrors[key] ? `vault-${key}-error` : undefined} onChange={event => updateDraft(key, event.target.value)}/>{draftErrors[key] && <small id={`vault-${key}-error`} className="vault-filter-error" role="alert">{draftErrors[key]}</small>}</label>)}</div></fieldset>)}
+      </div>
+      <p className="vault-filter-help vault-filter-note">قیمت با اجرت و سود محاسبه می‌شود. وزن، وزن خود کار است و فقط اجناس دارای وزن ثبت‌شده را نشان می‌دهد.</p>
+      <div className="vault-filter-actions"><button type="submit" className="button button-primary" data-apply-vault-filters>اعمال فیلترها</button><button type="button" className="button button-ghost" data-cancel-vault-filters onClick={close}>انصراف</button></div>
+    </form>
+    {!!active.length && <div className="vault-filter-chips" aria-label="فیلترهای فعال">{active.map(key => <button type="button" key={key} data-clear-vault-filter={key} aria-label={`حذف فیلتر ${labels[key]}`} onClick={() => clear(key)}><span>{labels[key]}</span><X size={14} aria-hidden="true"/></button>)}</div>}
+    <p className="vault-result-count" data-testid="vault-result-count" role="status" aria-live="polite">{Object.keys(errors).length ? 'بازه‌های فیلتر را اصلاح کنید.' : `${number(count)} جنس مطابق فیلترها`}</p>
+  </section>;
+}
+
+function VaultItem({ item, value, prices, onSell }) {
+  const name = item.itemName || (item.description !== item.typeLabel && item.description)
+    || (item.category === 'coin' && item.coinType)
+    || (item.category === 'currency' && currencyName(item.currencyType)) || stockCategories[item.category];
+  const unitValue = documentBreakdown({ ...item, itemCount: 1, coinCount: 1, currencyAmount: 1 }, prices);
+  const specifications = [];
+  if (item.category === 'crafted') {
+    specifications.push(['وزن هر عدد', `${number(item.weight)} گرم`], ['عیار', number(item.ayar || 750)]);
+    if (item.craftedKind) specifications.push(['نوع کار', item.craftedKind]);
+    if (item.setMode) {
+      specifications.push(['نوع مجموعه', `${item.setKind || item.craftedKind} ${item.setMode === 'separate' ? 'جدا' : 'با هم'}`]);
+      if (item.setName) specifications.push(['نام مجموعه', item.setName]);
+    }
+  }
+  if (item.category === 'melted') {
+    specifications.push(
+      ['وزن ترازو هر قطعه', `${number(item.meltedWeight)} گرم`], ['عیار', number(item.meltedAyar || 750)],
+      ['وزن معادل ۷۵۰ هر قطعه', `${number(parseNumber(item.meltedWeight) * parseNumber(item.meltedAyar || 750) / 750)} گرم`],
+      ['شماره انگ', item.assayCode || '—'], ['آزمایشگاه', item.laboratoryName || '—'],
+    );
+  }
+  if (item.category === 'coin') {
+    specifications.push(['نوع سکه', item.coinType]);
+    if (item.coinType === 'پارسیان') specifications.push(['وزن هر عدد', `${number(item.parsianWeight)} گرم`]);
+  }
+  if (item.category === 'currency') specifications.push(['نوع ارز', currencyName(item.currencyType)], ['نرخ ثبت‌شده هر واحد', `${number(item.currencyRate)} تومان`]);
+  return <details className="vault-item" data-product-code={item.productCode}>
+    <summary className="vault-item-summary">
+      <div className="vault-item-name"><h2>{name}</h2>{item.setMode && <small className="vault-set-membership">{item.setMode === 'separate' ? `عضو ${item.setName || item.setKind} · فروش جدا یا با هم` : `${item.setKind || item.craftedKind} با هم · یک کار`}</small>}</div>
+      <strong className="vault-item-price">{number(unitValue.total)} <small>تومان</small></strong>
+      <ChevronDown className="vault-item-chevron" size={18} aria-hidden="true"/>
+    </summary>
+    <div className="vault-item-details">
+      <div className="vault-item-top"><span>{stockCategories[item.category]}</span><bdi className="vault-code" dir="ltr">{item.productCode}</bdi></div>
+      <h3>مشخصات جنس</h3>
+      <dl className="vault-specifications">
+        {specifications.map(([label, content]) => <div key={label}><dt>{label}</dt><dd>{content}</dd></div>)}
+        <div><dt>موجودی</dt><dd>{number(item.remaining)} {stockUnit(item)}</dd></div>
+        <div><dt>ورودی</dt><dd>{number(item.received)} {stockUnit(item)}</dd></div>
+        <div><dt>فروخته‌شده</dt><dd>{number(item.sold)} {stockUnit(item)}</dd></div>
+        <div><dt>تاریخ ورود</dt><dd>{formatRecordDate(item)}</dd></div>
+      </dl>
+      {item.description && item.description !== name && <p><strong>شرح: </strong>{item.description}</p>}
+      {item.note && <p><strong>یادداشت: </strong>{item.note}</p>}
+      <h3>جزئیات قیمت هر واحد</h3>
+      <dl>
+        <div><dt>ارزش پایه</dt><dd>{number(unitValue.base)} تومان</dd></div>
+        {item.category !== 'currency' && <>
+          <div><dt>اجرت درصدی</dt><dd>{number(item.wagePercent)}٪</dd></div>
+          <div><dt>اجرت ثابت هر واحد</dt><dd>{number(item.wageFixed)} تومان</dd></div>
+          <div><dt>مجموع اجرت هر واحد</dt><dd>{number(unitValue.wage)} تومان</dd></div>
+        </>}
+        <div><dt>هزینه‌های دیگر هر واحد</dt><dd>{number(unitValue.costs)} تومان</dd></div>
+        <div><dt>سود ({number(item.profitPercent)}٪)</dt><dd>{number(unitValue.profit)} تومان</dd></div>
+        <div><dt>قیمت نهایی هر واحد</dt><dd>{number(unitValue.total)} تومان</dd></div>
+      </dl>
+      {item.remaining > 0 && <div className="vault-item-value"><span>ارزش کل موجودی این جنس</span><strong>{number(value?.total)} تومان</strong><small>اجرت: {number(value?.wage)} · هزینه‌های دیگر: {number(value?.costs)} · سود: {number(value?.profit)} تومان</small></div>}
+      {item.remaining > 0 ? <button type="button" className="button button-primary" onClick={() => onSell(item)}>فروش این جنس</button> : <span className="vault-empty-badge">اتمام موجودی</span>}
+      <details className="vault-item-history"><summary>سوابق ورود و فروش</summary><p>{formatRecordDate(item)} · {item.source === 'opening-inventory' ? 'موجودی اولیه' : `خرید از ${item.customerName}`} · {number(item.received)} {stockUnit(item)}</p>{item.sales.map(sale => <p key={sale.id}>{formatRecordDate(sale)} · فروش به {sale.customerName} · {number(stockQuantity(sale))} {stockUnit(sale)}</p>)}</details>
+    </div>
+  </details>;
+}
+
+function VaultSet({ group, assets, prices, onSell, onSellSet }) {
+  const availableCount = group.availableItems.length;
+  const hiddenAvailableCount = group.availableItems.filter(item => !group.items.includes(item)).length;
+  const partial = availableCount > 0 && availableCount < group.totalPieces;
+  return <section className="vault-set" data-set-id={group.setId} aria-label={`${group.setKind} جدا ${group.setName}`}>
+    <header className="vault-set-heading">
+      <div><span className="vault-set-kind">{group.setKind} جدا</span><h2>{group.setName}</h2>
+        <p>{number(availableCount)} از {number(group.totalPieces)} قطعه موجود{partial ? ' · بخشی از مجموعه فروخته شده' : availableCount ? ' · مجموعه کامل' : ' · اتمام موجودی'}</p>
+      </div>
+      {!!availableCount && onSellSet && <button type="button" className="button button-primary" data-sell-set={group.setId} onClick={() => onSellSet(group.availableItems)}>فروش قطعه‌ها با هم</button>}
+    </header>
+    {!!availableCount && onSellSet && <p className="vault-set-sale-hint">فروش با هم، همهٔ {number(availableCount)} قطعهٔ باقی‌مانده را برای انتخاب باز می‌کند.{hiddenAvailableCount > 0 && ` ${number(hiddenAvailableCount)} قطعهٔ موجود با فیلتر فعلی نمایش داده نمی‌شود.`}</p>}
+    <div className="vault-set-items">{group.items.map(item => <VaultItem key={item.id} item={item} value={assets.items[item.id]} prices={prices} onSell={onSell}/>)}</div>
+  </section>;
+}
+
+export default function InventoryVault({ report, assets, prices, onPrices, onSell, onSellSet, onReceive, onLinkSale }) {
+  const [filters, setFilters] = useState(() => ({ ...defaultVaultFilters }));
   const [links, setLinks] = useState({});
   const [message, setMessage] = useState(null);
-  const visible = report.items.filter(item => (category === 'all' || item.category === category)
-    && (status === 'all' || (status === 'available' ? item.remaining > 0 : item.remaining <= 0))
-    && normalizeProductCode([item.productCode, item.itemName, item.description, item.coinType, item.currencyType, currencyName(item.currencyType), item.assayCode, item.laboratoryName].join(' ')).includes(normalizeProductCode(query)));
+  const { items: visible, errors } = filterInventoryItems(report.items, filters, prices);
+  const groups = inventoryDisplayGroups(visible, report.items);
   const linkSale = sale => {
     try { onLinkSale(sale.id, links[sale.id]); setMessage({ type: 'success', text: 'فروش قبلی به جنس وصل شد و موجودی اصلاح شد.' }); }
     catch (error) { setMessage({ type: 'error', text: error.message }); }
@@ -24,24 +185,35 @@ export default function InventoryVault({ report, assets, prices, onPrices, onSel
     <header className="vault-heading"><div><span>موجودی فروشگاه</span><h1><Archive size={25}/> صندوق من</h1><p>موجودی اولیه و خریدها وارد صندوق می‌شوند؛ فروش هر کد از موجودی همان جنس کم می‌شود.</p></div><button className="button button-primary" onClick={onReceive}>ثبت خرید جدید</button></header>
     <section className="vault-assets" aria-label="کل دارایی‌های صندوق">
       <div className="vault-assets-heading"><div><h2>کل دارایی‌های صندوق</h2><p>ارزش موجودی باقی‌مانده با اجرت، هزینه‌های دیگر و سود ثبت‌شده</p></div><button className="button button-ghost" onClick={onPrices}>به‌روزرسانی نرخ‌ها</button></div>
-      <div className="vault-stats asset-totals">
+      <div className="vault-stats asset-totals asset-money-totals">
         <article><span>ارزش کل به ریال</span><strong>{number(assets.totalRial)} <small>ریال</small></strong><small>{number(assets.totalToman)} تومان</small></article>
-        <article><span>معادل کل به گرم طلای ۷۵۰</span><strong>{assets.equivalentGrams === null ? '—' : number(assets.equivalentGrams)} <small>گرم</small></strong>{assets.equivalentGrams === null && <small>نرخ هر گرم طلا را ثبت کنید.</small>}</article>
         <article><span>معادل کل به دلار</span><strong>{assets.equivalentUsd === null ? '—' : number(assets.equivalentUsd)} <small>دلار</small></strong>{assets.equivalentUsd === null && <small>نرخ دلار را ثبت کنید.</small>}</article>
       </div>
-      <p className="vault-note">این سه عدد، معادل یک دارایی هستند و با هم جمع نمی‌شوند. ارزش ریالی، وجه نقد صندوق نیست. نرخ روزِ ثبت‌شده و در نبود آن نرخ ورود هر جنس مبنای ارزش‌گذاری است. پارسیان با قیمت ثبت‌شده هر عدد محاسبه می‌شود.</p>
+      <h3 className="vault-gold-heading">وزن طلای ساخته و آب‌شده</h3>
+      <div className="vault-stats asset-totals asset-gold-weights">
+        <article><span>گرم خود کارها</span><strong>{number(assets.goldWeightGrams)} <small>گرم</small></strong><small>وزن ترازو، بدون اجرت و سود</small></article>
+        <article><span>گرم خود کارها با عیار ۷۵۰</span><strong>{number(assets.goldGrams750)} <small>گرم</small></strong><small>وزن طلا پس از تبدیل عیار</small></article>
+        <article><span>گرم با اجرت</span><strong>{assets.goldWithWageGrams750 === null ? '—' : number(assets.goldWithWageGrams750)} <small>گرم</small></strong><small>معادل طلای ۷۵۰، بدون سود</small></article>
+        <article><span>گرم با اجرت و سود</span><strong>{assets.goldWithWageAndProfitGrams750 === null ? '—' : number(assets.goldWithWageAndProfitGrams750)} <small>گرم</small></strong><small>معادل طلای ۷۵۰ با سود ثبت‌شده</small></article>
+      </div>
+      <p className="vault-note vault-gold-note">وزن‌ها فقط برای موجودی طلای ساخته و آب‌شده هستند؛ سکه و ارز جدا نمایش داده می‌شوند. اجرت و سود با نرخ ثبت‌شده طلا به گرم تبدیل می‌شوند؛ هزینه‌های دیگر جداگانه به تومان آمده‌اند. این وزن‌ها با هم جمع نمی‌شوند.</p>
+      {assets.goldWithWageGrams750 === null && <p className="vault-note vault-gold-note">برای نمایش گرم با اجرت و سود، نرخ هر گرم طلای ۷۵۰ را ثبت کنید.</p>}
+      <p className="vault-note">ارزش کل شامل طلا، سکه و ارز با اجرت، هزینه‌های دیگر و سود ثبت‌شده است و وجه نقد صندوق نیست. نرخ روزِ ثبت‌شده و در نبود آن نرخ ورود هر جنس مبنای ارزش‌گذاری است. پارسیان با قیمت ثبت‌شده هر عدد محاسبه می‌شود.</p>
       {prices.updatedAt && <p className="vault-note">آخرین ثبت نرخ‌ها: {new Date(prices.updatedAt).toLocaleString('fa-IR')}</p>}
-      <div className="vault-holdings"><div><span>طلای ساخته و آب‌شده، معادل عیار ۷۵۰</span><strong>{number(assets.goldGrams750)} گرم</strong></div><div><span>مجموع اجرت موجودی</span><strong>{number(assets.wage)} تومان</strong></div><div><span>هزینه‌های دیگر موجودی</span><strong>{number(assets.costs)} تومان</strong></div><div><span>سود منظورشده در ارزش موجودی</span><strong>{number(assets.profit)} تومان</strong></div>
+      <div className="vault-holdings"><div><span>مجموع اجرت موجودی</span><strong>{number(assets.wage)} تومان</strong></div><div><span>هزینه‌های دیگر موجودی</span><strong>{number(assets.costs)} تومان</strong></div><div><span>سود منظورشده در ارزش موجودی</span><strong>{number(assets.profit)} تومان</strong></div>
         {Object.entries(assets.currencies).map(([code, amount]) => <div key={code}><span>موجودی {currencyName(code)}</span><strong>{number(amount)} <bdi>{code}</bdi></strong></div>)}
         {Object.entries(assets.coins).map(([name, count]) => <div key={name}><span>{name}</span><strong>{number(count)} عدد</strong></div>)}
       </div>
     </section>
     <div className="vault-stats"><article><span>کدهای موجود</span><strong>{number(report.available.length)}</strong></article><article><span>تعداد اجناس موجود</span><strong>{number(report.available.filter(item => item.category !== 'currency').reduce((sum, item) => sum + item.remaining, 0))} <small>عدد / قطعه</small></strong></article><article><span>کدهای اتمام موجودی</span><strong>{number(report.items.filter(item => item.remaining <= 0).length)}</strong></article></div>
-    {!!report.unlinkedSales.length && <details className="vault-legacy"><summary>{number(report.unlinkedSales.length)} فروش قبلی بدون کد جنس؛ نیازمند تطبیق موجودی</summary><p>این فروش‌ها هنوز از موجودی کدها کم نشده‌اند. جنس مربوط به هر فروش قبلی را انتخاب کنید تا موجودی دقیق شود. مبلغ و بدهی سند تغییری نمی‌کند.</p>{report.unlinkedSales.map(sale => <div className="vault-legacy-row" key={sale.id}><div><strong>{sale.itemName || sale.description || sale.typeLabel}</strong><small>{formatPersianDate(sale.date)} · {sale.customerName} · {number(stockQuantity(sale))} {stockUnit(sale)}</small><small>{sale.itemSummary}</small></div><select aria-label={`جنس مربوط به فروش ${sale.id}`} value={links[sale.id] || ''} onChange={event => setLinks({ ...links, [sale.id]: event.target.value })}><option value="">انتخاب کد جنس</option>{report.available.filter(item => item.category === sale.category && (item.category !== 'currency' || item.currencyType === sale.currencyType) && (item.category !== 'coin' || item.coinType === sale.coinType) && item.remaining >= stockQuantity(sale) && item.date <= sale.date).map(item => <option key={item.id} value={item.id}>{item.productCode} · {item.itemName || item.description} · {number(item.remaining)} موجود</option>)}</select><button className="button button-ghost" disabled={!links[sale.id]} onClick={() => linkSale(sale)}>اتصال فروش به جنس</button></div>)}</details>}
+    {!!report.unlinkedSales.length && <details className="vault-legacy"><summary>{number(report.unlinkedSales.length)} فروش قبلی بدون کد جنس؛ نیازمند تطبیق موجودی</summary><p>این فروش‌ها هنوز از موجودی کدها کم نشده‌اند. جنس مربوط به هر فروش قبلی را انتخاب کنید تا موجودی دقیق شود. مبلغ و بدهی سند تغییری نمی‌کند.</p>{report.unlinkedSales.map(sale => <div className="vault-legacy-row" key={sale.id}><div><strong>{sale.itemName || sale.description || sale.typeLabel}</strong><small>{formatRecordDate(sale)} · {sale.customerName} · {number(stockQuantity(sale))} {stockUnit(sale)}</small><small>{sale.itemSummary}</small></div><select aria-label={`جنس مربوط به فروش ${sale.id}`} value={links[sale.id] || ''} onChange={event => setLinks({ ...links, [sale.id]: event.target.value })}><option value="">انتخاب کد جنس</option>{report.available.filter(item => item.category === sale.category && (item.category !== 'currency' || item.currencyType === sale.currencyType) && (item.category !== 'coin' || item.coinType === sale.coinType) && item.remaining >= stockQuantity(sale) && item.date <= sale.date).map(item => <option key={item.id} value={item.id}>{item.productCode} · {item.itemName || item.description} · {number(item.remaining)} موجود</option>)}</select><button className="button button-ghost" disabled={!links[sale.id]} onClick={() => linkSale(sale)}>اتصال فروش به جنس</button></div>)}</details>}
     {message && <p className={`form-message ${message.type}`} role="status">{message.text}</p>}
-    <div className="vault-filters"><label className="vault-search"><Search size={18}/><input aria-label="جستجو در صندوق" value={query} onChange={event => setQuery(event.target.value)} placeholder="کد جنس، نام، انگ یا آزمایشگاه…"/></label><label>گروه<select value={category} onChange={event => setCategory(event.target.value)}><option value="all">همه اجناس</option>{Object.entries(stockCategories).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>وضعیت<select aria-label="وضعیت موجودی" value={status} onChange={event => setStatus(event.target.value)}><option value="available">موجود در صندوق</option><option value="empty">اتمام موجودی</option><option value="all">همه سوابق</option></select></label></div>
-    <div className="vault-items">{visible.map(item => <article className="vault-item" key={item.id} data-product-code={item.productCode}><div className="vault-item-top"><span>{stockCategories[item.category]}</span><bdi className="vault-code" dir="ltr">{item.productCode}</bdi></div><h2>{item.itemName || item.description || stockCategories[item.category]}</h2><p>مشخصات هر واحد: {helpers.describe({ ...item, itemCount: 1, coinCount: 1, currencyAmount: 1 })}</p><dl><div><dt>موجودی</dt><dd>{number(item.remaining)} {stockUnit(item)}</dd></div><div><dt>ورودی</dt><dd>{number(item.received)}</dd></div><div><dt>فروخته‌شده</dt><dd>{number(item.sold)}</dd></div><div><dt>تاریخ ورود</dt><dd>{formatPersianDate(item.date)}</dd></div></dl>{item.remaining > 0 && <div className="vault-item-value"><span>ارزش موجودی با اجرت و هزینه‌ها</span><strong>{number(assets.items[item.id]?.total)} تومان</strong><small>اجرت: {number(assets.items[item.id]?.wage)} · هزینه‌های دیگر: {number(assets.items[item.id]?.costs)} · سود: {number(assets.items[item.id]?.profit)} تومان</small></div>}{item.remaining > 0 ? <button className="button button-primary" onClick={() => onSell(item)}>فروش این جنس</button> : <span className="vault-empty-badge">اتمام موجودی</span>}<details><summary>سوابق ورود و فروش</summary><p>{item.source === 'opening-inventory' ? 'موجودی اولیه' : `خرید از ${item.customerName}`} · {number(item.received)} {stockUnit(item)}</p>{item.sales.map(sale => <p key={sale.id}>{formatPersianDate(sale.date)} · فروش به {sale.customerName} · {number(stockQuantity(sale))} {stockUnit(sale)}</p>)}</details></article>)}</div>
-    {!visible.length && <div className="vault-empty"><PackageOpen size={34}/><h2>جنسی در این فهرست نیست</h2><p>خرید یا موجودی اولیه را ثبت کنید، یا فیلتر جستجو را تغییر دهید.</p></div>}
+    <VaultFilters filters={filters} setFilters={setFilters} errors={errors} count={visible.length}/>
+    <p className="vault-list-hint">قیمت‌ها برای هر عدد یا واحد است. برای دیدن وزن و مشخصات، روی جنس بزنید.</p>
+    <div className="vault-items">{groups.map(group => group.item
+      ? <VaultItem key={group.key} item={group.item} value={assets.items[group.item.id]} prices={prices} onSell={onSell}/>
+      : <VaultSet key={group.key} group={group} assets={assets} prices={prices} onSell={onSell} onSellSet={onSellSet}/>)}</div>
+    {!visible.length && <div className="vault-empty"><PackageOpen size={34}/><h2>{Object.keys(errors).length ? 'بازهٔ واردشده معتبر نیست' : 'جنسی در این فهرست نیست'}</h2><p>{Object.keys(errors).length ? 'مقدارهای مشخص‌شده در فیلترها را اصلاح کنید.' : 'خرید یا موجودی اولیه را ثبت کنید، یا فیلترهای جستجو را تغییر دهید.'}</p></div>}
     <p className="vault-note">هر ردیف خرید یا موجودی اولیه، کد مستقل دارد. برای اجناس با وزن یا مشخصات متفاوت، ردیف جدا ثبت کنید. سوابق در همین حساب و مرورگر ذخیره می‌شوند.</p>
   </div>;
 }

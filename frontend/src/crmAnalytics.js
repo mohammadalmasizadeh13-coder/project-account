@@ -1,9 +1,9 @@
 import { currencyName, documentBreakdown, number, quantity } from './assets.js';
 import { customerTransactions } from './crm.js';
-import { dateBefore, iranDate } from './sales.js';
+import { dateBefore, invoiceCount, iranDate, transactionKey } from './sales.js';
 import { normalizeDigits } from './persianDate.js';
 
-export const craftedKinds = ['النگو', 'دستبند', 'گردنبند', 'زنجیر', 'انگشتر', 'گوشواره', 'آویز و پلاک', 'نیم‌ست', 'سرویس', 'پابند', 'سایر'];
+export const craftedKinds = ['النگو', 'دستبند', 'گردنبند', 'زنجیر', 'انگشتر', 'گوشواره', 'آویز و پلاک', 'نیم‌ست', 'ست', 'سرویس', 'پابند', 'سایر'];
 export const purchaseGroups = { crafted: 'کار ساخته', coin: 'سکه', melted: 'آب‌شده', currency: 'ارز', other: 'سایر / نامشخص' };
 export const normalizeCustomerText = value => normalizeDigits(value ?? '').replace(/ي|ى/g, 'ی').replace(/ك/g, 'ک').replace(/[\s\u200c\u200f_-]+/g, '').toLowerCase();
 const aliases = [
@@ -14,8 +14,10 @@ const aliases = [
 export function craftedKind(doc, source) {
   if (craftedKinds.includes(doc.craftedKind)) return doc.craftedKind;
   if (craftedKinds.includes(source?.craftedKind)) return source.craftedKind;
-  const name = normalizeCustomerText(doc.itemName || source?.itemName || doc.description || source?.description);
-  return aliases.find(([, terms]) => terms.some(term => name.includes(term)))?.[0] || 'سایر';
+  const rawName = doc.itemName || source?.itemName || doc.description || source?.description || '';
+  const name = normalizeCustomerText(rawName);
+  return aliases.find(([, terms]) => terms.some(term => name.includes(term)))?.[0]
+    || (/(?:^|[\s\u200c])ست(?:$|[\s\u200c])/.test(rawName) ? 'ست' : 'سایر');
 }
 const isSale = doc => String(doc.type).endsWith('-sale') || doc.direction === 'فروش';
 const categoryOf = doc => doc.category || String(doc.type || '').split('-')[0];
@@ -28,10 +30,12 @@ const inRange = (date, start, end) => validDate(date) && date >= start && date <
 const elapsedDays = (from, to) => Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86400000);
 export const sortPreferences = (items, metric = 'amount') => [...items].sort((a, b) => b[metric] - a[metric] || b.invoices - a.invoices || a.label.localeCompare(b.label, 'fa'));
 const increment = (map, key, label, doc, amount, count, grams, unit = 'عدد / قطعه') => {
-  const entry = map.get(key) || { key, label, amount: 0, quantity: 0, grams: 0, invoices: 0, unit };
-  entry.amount += amount; entry.quantity += count; entry.grams += grams; entry.invoices += 1;
+  const entry = map.get(key) || { key, label, amount: 0, quantity: 0, grams: 0, invoices: 0, unit, invoiceKeys: new Set() };
+  entry.invoiceKeys.add(transactionKey(doc));
+  entry.amount += amount; entry.quantity += count; entry.grams += grams; entry.invoices = entry.invoiceKeys.size;
   map.set(key, entry);
 };
+const preferences = map => sortPreferences([...map.values()].map(({ invoiceKeys, ...entry }) => entry));
 
 export function customerAnalytics(customer, documents, { today = iranDate(), days = 0, category = 'all' } = {}) {
   const start = days > 0 ? dateBefore(today, days - 1) : '0000-01-01';
@@ -78,14 +82,15 @@ export function customerAnalytics(customer, documents, { today = iranDate(), day
   const daysSincePurchase = lastPurchase ? elapsedDays(lastPurchase, today) : null;
   const purchaseDays = new Set(lifetime.map(doc => doc.date)).size;
   const segment = !lifetime.length ? 'بدون سابقه خرید' : daysSincePurchase >= 90 ? '۹۰ روز بدون خرید' : purchaseDays >= 3 ? 'خریدار تکراری' : firstPurchase >= dateBefore(today, 29) ? 'مشتری تازه' : 'خریدار موردی';
+  const invoices = invoiceCount(purchases);
   return {
-    customer, purchases, purchased, itemCount, craftedQuantity, goldGrams, discounts, invoices: purchases.length,
-    averagePurchase: purchases.length ? purchased / purchases.length : 0,
+    customer, purchases, purchased, itemCount, craftedQuantity, goldGrams, discounts, invoices,
+    averagePurchase: invoices ? purchased / invoices : 0,
     received: receipts.reduce((sum, item) => sum + number(item.rialAmount), 0),
     receivedGrams: receipts.reduce((sum, item) => sum + number(item.gramAmount), 0),
     paid: paid.reduce((sum, item) => sum + number(item.rialAmount), 0), receiptCount: receipts.length,
-    groups: sortPreferences([...groups.values()]), coins: sortPreferences([...coins.values()]), crafted: sortPreferences([...crafted.values()]),
-    products: sortPreferences([...products.values()]), currencies: sortPreferences([...currencies.values()]),
+    groups: preferences(groups), coins: preferences(coins), crafted: preferences(crafted),
+    products: preferences(products), currencies: preferences(currencies),
     lastPurchase, firstPurchase, daysSincePurchase, purchaseDays, segment,
     followUpDue: validDate(customer.followUpDate) && customer.followUpDate <= today,
     inactive: daysSincePurchase !== null && daysSincePurchase >= 90,

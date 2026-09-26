@@ -71,11 +71,13 @@ test('invalid money/date/status values are rejected without silently coercing th
 test('editing replaces exactly one cheque, preserves identity/creation time, and rejects duplicates', () => {
   const records = upsertCheque([], valid, { id: 'one', now: '2026-09-24T10:00:00Z' });
   assert.equal(records[0].amount, 25000000);
+  assert.equal(records[0].recordedAt, '2026-09-24T10:00:00.000Z');
   const original = structuredClone(records);
   const edited = upsertCheque(records, { ...records[0], amount: '۳۰۰۰۰۰۰۰', status: 'cleared', dueDate: '2026-09-29' }, { now: '2026-09-25T10:00:00Z' });
   assert.equal(edited.length, 1);
   assert.equal(edited[0].id, 'one');
   assert.equal(edited[0].createdAt, '2026-09-24T10:00:00Z');
+  assert.equal(edited[0].recordedAt, records[0].recordedAt);
   assert.equal(edited[0].updatedAt, '2026-09-25T10:00:00Z');
   assert.equal(edited[0].status, 'cleared');
   assert.equal(edited[0].amount, 30000000);
@@ -84,4 +86,16 @@ test('editing replaces exactly one cheque, preserves identity/creation time, and
   assert.throws(() => upsertCheque(records, { ...valid, id: 'missing' }), /پیدا نشد|قبلاً/);
   assert.equal(upsertCheque(records, { ...valid, direction: 'issued' }, { id: 'two' }).length, 2);
   assert.equal(getChequeReminders(edited, '2026-10-01').total, 0);
+});
+
+test('cheque edits preserve registration time and never add it to legacy cheques', () => {
+  const legacy = { ...valid, id: 'legacy', amount: 25000000, createdAt: '2026-09-20T10:00:00Z' };
+  const existing = { ...valid, id: 'new', amount: 25000000, recordedAt: '2026-09-24T09:10:00.000Z' };
+  for (const original of [legacy, existing]) {
+    const before = structuredClone(original);
+    const [edited] = upsertCheque([original], { ...original, note: 'Updated', recordedAt: '2026-09-25T11:12:00.000Z' }, { now: '2026-09-25T11:12:00Z' });
+    assert.equal(edited.recordedAt, original.recordedAt);
+    assert.equal(Object.hasOwn(edited, 'recordedAt'), Object.hasOwn(original, 'recordedAt'));
+    assert.deepEqual(original, before);
+  }
 });

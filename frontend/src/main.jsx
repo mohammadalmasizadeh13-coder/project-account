@@ -8,10 +8,14 @@ import CustomerCRM from './CustomerCRM';
 import ChequeManager, { ChequeAlerts } from './ChequeManager';
 import { getChequeReminders } from './checks';
 import PersianDateInput from './PersianDateInput';
-import { formatPersianDate } from './persianDate';
+import { formatRecordDate, newRecordTimestamp } from './recordTime';
+import { isTradeDocument, tradeGoldPriceSummary } from './tradeGoldPrice';
+import { expenseRateSummary, expenseSummary, expenseUnitLabel, expenseUnits, expenseValue, normalizeExpense } from './expenses';
 import { validateDocument } from './documentValidation';
 import InventoryVault from './InventoryVault';
-import { assignProductCodes, inventoryReport, isStockSale, linkHistoricalSale, normalizeProductCode, saveLedgerRecords, stockIdentityFields, stockQuantity, stockSaleForm, validateStockSale } from './inventory';
+import JewelrySetEditor, { SetModePicker } from './JewelrySetEditor';
+import { createSetPart, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm } from './jewelrySets';
+import { assignProductCodes, inventoryReport, isStockSale, linkHistoricalSale, normalizeProductCode, saveLedgerRecords, stockIdentityFields, stockQuantity, stockSaleForm, validateStockSale, validateStockSales } from './inventory';
 import { iranDate } from './sales';
 import { assetReport, coinCatalog, currencyCatalog, currencyName, currencyRate, documentBreakdown, marketPriceFields, quantity } from './assets';
 import { craftedKinds } from './crmAnalytics';
@@ -43,6 +47,7 @@ const documentTypes = [
   { value: 'melted-purchase', label: 'خرید آبشده', category: 'melted', direction: 'خرید' },
   { value: 'currency-sale', label: 'فروش ارز', category: 'currency', direction: 'فروش' },
   { value: 'currency-purchase', label: 'خرید ارز', category: 'currency', direction: 'خرید' },
+  { value: 'expense', label: 'هزینه فروشگاه', category: 'expense', direction: 'هزینه' },
 ];
 
 const coinTypes = coinCatalog.map(coin => coin.name);
@@ -60,23 +65,26 @@ const digitMap = {
   '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
 };
 
-function createEmptyDocumentForm() {
+function createEmptyDocumentForm(type = 'crafted-sale') {
   return {
-    type: 'crafted-sale',
+    type,
     date: iranDate(),
     customerName: '',
     customerId: '',
     description: '',
     itemName: '',
     craftedKind: '',
+    setMode: 'together',
+    setParts: [],
     productCode: '',
     inventorySourceId: '',
     itemCount: '1',
     weight: '',
     gramPrice: '',
+    gold18Price: null,
     ayar: '750',
     wagePercent: '',
-    profitPercent: '0',
+    profitPercent: type.endsWith('-sale') ? '7' : '0',
     discountRial: '',
     coinType: 'امامی بانکی ۸۶',
     currencyType: 'USD',
@@ -84,6 +92,12 @@ function createEmptyDocumentForm() {
     currencyAmount: '',
     wageFixed: '',
     otherCosts: '',
+    expenseAmount: '',
+    expensePayee: '',
+    expenseUnit: 'toman',
+    expenseCurrency: 'USD',
+    expenseGoldPurity: '750',
+    expenseRate: '',
     coinCount: '1',
     coinPrice: '',
     parsianWeight: '',
@@ -108,6 +122,8 @@ function createOpeningInventoryItem(category) {
     id: `opening-item-${category}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     category,
     craftedKind: '',
+    setMode: 'together',
+    setParts: [],
     description: '',
     itemCount: '',
     weight: '',
@@ -207,23 +223,14 @@ function getMeltedWeight750(document) {
   return scaleWeight * ayar / 750;
 }
 
-const getDocumentAmount = document => documentBreakdown(document).total;
+const getDocumentAmount = document => document.amount != null ? toNumber(document.amount) : document.type === 'expense' ? expenseValue(document) : documentBreakdown(document).total;
 
 function getCoinPrice(coinType, prices) {
   const priceKey = coinPriceFields[coinType];
   return priceKey ? toNumber(prices[priceKey]) : 0;
 }
 
-const getLiveDocumentAmount = (document, prices) => documentBreakdown(document, prices).total;
-
-function applyMarketPricesToDocuments(documents, prices) {
-  const pricedAt = new Date().toISOString();
-  return documents.map(document => ({
-    ...document,
-    currentAmount: getLiveDocumentAmount(document, prices),
-    pricedAt,
-  }));
-}
+const getLiveDocumentAmount = (document, prices) => document.type === 'expense' ? getDocumentAmount(document) : documentBreakdown(document, prices).total;
 
 function getDocumentWeight(document) {
   if (document.category === 'crafted') return getDocumentQuantity(document) * toNumber(document.weight);
@@ -233,12 +240,14 @@ function getDocumentWeight(document) {
 }
 
 function describeDocumentItem(document) {
+  if (document.type === 'expense') return document.description || 'هزینه فروشگاه';
   const quantity = getDocumentQuantity(document);
   if (document.category === 'currency') return `${currencyName(document.currencyType)}، مقدار ${formatDecimal(quantity)}، نرخ ثبت ${formatNumber(toNumber(document.currencyRate))} تومان`;
 
   if (document.category === 'crafted') {
     const weightText = quantity > 1 ? `${formatDecimal(quantity)} عدد، هر عدد ${formatDecimal(document.weight)} گرم` : `${formatDecimal(document.weight)} گرم`;
-    return `${weightText}، عیار ${document.ayar || '-'}، اجرت ${document.wagePercent || 0}٪`;
+    const membership = document.setMode === 'separate' && document.setId ? ` · قطعه‌ای از ${document.setName || document.setKind}` : isJewelrySetKind(document.craftedKind) ? ` · ${document.craftedKind} با هم` : '';
+    return `${weightText}، عیار ${document.ayar || '-'}، اجرت ${document.wagePercent || 0}٪${membership}`;
   }
 
   if (document.category === 'coin') {
@@ -255,6 +264,7 @@ function describeDocumentItem(document) {
 }
 
 function isOpeningItemBlank(item) {
+  if (item.category === 'crafted' && isJewelrySetKind(item.craftedKind)) return false;
   if ([item.wageFixed, item.wagePercent, item.otherCosts].some(value => String(value || '').trim()) || toNumber(item.profitPercent)) return false;
   if (item.category === 'currency') return ![item.currencyAmount, item.currencyRate, item.description, item.note].some(value => String(value || '').trim());
   if (item.category === 'crafted') {
@@ -274,6 +284,7 @@ function isOpeningItemBlank(item) {
 
 function validateOpeningItem(item, prices) {
   const form = { ...item, type: 'opening-' + item.category, customerName: 'موجودی اولیه', date: iranDate(), gramPrice: prices.goldGramPrice, meltedGramPrice: prices.goldGramPrice, coinPrice: String(getCoinPrice(item.coinType, prices)), currencyRate: item.currencyRate || String(currencyRate(item.currencyType, prices) || ''), wagePercent: item.wagePercent || '0' };
+  if (isSeparateSetForm(form)) return Object.values(validateSetForm(form))[0] || '';
   const errors = validateDocument(form, item.category, toNumber);
   const count = stockQuantity(form);
   if (item.category !== 'currency' && (!Number.isSafeInteger(count) || count <= 0)) return 'تعداد جنس باید عدد صحیح بیشتر از صفر باشد.';
@@ -281,7 +292,7 @@ function validateOpeningItem(item, prices) {
 }
 
 function createOpeningDocumentFromItem(item, prices, index) {
-  const createdAt = new Date().toISOString();
+  const createdAt = newRecordTimestamp();
   const date = iranDate();
   const meta = openingCategoryMeta[item.category];
   const baseRecord = {
@@ -298,6 +309,9 @@ function createOpeningDocumentFromItem(item, prices, index) {
     rialDebt: 0,
     source: 'opening-inventory',
     createdAt,
+    recordedAt: createdAt,
+    itemName: item.itemName || '',
+    ...Object.fromEntries(['setId', 'setName', 'setKind', 'setMode', 'setPieceCount', 'transactionId'].filter(key => item[key] != null).map(key => [key, item[key]])),
     wagePercent: item.wagePercent || '0', wageFixed: item.wageFixed || '0', otherCosts: item.otherCosts || '0', profitPercent: item.profitPercent || '0',
   };
 
@@ -309,7 +323,7 @@ function createOpeningDocumentFromItem(item, prices, index) {
       ...baseRecord,
       itemCount: item.itemCount,
       weight: item.weight,
-      gramPrice: prices.goldGramPrice,
+      gramPrice: item.gramPrice || prices.goldGramPrice,
       ayar: item.ayar,
       craftedKind: item.craftedKind || '',
       wagePercent: item.wagePercent || '0',
@@ -346,6 +360,11 @@ function createOpeningDocumentFromItem(item, prices, index) {
     itemWeight: getDocumentWeight(documentRecord),
     itemSummary: describeDocumentItem(documentRecord),
   };
+}
+
+function createOpeningDocumentsFromItem(item, prices) {
+  const form = { ...item, type: `opening-${item.category}`, gramPrice: item.gramPrice || prices.goldGramPrice };
+  return expandSetForm(form, { setId: item.id, transactionId: `opening-${item.id}` }).map(row => createOpeningDocumentFromItem(row, prices));
 }
 
 function loadAccounts() {
@@ -565,7 +584,8 @@ function OpeningInventoryPage({ username, prices, onComplete }) {
   const [message, setMessage] = useState(null);
 
   const filledItems = items.filter(item => !isOpeningItemBlank(item));
-  const previewDocuments = filledItems.map((item, index) => createOpeningDocumentFromItem(item, openingPrices, index));
+  const [openingErrors, setOpeningErrors] = useState({});
+  const previewDocuments = filledItems.flatMap(item => createOpeningDocumentsFromItem(item, openingPrices));
   const previewValue = previewDocuments.reduce((sum, document) => sum + getLiveDocumentAmount(document, openingPrices), 0);
 
   const updatePriceField = event => {
@@ -575,13 +595,19 @@ function OpeningInventoryPage({ username, prices, onComplete }) {
   };
 
   const updateItemField = (id, fieldName, fieldValue) => {
-    setItems(currentItems => currentItems.map(item => item.id === id ? { ...item, [fieldName]: fieldValue } : item));
+    setItems(currentItems => currentItems.map(item => item.id === id ? {
+      ...item, [fieldName]: fieldValue,
+      ...(fieldName === 'setMode' && fieldValue === 'separate' && !item.setParts.length ? { setParts: [createSetPart({ gramPrice: openingPrices.goldGramPrice }), createSetPart({ gramPrice: openingPrices.goldGramPrice })] } : {}),
+    } : item));
+    setOpeningErrors(current => ({ ...current, [id]: {} }));
     setMessage(null);
   };
 
   const addItem = category => {
-    setItems(currentItems => [...currentItems, createOpeningInventoryItem(category)]);
+    const item = createOpeningInventoryItem(category);
+    setItems(currentItems => [...currentItems, item]);
     setMessage(null);
+    requestAnimationFrame(() => document.querySelector(`[data-opening-item="${item.id}"] [data-opening-field="description"]`)?.focus());
   };
 
   const removeItem = id => {
@@ -597,6 +623,8 @@ function OpeningInventoryPage({ username, prices, onComplete }) {
       return;
     }
 
+    const partErrors = Object.fromEntries(filledItems.filter(isSeparateSetForm).map(item => [item.id, validateSetForm({ ...item, type: 'opening-crafted', date: iranDate(), gramPrice: openingPrices.goldGramPrice })]));
+    setOpeningErrors(partErrors);
     const validationError = filledItems.map(item => validateOpeningItem(item, openingPrices)).find(Boolean);
 
     if (validationError) {
@@ -604,13 +632,14 @@ function OpeningInventoryPage({ username, prices, onComplete }) {
       return;
     }
 
-    const openingDocuments = filledItems.map((item, index) => createOpeningDocumentFromItem(item, openingPrices, index));
+    const openingDocuments = filledItems.flatMap(item => createOpeningDocumentsFromItem(item, openingPrices));
     try { onComplete({
       documents: openingDocuments,
       prices: openingPrices,
       totalValue: openingDocuments.reduce((sum, document) => sum + Number(document.currentAmount || 0), 0),
     }); } catch (error) { setMessage({ type: 'error', text: error.message || 'موجودی ذخیره نشد؛ دوباره تلاش کنید.' }); return; }
     setItems(['crafted', 'coin', 'melted', 'currency'].map(createOpeningInventoryItem));
+    setOpeningErrors({});
     setMessage({ type: 'success', text: 'موجودی اولیه ثبت شد؛ کد هر جنس در «صندوق من» آماده است.' });
   };
 
@@ -624,22 +653,24 @@ function OpeningInventoryPage({ username, prices, onComplete }) {
           <span className="account-metric-icon gold"><Icon size={18}/></span>
           <strong>{label}</strong>
         </div>
-        <button className="button button-ghost" type="button" onClick={() => addItem(category)}><Plus size={16}/> افزودن</button>
       </div>
 
       <div className="opening-item-list">
-        {categoryItems.map(item => <article className="opening-item-card" key={item.id}>
+        {categoryItems.map(item => <article className="opening-item-card" data-opening-item={item.id} data-opening-category={category} key={item.id}>
           <button className="opening-remove" type="button" onClick={() => removeItem(item.id)} aria-label="حذف ردیف"><X size={15}/></button>
           <div className="form-grid">
-            <label className="wide">شرح دارایی<input value={item.description} onChange={event => updateItemField(item.id, 'description', event.target.value)} placeholder={category === 'crafted' ? 'مثلاً النگو، زنجیر، نیم‌ست' : category === 'coin' ? 'مثلاً سکه امامی بانکی' : 'مثلاً آبشده ۷۵۰'}/></label>
+            <label className="wide">شرح دارایی<input data-opening-field="description" value={item.description} onChange={event => updateItemField(item.id, 'description', event.target.value)} placeholder={category === 'crafted' ? 'مثلاً النگو، زنجیر، نیم‌ست' : category === 'coin' ? 'مثلاً سکه امامی بانکی' : 'مثلاً آبشده ۷۵۰'}/></label>
 
-            {category === 'crafted' && <>
+            {category === 'crafted' && !isSeparateSetForm(item) && <>
               <label>تعداد<input inputMode="decimal" value={item.itemCount} onChange={event => updateItemField(item.id, 'itemCount', event.target.value)} placeholder="مثلاً ۱۰"/></label>
               <label>وزن هر عدد<input inputMode="decimal" value={item.weight} onChange={event => updateItemField(item.id, 'weight', event.target.value)} placeholder="گرم"/></label>
               <label>عیار<input inputMode="numeric" value={item.ayar} onChange={event => updateItemField(item.id, 'ayar', event.target.value)} placeholder="مثلاً 750"/></label>
               <label>اجرت درصدی<input inputMode="decimal" value={item.wagePercent} onChange={event => updateItemField(item.id, 'wagePercent', event.target.value)} placeholder="اختیاری"/></label>
-              <label>نوع کار ساخته<select value={item.craftedKind || ''} onChange={event => updateItemField(item.id, 'craftedKind', event.target.value)}><option value="">تشخیص از نام کالا</option>{craftedKinds.map(kind => <option key={kind}>{kind}</option>)}</select></label>
+              <label>نوع کار ساخته<select data-opening-field="craftedKind" value={item.craftedKind || ''} onChange={event => updateItemField(item.id, 'craftedKind', event.target.value)}><option value="">تشخیص از نام کالا</option>{craftedKinds.map(kind => <option key={kind}>{kind}</option>)}</select></label>
             </>}
+            {category === 'crafted' && isSeparateSetForm(item) && <label>نوع مجموعه<select data-opening-field="craftedKind" value={item.craftedKind} onChange={event => updateItemField(item.id, 'craftedKind', event.target.value)}>{craftedKinds.map(kind => <option key={kind}>{kind}</option>)}</select></label>}
+            {category === 'crafted' && isJewelrySetKind(item.craftedKind) && <div className="wide"><SetModePicker kind={item.craftedKind} value={item.setMode} onChange={value => updateItemField(item.id, 'setMode', value)}/></div>}
+            {isSeparateSetForm(item) && <div className="wide"><JewelrySetEditor parts={item.setParts} onChange={parts => updateItemField(item.id, 'setParts', parts)} prices={openingPrices} errors={openingErrors[item.id]}/></div>}
 
             {category === 'coin' && <>
               <label>نوع سکه<select value={item.coinType} onChange={event => updateItemField(item.id, 'coinType', event.target.value)}>{coinTypes.map(type => <option key={type} value={type}>{type}</option>)}</select></label>
@@ -664,16 +695,18 @@ function OpeningInventoryPage({ username, prices, onComplete }) {
               <label>قیمت لحظه‌ای هر واحد ارز (تومان)<input inputMode="decimal" value={item.currencyRate || ''} onChange={event => updateItemField(item.id, 'currencyRate', event.target.value)} placeholder={String(currencyRate(item.currencyType, openingPrices) || 'تومان')}/></label>
               <label>مقدار ارز<input inputMode="decimal" value={item.currencyAmount} onChange={event => updateItemField(item.id, 'currencyAmount', event.target.value)} placeholder="مثلاً ۱۰۰۰"/></label>
             </>}
-            {category !== 'currency' && <>
+            {!isSeparateSetForm(item) && <>{category !== 'currency' && <>
               {category !== 'crafted' && <label>اجرت درصدی<input inputMode="decimal" value={item.wagePercent} onChange={event => updateItemField(item.id, 'wagePercent', event.target.value)} placeholder="اختیاری"/></label>}
               <label>اجرت ثابت هر عدد / قطعه (تومان)<input inputMode="decimal" value={item.wageFixed} onChange={event => updateItemField(item.id, 'wageFixed', event.target.value)} placeholder="اختیاری"/></label>
             </>}
             <label>هزینه‌های دیگر هر واحد (تومان)<input inputMode="decimal" value={item.otherCosts} onChange={event => updateItemField(item.id, 'otherCosts', event.target.value)} placeholder="اختیاری"/></label>
             <label>سود درصدی<input inputMode="decimal" value={item.profitPercent} onChange={event => updateItemField(item.id, 'profitPercent', event.target.value)} placeholder="اختیاری"/></label>
+            </>}
             <label className="wide">یادداشت<input value={item.note} onChange={event => updateItemField(item.id, 'note', event.target.value)} placeholder="اختیاری"/></label>
           </div>
         </article>)}
       </div>
+      <button className="button button-ghost opening-add-item" type="button" data-add-opening-item={category} onClick={() => addItem(category)}><Plus size={16}/> افزودن {label}</button>
     </section>;
   };
 
@@ -688,9 +721,11 @@ function OpeningInventoryPage({ username, prices, onComplete }) {
         </div>
       </div>
 
-      {message && <div className={`form-message ${message.type}`}>{message.text}</div>}
-
       <div className="opening-grid">
+        <div className="opening-assets-panel">
+          {['crafted', 'coin', 'melted', 'currency'].map(renderOpeningRows)}
+        </div>
+
         <aside className="opening-rate-panel">
           <div className="panel-heading compact">
             <span>نرخ امروز</span>
@@ -700,20 +735,16 @@ function OpeningInventoryPage({ username, prices, onComplete }) {
             {marketPriceFields.map(([field, label]) => <label className="wide" key={field}>{label}<input name={field} inputMode="decimal" value={openingPrices[field] || ''} onChange={updatePriceField} placeholder="تومان"/></label>)}
             <p className="document-required-note">نرخ هر واحد به تومان؛ فقط نرخ دارایی‌های خود را وارد کنید.</p>
           </div>
-
-          <div className="opening-total">
-            <span>ارزش فعلی موجودی اولیه</span>
-            <strong>{formatNumber(previewValue)} <small>تومان</small></strong>
-            <small>{formatNumber(filledItems.length)} سند آماده ثبت</small>
-          </div>
         </aside>
-
-        <div className="opening-assets-panel">
-          {['crafted', 'coin', 'melted', 'currency'].map(renderOpeningRows)}
-        </div>
       </div>
 
       <div className="opening-actions">
+        <div className="opening-total">
+          <span>ارزش فعلی موجودی اولیه</span>
+          <strong>{formatNumber(previewValue)} <small>تومان</small></strong>
+          <small>{formatNumber(previewDocuments.length)} ردیف جنس آماده ثبت</small>
+        </div>
+        {message && <div className={`form-message ${message.type}`} role={message.type === 'error' ? 'alert' : 'status'}>{message.text}</div>}
         <button className="button button-primary" type="submit"><ReceiptText size={17}/> ثبت موجودی اولیه</button>
       </div>
     </form>
@@ -804,7 +835,16 @@ function AccountPage({ username, onLogout }) {
     return () => { window.clearTimeout(focusTimer); document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', keydown); menuButtonRef.current?.focus(); };
   }, [menuOpen, isMobile]);
 
-  const openTool = tool => { setActiveTool(tool); setMenuOpen(false); setSelectedChequeId(''); if (tool !== 'crm') setSelectedCrmId(''); if (notificationsRef.current) notificationsRef.current.open = false; window.scrollTo({ top: 0, behavior: 'instant' }); };
+  const openTool = tool => {
+    if (tool === 'expense') {
+      setDocumentForm(createEmptyDocumentForm('expense'));
+      setStockQuery(''); setDocumentErrors({}); setFormMessage(null);
+    }
+    setActiveTool(tool === 'expense' ? 'register' : tool); setMenuOpen(false); setSelectedChequeId('');
+    if (tool !== 'crm') setSelectedCrmId('');
+    if (notificationsRef.current) notificationsRef.current.open = false;
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  };
   const openCustomer = id => { openTool('crm'); setSelectedCrmId(id); };
   const openCheque = cheque => { openTool('cheques'); setSelectedChequeId(cheque?.id || ''); };
   const chequeReminders = getChequeReminders(cheques, today);
@@ -815,18 +855,23 @@ function AccountPage({ username, onLogout }) {
   const stock = inventoryReport(documents);
   const selectedStock = stock.items.find(item => item.id === documentForm.inventorySourceId);
   const saleMode = isStockSale(documentForm);
-  const stockMatches = stock.available.filter(item => normalizeProductCode([item.productCode, item.itemName, item.description, item.assayCode, item.coinType, item.currencyType, currencyName(item.currencyType)].join(' ')).includes(normalizeProductCode(stockQuery))).slice(0, 8);
-  const documentPreview = { ...documentForm, category: selectedDocumentType.category };
-  const previewAmount = getDocumentAmount(documentPreview);
-  const pricedDocuments = documents.map(document => ({ ...document, currentAmount: getLiveDocumentAmount(document, savedPrices) }));
-  const latestDocuments = pricedDocuments.slice(0, 5);
+  const expenseMode = documentForm.type === 'expense';
+  const separateSetMode = selectedDocumentType.category === 'crafted' && isSeparateSetForm(documentForm);
+  const stockMatches = stock.available.filter(item => normalizeProductCode([item.productCode, item.itemName, item.description, item.setName, item.setKind, item.assayCode, item.coinType, item.currencyType, currencyName(item.currencyType)].join(' ')).includes(normalizeProductCode(stockQuery))).slice(0, 8);
+  const documentPreview = { ...documentForm, category: selectedDocumentType.category, ...(separateSetMode ? { gramPrice: savedPrices.goldGramPrice } : {}) };
+  const previewRows = expandSetForm(documentPreview);
+  const previewAmount = previewRows.reduce((sum, row) => sum + getDocumentAmount(row), 0);
+  const latestDocuments = documents.slice(0, 5);
   const assets = assetReport(stock, savedPrices);
   const liveInventoryValue = assetReport(stock, priceForm).totalToman;
   const normalizedSearch = searchTerm.trim().toLocaleLowerCase('fa-IR');
-  const filteredDocuments = pricedDocuments.filter(document => {
+  const filteredDocuments = documents.filter(document => {
     if (!normalizedSearch) return true;
     return [
       document.customerName,
+      document.expensePayee,
+      document.expenseCurrency,
+      document.type === 'expense' ? expenseSummary(document) : '',
       document.typeLabel,
       document.direction,
       document.itemSummary,
@@ -838,6 +883,8 @@ function AccountPage({ username, onLogout }) {
       document.note,
       document.description,
       document.itemName,
+      document.setName,
+      document.setKind,
       document.productCode,
     ].some(value => String(value || '').toLocaleLowerCase('fa-IR').includes(normalizedSearch));
   });
@@ -864,12 +911,25 @@ function AccountPage({ username, onLogout }) {
     setDocumentErrors({}); setFormMessage(null);
   };
   const sellStock = item => { chooseStock(item); openTool('register'); };
+  const chooseSet = items => {
+    const available = items.filter(item => item.remaining > 0);
+    if (!available.length) return;
+    const first = available[0];
+    setDocumentForm(current => ({
+      ...createEmptyDocumentForm('crafted-sale'), customerId: current.customerId, customerName: current.customerName, date: current.date,
+      gold18Price: current.gold18Price, gramDebt: current.gramDebt, rialDebt: current.rialDebt, note: current.note, description: current.description,
+      craftedKind: first.setKind, itemName: first.setName || first.setKind, setMode: 'separate', setId: first.setId,
+      setParts: available.map(item => ({ ...stockSaleForm(item, createEmptyDocumentForm('crafted-sale'), savedPrices), id: item.id, remaining: item.remaining, selected: true })),
+    }));
+    setStockQuery(''); setDocumentErrors({}); setFormMessage(null);
+  };
+  const sellSet = items => { chooseSet(items); openTool('register'); };
   const findStock = event => {
     const value = event.target.value;
     setStockQuery(value);
     const match = stock.available.find(item => normalizeProductCode(item.productCode) === normalizeProductCode(value));
     if (match) { chooseStock(match); return; }
-    setDocumentForm(current => ({ ...createEmptyDocumentForm(), type: current.type, date: current.date, customerId: current.customerId, customerName: current.customerName }));
+    setDocumentForm(current => ({ ...createEmptyDocumentForm(), type: current.type, date: current.date, customerId: current.customerId, customerName: current.customerName, gold18Price: current.gold18Price }));
     setDocumentErrors({}); setFormMessage(null);
   };
 
@@ -928,9 +988,22 @@ function AccountPage({ username, onLogout }) {
       setFormMessage(null);
       return;
     }
+    if (name === 'expenseUnit' || name === 'expenseCurrency') {
+      setDocumentForm(current => {
+        const expenseUnit = name === 'expenseUnit' ? value : current.expenseUnit;
+        const expenseCurrency = name === 'expenseCurrency' ? value : current.expenseCurrency;
+        const rate = expenseUnit === 'gold' ? toNumber(savedPrices.goldGramPrice) : expenseUnit === 'currency' ? currencyRate(expenseCurrency, savedPrices) : 0;
+        return { ...current, expenseUnit, expenseCurrency, expenseAmount: name === 'expenseUnit' ? '' : current.expenseAmount, expenseRate: rate > 0 ? String(rate) : '' };
+      });
+      setDocumentErrors({}); setFormMessage(null); return;
+    }
     if (name === 'type') {
-      setDocumentForm(current => ({ ...createEmptyDocumentForm(), type: value, date: current.date, customerId: current.customerId, customerName: current.customerName, gramPrice: savedPrices.goldGramPrice, meltedGramPrice: savedPrices.goldGramPrice, currencyRate: String(currencyRate('USD', savedPrices) || ''), coinPrice: String(getCoinPrice('امامی بانکی ۸۶', savedPrices) || '') }));
+      setDocumentForm(current => ({ ...createEmptyDocumentForm(value), date: current.date, customerId: value === 'expense' ? '' : current.customerId, customerName: value === 'expense' ? '' : current.customerName, gramPrice: savedPrices.goldGramPrice, meltedGramPrice: savedPrices.goldGramPrice, currencyRate: String(currencyRate('USD', savedPrices) || ''), coinPrice: String(getCoinPrice('امامی بانکی ۸۶', savedPrices) || '') }));
       setStockQuery(''); setFormMessage(null); return;
+    }
+    if (name === 'setMode') {
+      setDocumentForm(current => ({ ...current, setMode: value, setParts: value === 'separate' && !current.setParts.length ? [createSetPart({ gramPrice: savedPrices.goldGramPrice }), createSetPart({ gramPrice: savedPrices.goldGramPrice })] : current.setParts }));
+      setDocumentErrors({}); setFormMessage(null); return;
     }
     if (saleMode && selectedStock && stockIdentityFields.includes(name) && String(selectedStock[name] || '').trim()) return;
     setDocumentForm(currentForm => updateFormWithMarketPrice(currentForm, name, value));
@@ -953,6 +1026,9 @@ function AccountPage({ username, onLogout }) {
       detail: documentRecord.itemSummary,
       amount: documentRecord.amount,
       date: documentRecord.date,
+      recordedAt: documentRecord.recordedAt,
+      gold18Price: documentRecord.gold18Price,
+      transactionId: documentRecord.transactionId,
     };
 
     if (customerIndex === -1) {
@@ -981,12 +1057,12 @@ function AccountPage({ username, onLogout }) {
   const submitDocument = event => {
     event.preventDefault();
     const cleanCustomerName = documentForm.customerName.trim();
-    const documentWithCategory = { ...documentForm, category: selectedDocumentType.category };
+    const documentWithCategory = { ...documentForm, category: selectedDocumentType.category, gold18Price: documentForm.gold18Price ?? savedPrices.goldGramPrice ?? '', ...(separateSetMode ? { gramPrice: savedPrices.goldGramPrice } : {}) };
 
-    const errors = validateDocument(documentForm, selectedDocumentType.category, toNumber);
+    const errors = separateSetMode ? validateSetForm(documentWithCategory, documents) : validateDocument(documentWithCategory, selectedDocumentType.category, toNumber);
     const quantity = stockQuantity(documentWithCategory);
-    if (selectedDocumentType.category !== 'currency' && (!Number.isSafeInteger(quantity) || quantity <= 0)) errors[selectedDocumentType.category === 'coin' ? 'coinCount' : 'itemCount'] = 'تعداد باید عدد صحیح بیشتر از صفر باشد.';
-    if (saleMode) {
+    if (!expenseMode && !separateSetMode && selectedDocumentType.category !== 'currency' && (!Number.isSafeInteger(quantity) || quantity <= 0)) errors[selectedDocumentType.category === 'coin' ? 'coinCount' : 'itemCount'] = 'تعداد باید عدد صحیح بیشتر از صفر باشد.';
+    if (saleMode && !separateSetMode) {
       const stockError = validateStockSale(documentWithCategory, documents);
       if (stockError) errors.productCode = stockError;
     }
@@ -997,41 +1073,61 @@ function AccountPage({ username, onLogout }) {
       return;
     }
 
-    const documentRecord = {
-      ...documentForm,
+    const recordedAt = newRecordTimestamp();
+    if (expenseMode) {
+      const expense = {
+        ...normalizeExpense(documentForm),
+        id: `document-${crypto.randomUUID()}`, type: 'expense', category: 'expense', direction: 'هزینه', typeLabel: 'هزینه فروشگاه',
+        date: documentForm.date, description: documentForm.description.trim(), note: documentForm.note.trim(),
+        expensePayee: documentForm.expensePayee.trim(), itemSummary: documentForm.description.trim(),
+        customerName: '', customerId: '', gramDebt: 0, rialDebt: 0, createdAt: recordedAt, recordedAt,
+      };
+      try { persistDocuments([expense, ...currentDocuments()]); }
+      catch (error) { setFormMessage({ type: 'error', text: error.message || 'هزینه ذخیره نشد؛ دوباره تلاش کنید.' }); return; }
+      setDocumentForm(createEmptyDocumentForm('expense'));
+      setFormMessage({ type: 'success', text: 'هزینه ثبت شد و در گزارش سود همین تاریخ محاسبه می‌شود.' });
+      return;
+    }
+
+    const customerId = documentForm.customerId || customers.find(customer => customer.name.trim() === cleanCustomerName)?.id || `customer-${crypto.randomUUID()}`;
+    const rows = expandSetForm(documentWithCategory, { setId: documentForm.setId || `set-${crypto.randomUUID()}`, transactionId: `transaction-${crypto.randomUUID()}` });
+    const documentRecords = rows.map(row => ({
+      ...row,
+      profitPercent: String(toNumber(row.profitPercent)),
       id: `document-${crypto.randomUUID()}`,
       laboratoryName: selectedDocumentType.category === 'melted' ? documentForm.laboratoryName.trim() : '',
       customerName: cleanCustomerName,
-      customerId: documentForm.customerId || customers.find(customer => customer.name.trim() === cleanCustomerName)?.id || `customer-${crypto.randomUUID()}`,
+      customerId,
       typeLabel: selectedDocumentType.label,
       category: selectedDocumentType.category,
       direction: selectedDocumentType.direction,
-      amount: getDocumentAmount(documentWithCategory),
-      currentAmount: getLiveDocumentAmount(documentWithCategory, priceForm),
-      itemWeight: getDocumentWeight(documentWithCategory),
-      itemSummary: describeDocumentItem(documentWithCategory),
-      gramDebt: toNumber(documentForm.gramDebt),
-      rialDebt: toNumber(documentForm.rialDebt),
-      createdAt: new Date().toISOString(),
-    };
+      amount: getDocumentAmount(row),
+      gold18Price: toNumber(documentWithCategory.gold18Price),
+      itemWeight: getDocumentWeight(row),
+      itemSummary: describeDocumentItem(row),
+      gramDebt: toNumber(row.gramDebt),
+      rialDebt: toNumber(row.rialDebt),
+      createdAt: recordedAt,
+      recordedAt,
+    }));
 
     let saved;
     try {
       const latest = currentDocuments();
       // A sale and its stock movement are the same stored record.
       if (saleMode) {
-        const stockError = validateStockSale(documentRecord, latest);
+        const stockError = validateStockSales(documentRecords, latest);
         if (stockError) throw new Error(stockError);
       }
-      saved = assignProductCodes([documentRecord, ...latest]);
-      const nextCustomers = upsertCustomerFromDocument(loadUserRecords(CUSTOMERS_KEY, username), documentRecord);
+      saved = assignProductCodes([...documentRecords, ...latest]);
+      const nextCustomers = documentRecords.reduce(upsertCustomerFromDocument, loadUserRecords(CUSTOMERS_KEY, username));
       saveLedgerRecords(localStorage, userStorageKey(DOCUMENTS_KEY, username), userStorageKey(CUSTOMERS_KEY, username), saved, nextCustomers);
       setDocuments(saved); setCustomers(nextCustomers);
     } catch (error) { setFormMessage({ type: 'error', text: error.message || 'سند ذخیره نشد؛ دوباره تلاش کنید.' }); return; }
-    setDocumentForm({ ...createEmptyDocumentForm(), gramPrice: priceForm.goldGramPrice });
+    setDocumentForm({ ...createEmptyDocumentForm(), gramPrice: savedPrices.goldGramPrice });
     setStockQuery('');
-    const savedRecord = saved.find(item => item.id === documentRecord.id);
-    setFormMessage({ type: 'success', text: `سند ثبت شد؛ ${saleMode ? 'موجودی صندوق کم شد' : `جنس با کد ${savedRecord.productCode} وارد صندوق شد`}.` });
+    const savedRecord = saved.find(item => item.id === documentRecords[0].id);
+    setFormMessage({ type: 'success', text: `سند ثبت شد؛ ${saleMode ? 'موجودی قطعه‌های فروخته‌شده کم شد' : separateSetMode ? `${formatNumber(documentRecords.length)} قطعه با کدهای مستقل به مجموعه اضافه شد` : `جنس با کد ${savedRecord.productCode} وارد صندوق شد`}.` });
   };
 
   const submitPrices = event => {
@@ -1047,7 +1143,7 @@ function AccountPage({ username, onLogout }) {
     catch { setPriceMessage({ type: 'error', text: 'نرخ‌ها ذخیره نشد؛ دوباره تلاش کنید.' }); return; }
     setPriceForm(nextPrices);
     setSavedPrices(nextPrices);
-    setPriceMessage({ type: 'success', text: 'نرخ‌ها ثبت شد و قیمت جدید همه سندها محاسبه شد.' });
+    setPriceMessage({ type: 'success', text: 'نرخ‌ها ثبت شد و ارزش موجودی صندوق به‌روز شد.' });
   };
 
   const completeOpeningInventory = ({ documents: openingDocuments, prices: openingPrices, totalValue }) => {
@@ -1074,9 +1170,9 @@ function AccountPage({ username, onLogout }) {
       {!['home', 'entries', 'reports', 'crm', 'crm-occasions'].includes(activeTool) && <div className="workspace-subheading"><button onClick={() => openTool(activeSection)}><ChevronLeft size={17}/> {workspaceSections[activeSection]}</button><span>{toolTitle}</span></div>}
       {storageMessage && <p role="alert" className="form-message error">{storageMessage}</p>}
       <div hidden={activeTool !== 'opening'}><OpeningInventoryPage username={username} prices={savedPrices} onComplete={completeOpeningInventory}/></div>
-      {activeTool === 'home' ? <HomePage username={username} documents={documents} prices={savedPrices} assets={assets} customers={customers} cheques={cheques} today={today} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount }} onOpen={openTool}/> : ['entries','reports'].includes(activeTool) ? <ToolHub kind={activeTool} onOpen={openTool}/> : ['dashboard','products','balance','gold-entry'].includes(activeTool) ? <SalesDashboard key={activeTool} view={{ dashboard:'sales', products:'products', balance:'balance', 'gold-entry':'gold-entry' }[activeTool]} onOpen={openTool} username={username} documents={documents} prices={savedPrices} goldPurchases={goldPurchases} onSaveGoldPurchases={persistGoldPurchases} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount, number: toNumber }}/> : activeTool === 'profit' ? <ProfitPage documents={documents} today={today} onOpen={openTool}/> : activeTool === 'rates' ? <RatesPage prices={savedPrices} onOpen={openTool}/> : activeTool === 'customer-reports' ? <CustomerReports customers={customers} documents={documents} today={today} onSelect={openCustomer}/> : activeTool === 'cheque-reports' ? <ChequeReportPage cheques={cheques} today={today} onEdit={openCheque}/> : activeTool === 'opening' ? null : activeTool === 'vault' ? <InventoryVault report={stock} assets={assets} prices={savedPrices} onPrices={() => openTool('pricing')} onSell={sellStock} onReceive={() => { openTool('register'); updateDocumentField({ target: { name: 'type', value: 'crafted-purchase' } }); }} onLinkSale={(saleId, sourceId) => persistDocuments(linkHistoricalSale(currentDocuments(), saleId, sourceId))} helpers={{ describe: describeDocumentItem }}/> : activeTool === 'cheques' ? <ChequeManager key={selectedChequeId} cheques={cheques} customers={customers} onSave={persistCheques} parseNumber={toNumber} today={today} initialChequeId={selectedChequeId}/> : ['crm','crm-occasions','customer-entry','settlement-entry'].includes(activeTool) ? <div className="workspace-tools crm-section-page"><CustomerCRM key={activeTool + selectedCrmId} customers={customers} documents={documents} onSave={saveCustomerProfile} parseNumber={toNumber} today={today} initialSelectedId={selectedCrmId} initialView={activeTool === 'crm-occasions' ? 'occasions' : 'customers'} initialAction={activeTool === 'customer-entry' ? 'new' : activeTool === 'settlement-entry' ? 'settlement' : ''}/></div> : <div className="workspace-tools">
+      {activeTool === 'home' ? <HomePage username={username} documents={documents} prices={savedPrices} assets={assets} customers={customers} cheques={cheques} today={today} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount }} onOpen={openTool}/> : ['entries','reports'].includes(activeTool) ? <ToolHub kind={activeTool} onOpen={openTool}/> : ['dashboard','products','balance','gold-entry'].includes(activeTool) ? <SalesDashboard key={activeTool} view={{ dashboard:'sales', products:'products', balance:'balance', 'gold-entry':'gold-entry' }[activeTool]} onOpen={openTool} username={username} documents={documents} prices={savedPrices} goldPurchases={goldPurchases} onSaveGoldPurchases={persistGoldPurchases} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount, number: toNumber }}/> : activeTool === 'profit' ? <ProfitPage documents={documents} today={today} onOpen={openTool}/> : activeTool === 'rates' ? <RatesPage prices={savedPrices} onOpen={openTool}/> : activeTool === 'customer-reports' ? <CustomerReports customers={customers} documents={documents} today={today} onSelect={openCustomer}/> : activeTool === 'cheque-reports' ? <ChequeReportPage cheques={cheques} today={today} onEdit={openCheque}/> : activeTool === 'opening' ? null : activeTool === 'vault' ? <InventoryVault report={stock} assets={assets} prices={savedPrices} onPrices={() => openTool('pricing')} onSell={sellStock} onSellSet={sellSet} onReceive={() => { openTool('register'); updateDocumentField({ target: { name: 'type', value: 'crafted-purchase' } }); }} onLinkSale={(saleId, sourceId) => persistDocuments(linkHistoricalSale(currentDocuments(), saleId, sourceId))}/> : activeTool === 'cheques' ? <ChequeManager key={selectedChequeId} cheques={cheques} customers={customers} onSave={persistCheques} parseNumber={toNumber} today={today} initialChequeId={selectedChequeId}/> : ['crm','crm-occasions','customer-entry','settlement-entry'].includes(activeTool) ? <div className="workspace-tools crm-section-page"><CustomerCRM key={activeTool + selectedCrmId} customers={customers} documents={documents} onSave={saveCustomerProfile} parseNumber={toNumber} today={today} initialSelectedId={selectedCrmId} initialView={activeTool === 'crm-occasions' ? 'occasions' : 'customers'} initialAction={activeTool === 'customer-entry' ? 'new' : activeTool === 'settlement-entry' ? 'settlement' : ''}/></div> : <div className="workspace-tools">
         <div className="account-main-panel">
-          <div className="panel-heading"><div><span>{({ register: 'ثبت خرید و فروش', search: 'جستجو در سندها', cheques: 'مدیریت چک‌ها', pricing: 'ثبت نرخ طلا، سکه و ارز', crm: 'پرونده مشتریان' })[activeTool]}</span></div></div>
+          <div className="panel-heading"><div><span>{({ register: 'ثبت خرید، فروش و هزینه', search: 'جستجو در سندها', cheques: 'مدیریت چک‌ها', pricing: 'ثبت نرخ طلا، سکه و ارز', crm: 'پرونده مشتریان' })[activeTool]}</span></div></div>
           <div className="ledger-panel">
             {activeTool === 'pricing' && <form className="price-form" onSubmit={submitPrices}>
               {priceMessage && <div className={`form-message ${priceMessage.type}`}>{priceMessage.text}</div>}
@@ -1102,11 +1198,29 @@ function AccountPage({ username, onLogout }) {
               <label className="document-type-select">نوع سند<select name="type" value={documentForm.type} onChange={updateDocumentField}>{documentTypes.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
 
               {formMessage && <div className={`form-message ${formMessage.type}`}>{formMessage.text}</div>}
+              <p className="document-required-note">ساعت و دقیقهٔ ثبت، هنگام ذخیره به‌صورت خودکار به وقت ایران ثبت می‌شود.</p>
 
+              {expenseMode ? <>
+                <p className="document-required-note">هزینه را به تومان، ریال، گرم طلا یا ارز ثبت کنید. معادل تومانی با نرخ همین سند از سود دوره کم می‌شود.</p>
+                <fieldset className="document-section"><legend>مشخصات هزینه</legend>
+                  <DocumentField className="wide" name="description" label="عنوان هزینه" error={documentErrors.description} required><input name="description" value={documentForm.description} onChange={updateDocumentField} placeholder="مثلاً اجاره مغازه یا هزینه حمل"/></DocumentField>
+                  <DocumentField name="expenseUnit" label="واحد هزینه" error={documentErrors.expenseUnit} required><select name="expenseUnit" value={documentForm.expenseUnit} onChange={updateDocumentField}>{expenseUnits.map(unit => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</select></DocumentField>
+                  {documentForm.expenseUnit === 'currency' && <DocumentField name="expenseCurrency" label="نوع ارز" error={documentErrors.expenseCurrency} required><select name="expenseCurrency" value={documentForm.expenseCurrency} onChange={updateDocumentField}>{currencyCatalog.map(currency => <option key={currency.code} value={currency.code}>{currency.name} ({currency.code})</option>)}</select></DocumentField>}
+                  <DocumentField name="expenseAmount" label={documentForm.expenseUnit === 'gold' ? 'وزن هزینه (گرم)' : `مقدار هزینه (${expenseUnitLabel(documentForm)})`} error={documentErrors.expenseAmount} required><input name="expenseAmount" inputMode="decimal" value={documentForm.expenseAmount} onChange={updateDocumentField} placeholder={documentForm.expenseUnit === 'gold' ? 'مثلاً ۰٫۵' : 'مقدار پرداخت‌شده'}/></DocumentField>
+                  {documentForm.expenseUnit === 'gold' && <DocumentField name="expenseGoldPurity" label="عیار طلای پرداختی" error={documentErrors.expenseGoldPurity} required><input name="expenseGoldPurity" inputMode="decimal" value={documentForm.expenseGoldPurity} onChange={updateDocumentField} placeholder="مثلاً ۷۵۰"/></DocumentField>}
+                  {['gold', 'currency'].includes(documentForm.expenseUnit) && <>
+                    <DocumentField name="expenseRate" label={documentForm.expenseUnit === 'gold' ? 'نرخ هر گرم طلای ۷۵۰ (تومان)' : 'نرخ هر واحد ارز (تومان)'} error={documentErrors.expenseRate} required><input name="expenseRate" inputMode="decimal" value={documentForm.expenseRate} onChange={updateDocumentField} placeholder="نرخ زمان پرداخت"/></DocumentField>
+                    <p className="document-required-note wide">نرخ پیشنهادی را بررسی کنید؛ مقدار و نرخ این هزینه پس از ثبت ثابت می‌مانند.</p>
+                  </>}
+                  <DocumentField name="date" label="تاریخ هزینه" error={documentErrors.date} required><PersianDateInput name="date" required value={documentForm.date} onChange={updateDocumentField}/></DocumentField>
+                  <DocumentField className="wide" name="expensePayee" label="پرداخت به (اختیاری)"><input name="expensePayee" value={documentForm.expensePayee} onChange={updateDocumentField} placeholder="نام دریافت‌کننده"/></DocumentField>
+                  <DocumentField className="wide" name="note" label="یادداشت"><input name="note" value={documentForm.note} onChange={updateDocumentField} placeholder="توضیح تکمیلی"/></DocumentField>
+                </fieldset>
+              </> : <>
               {saleMode ? <section className="stock-picker" aria-label="انتخاب جنس از صندوق">
                 <label>کد یا نام جنس در صندوق<input name="productCode" value={stockQuery} onChange={findStock} autoComplete="off" placeholder="مثلاً ZG-000001" aria-invalid={Boolean(documentErrors.productCode)} aria-describedby={documentErrors.productCode ? 'stock-code-error' : undefined}/></label>
                 {documentErrors.productCode && <p id="stock-code-error" className="field-error-text" role="alert">{documentErrors.productCode}</p>}
-                {selectedStock ? <p className="stock-picker-picked">کد <bdi dir="ltr">{selectedStock.productCode}</bdi> انتخاب شد · موجودی: {formatDecimal(selectedStock.remaining)} {selectedStock.category === 'currency' ? selectedStock.currencyType : 'عدد / قطعه'}. تعداد فروش و قیمت را بررسی کنید.</p> : <><p>جنس را با کد پیدا کنید یا از فهرست انتخاب کنید؛ مشخصات خودکار وارد می‌شوند.</p><div className="stock-picker-options">{stockMatches.map(item => <button key={item.id} type="button" onClick={() => chooseStock(item)}><bdi dir="ltr">{item.productCode}</bdi><span>{item.itemName || item.description || item.typeLabel}</span><small>{formatDecimal(item.remaining)} موجود</small></button>)}</div>{!stockMatches.length && <p>جنسی پیدا نشد؛ ابتدا خرید یا موجودی اولیه را ثبت کنید.</p>}</>}
+                {separateSetMode ? <p className="stock-picker-picked">قطعه‌های {documentForm.itemName} انتخاب شده‌اند. قطعه‌های موردنظر برای فروش را در پایین مشخص کنید.</p> : selectedStock ? <><p className="stock-picker-picked">کد <bdi dir="ltr">{selectedStock.productCode}</bdi> انتخاب شد · موجودی: {formatDecimal(selectedStock.remaining)} {selectedStock.category === 'currency' ? selectedStock.currencyType : 'عدد / قطعه'}. تعداد فروش و قیمت را بررسی کنید.</p>{selectedStock.setMode === 'separate' && selectedStock.setId && <button type="button" className="button button-ghost" data-choose-set onClick={() => chooseSet(stock.available.filter(item => item.setId === selectedStock.setId))}>انتخاب قطعه‌های دیگر همین {selectedStock.setKind}</button>}</> : <><p>جنس را با کد پیدا کنید یا از فهرست انتخاب کنید؛ مشخصات خودکار وارد می‌شوند.</p><div className="stock-picker-options">{stockMatches.map(item => <button key={item.id} type="button" onClick={() => chooseStock(item)}><bdi dir="ltr">{item.productCode}</bdi><span>{item.itemName || item.description || item.typeLabel}{item.setName && <small>از {item.setName}</small>}</span><small>{formatDecimal(item.remaining)} موجود</small></button>)}</div>{!stockMatches.length && <p>جنسی پیدا نشد؛ ابتدا خرید یا موجودی اولیه را ثبت کنید.</p>}</>}
               </section> : <p className="stock-picker">با ثبت خرید، کد جنس خودکار صادر می‌شود و جنس وارد «صندوق من» می‌شود.</p>}
 
               <p className="document-required-note">فیلدهای ستاره‌دار الزامی هستند. مبلغ‌ها به تومان و تاریخ‌ها شمسی‌اند.</p>
@@ -1114,9 +1228,11 @@ function AccountPage({ username, onLogout }) {
                 <DocumentField name="customerId" label="انتخاب مشتری" error={documentErrors.customerId}><select name="customerId" value={documentForm.customerId} onChange={updateDocumentField}><option value="">مشتری جدید / ورود نام</option>{customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` — ${customer.phone}` : ''}</option>)}</select></DocumentField>
                 <DocumentField name="customerName" label="نام مشتری" error={documentErrors.customerName} required><input name="customerName" value={documentForm.customerName} readOnly={Boolean(documentForm.customerId)} onChange={updateDocumentField} placeholder="نام مشتری جدید"/></DocumentField>
                 <DocumentField name="date" label="تاریخ سند" error={documentErrors.date} required><PersianDateInput name="date" required value={documentForm.date} onChange={updateDocumentField}/></DocumentField>
+                <DocumentField name="gold18Price" label="قیمت هر گرم طلای ۱۸ عیار هنگام ثبت (تومان)" error={documentErrors.gold18Price} required><input name="gold18Price" inputMode="decimal" value={documentForm.gold18Price ?? savedPrices.goldGramPrice ?? ''} onChange={updateDocumentField} placeholder="نرخ طلای ۱۸ عیار"/></DocumentField>
+                <p className="document-required-note wide">نرخ طلا را بررسی کنید؛ همراه با ساعت ثبت در همین سند ذخیره می‌شود و با تغییر نرخ‌های بازار ثابت می‌ماند. مقدار اولیه از آخرین نرخ دستی ثبت‌شده است.</p>
               </fieldset>
               <fieldset className="document-section"><legend>مشخصات جنس و آزمایشگاه</legend>
-                <DocumentField className="wide" name="itemName" label="نام جنس" error={documentErrors.itemName}><input readOnly={saleMode && Boolean(selectedStock?.itemName)} name="itemName" value={documentForm.itemName} onChange={updateDocumentField} placeholder="مثلاً النگو، زنجیر یا پلاک؛ برای گزارش فروش هر جنس"/></DocumentField>
+                <DocumentField className="wide" name="itemName" label={separateSetMode ? 'نام مجموعه' : 'نام جنس'} error={documentErrors.itemName}><input readOnly={saleMode && (separateSetMode || Boolean(selectedStock?.itemName))} name="itemName" value={documentForm.itemName} onChange={updateDocumentField} placeholder="مثلاً النگو، زنجیر یا پلاک؛ برای گزارش فروش هر جنس"/></DocumentField>
                 <DocumentField className="wide" name="description" label="شرح سند" error={documentErrors.description}><input name="description" value={documentForm.description} onChange={updateDocumentField} placeholder="مثلاً خرید النگو یا فروش آبشده"/></DocumentField>
 
                 {selectedDocumentType.category === 'currency' && <>
@@ -1125,12 +1241,15 @@ function AccountPage({ username, onLogout }) {
                   <DocumentField name="currencyAmount" label="مقدار ارز" error={documentErrors.currencyAmount} required><input name="currencyAmount" inputMode="decimal" value={documentForm.currencyAmount} onChange={updateDocumentField} placeholder="مثلاً ۱۰۰٫۵۰"/></DocumentField>
                 </>}
                 {selectedDocumentType.category === 'crafted' && <>
+                  <DocumentField name="craftedKind" label="نوع کار ساخته"><select name="craftedKind" value={documentForm.craftedKind || ''} disabled={saleMode && (separateSetMode || Boolean(selectedStock?.craftedKind))} onChange={updateDocumentField}><option value="">تشخیص از نام کالا</option>{craftedKinds.map(kind => <option key={kind}>{kind}</option>)}</select></DocumentField>
+                  {!saleMode && isJewelrySetKind(documentForm.craftedKind) && <div className="wide"><SetModePicker kind={documentForm.craftedKind} value={documentForm.setMode} onChange={value => updateDocumentField({ target: { name: 'setMode', value } })}/></div>}
+                  {!separateSetMode && <>
                   <DocumentField name="itemCount" label="تعداد" error={documentErrors.itemCount} required><input name="itemCount" inputMode="decimal" value={documentForm.itemCount} onChange={updateDocumentField} placeholder="مثلاً ۱۰"/></DocumentField>
                   <DocumentField name="weight" label="وزن هر عدد" error={documentErrors.weight} required><input readOnly={saleMode && Boolean(selectedStock?.weight)} name="weight" inputMode="decimal" value={documentForm.weight} onChange={updateDocumentField} placeholder="مثلاً ۱۲.۵"/></DocumentField>
                   <DocumentField name="gramPrice" label="قیمت هر گرم" error={documentErrors.gramPrice} required><input name="gramPrice" inputMode="numeric" value={documentForm.gramPrice} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
                   <DocumentField name="ayar" label="عیار" error={documentErrors.ayar} required><input readOnly={saleMode && Boolean(selectedStock?.ayar)} name="ayar" inputMode="numeric" value={documentForm.ayar} onChange={updateDocumentField} placeholder="مثلاً 750"/></DocumentField>
                   <DocumentField name="wagePercent" label="اجرت درصدی" error={documentErrors.wagePercent} required><input name="wagePercent" inputMode="decimal" value={documentForm.wagePercent} onChange={updateDocumentField} placeholder="مثلاً ۷"/></DocumentField>
-                  <DocumentField name="craftedKind" label="نوع کار ساخته برای گزارش مشتری"><select name="craftedKind" value={documentForm.craftedKind || ''} disabled={saleMode && Boolean(selectedStock?.craftedKind)} onChange={updateDocumentField}><option value="">تشخیص از نام کالا</option>{craftedKinds.map(kind => <option key={kind}>{kind}</option>)}</select></DocumentField>
+                  </>}
                 </>}
 
                 {selectedDocumentType.category === 'coin' && <>
@@ -1156,27 +1275,34 @@ function AccountPage({ username, onLogout }) {
                 </>}
 
               </fieldset>
-              <fieldset className="document-section"><legend>مبلغ و بدهی</legend>
+              {separateSetMode && <JewelrySetEditor parts={documentForm.setParts} onChange={setParts => { setDocumentForm(current => ({ ...current, setParts })); setDocumentErrors({}); setFormMessage(null); }} sale={saleMode} prices={savedPrices} errors={documentErrors}/>}
+              <fieldset className="document-section"><legend>{separateSetMode ? 'بدهی کل مجموعه و یادداشت' : 'مبلغ و بدهی'}</legend>
+                {!separateSetMode && <>
                 {selectedDocumentType.category !== 'currency' && <>
                   {selectedDocumentType.category !== 'crafted' && <DocumentField name="wagePercent" label="اجرت درصدی" error={documentErrors.wagePercent}><input name="wagePercent" inputMode="decimal" value={documentForm.wagePercent} onChange={updateDocumentField} placeholder="اختیاری"/></DocumentField>}
                   <DocumentField name="wageFixed" label="اجرت ثابت هر عدد / قطعه (تومان)" error={documentErrors.wageFixed}><input name="wageFixed" inputMode="decimal" value={documentForm.wageFixed} onChange={updateDocumentField} placeholder="اختیاری"/></DocumentField>
                 </>}
                 <DocumentField name="otherCosts" label="هزینه‌های دیگر هر واحد (تومان)" error={documentErrors.otherCosts}><input name="otherCosts" inputMode="decimal" value={documentForm.otherCosts} onChange={updateDocumentField} placeholder="اختیاری"/></DocumentField>
-                <DocumentField name="profitPercent" label="سود درصدی" error={documentErrors.profitPercent}><input name="profitPercent" inputMode="decimal" value={documentForm.profitPercent} onChange={updateDocumentField} placeholder="مثلاً ۵"/></DocumentField>
+                <DocumentField name="profitPercent" label={saleMode ? 'درصد سود فروشنده' : 'سود درصدی'} error={documentErrors.profitPercent}><input name="profitPercent" inputMode="decimal" value={documentForm.profitPercent} onChange={updateDocumentField} placeholder="مثلاً ۷"/></DocumentField>
                 {selectedDocumentType.value.endsWith('-sale') && <DocumentField name="discountRial" label="تخفیف ریالی" error={documentErrors.discountRial}><input name="discountRial" inputMode="numeric" value={documentForm.discountRial} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>}
+                </>}
 
                 <DocumentField name="gramDebt" label={selectedDocumentType.direction === 'فروش' ? 'بدهی گرمی مشتری به ما' : 'بدهی گرمی ما به مشتری'} error={documentErrors.gramDebt}><input name="gramDebt" inputMode="decimal" value={documentForm.gramDebt} onChange={updateDocumentField} placeholder="گرم"/></DocumentField>
                 <DocumentField name="rialDebt" label={selectedDocumentType.direction === 'فروش' ? 'بدهی ریالی مشتری به ما' : 'بدهی ریالی ما به مشتری'} error={documentErrors.rialDebt}><input name="rialDebt" inputMode="numeric" value={documentForm.rialDebt} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
                 <DocumentField className="wide" name="note" label="یادداشت" error={documentErrors.note}><input name="note" value={documentForm.note} onChange={updateDocumentField} placeholder="توضیح تکمیلی"/></DocumentField>
               </fieldset>
+              {saleMode && <p className="document-required-note">سود فروشنده از مجموع ارزش طلا، اجرت و هزینه‌های این سند محاسبه می‌شود. هزینه‌های عمومی فروشگاه را با نوع سند «هزینه فروشگاه» ثبت کنید.</p>}
+              </>}
 
               <div className="document-preview">
-                <span>پیش‌نمایش مبلغ سند</span>
-                <strong>{formatNumber(previewAmount)} <small>تومان</small></strong>
-                <small>{describeDocumentItem(documentPreview)}</small>
+                <span>{expenseMode ? 'معادل تومانی هزینه' : 'پیش‌نمایش مبلغ سند'}</span>
+                <strong>{Number.isFinite(previewAmount) ? formatNumber(previewAmount) : '—'} <small>تومان</small></strong>
+                <small>{separateSetMode ? `${formatNumber(previewRows.length)} قطعه انتخاب‌شده از ${documentForm.itemName || documentForm.craftedKind}` : describeDocumentItem(documentPreview)}</small>
+                {expenseMode && <small>{expenseSummary(documentForm)}{!Number.isFinite(previewAmount) && ' · مقدار و نرخ معتبر را وارد کنید.'}</small>}
+                {saleMode && <small>سود فروشنده: {formatNumber(previewRows.reduce((sum, row) => sum + documentBreakdown(row).profit, 0))} تومان · تخفیف: {formatNumber(previewRows.reduce((sum, row) => sum + toNumber(row.discountRial), 0))} تومان</small>}
               </div>
 
-              <button className="button button-primary full" type="submit"><ReceiptText size={17}/> ثبت سند</button>
+              <button className="button button-primary full" type="submit"><ReceiptText size={17}/> {expenseMode ? 'ثبت هزینه' : 'ثبت سند'}</button>
             </form>}
 
             {activeTool === 'search' && <div className="search-ledger">
@@ -1188,16 +1314,18 @@ function AccountPage({ username, onLogout }) {
                 {filteredDocuments.length ? filteredDocuments.map(document => <article className="document-card" key={document.id}>
                   <div>
                     <span>{document.typeLabel}</span>
-                    <strong>{document.customerName}</strong>
+                    <strong>{document.type === 'expense' ? document.expensePayee || 'هزینه فروشگاه' : document.customerName}</strong>
                     {document.productCode && <bdi className="document-product-code" dir="ltr">{document.productCode}</bdi>}
                     {document.itemName && <small>{document.itemName}</small>}
                     <small>{document.itemSummary}</small>
                   </div>
                   <div>
-                    <span>{formatPersianDate(document.date)}</span>
-                    <strong>قیمت جدید {formatNumber(document.currentAmount)} تومان</strong>
-                    <small>قیمت ثبت سند: {formatNumber(document.amount)} تومان</small>
-                    <small>بدهی: {formatDecimal(document.gramDebt)} گرم / {formatNumber(document.rialDebt)} تومان</small>
+                    <span>{formatRecordDate(document)}</span>
+                    {document.type === 'expense' ? <><strong>هزینه: {expenseSummary(document)}</strong>{document.expenseUnit && document.expenseUnit !== 'toman' && <small>معادل ثبت‌شده: {formatNumber(document.amount)} تومان</small>}{expenseRateSummary(document) && <small>{expenseRateSummary(document)}</small>}</> : <>
+                      <strong>مبلغ ثبت‌شده: {formatNumber(getDocumentAmount(document))} تومان</strong>
+                      {isTradeDocument(document) && <small data-trade-gold-price>{tradeGoldPriceSummary(document)}</small>}
+                      <small>بدهی: {formatDecimal(document.gramDebt)} گرم / {formatNumber(document.rialDebt)} تومان</small>
+                    </>}
                   </div>
                 </article>) : <div className="empty-state">سندی برای این جستجو پیدا نشد.</div>}
               </div>
@@ -1211,16 +1339,16 @@ function AccountPage({ username, onLogout }) {
         <div className="panel-heading">
           <div>
             <span>آخرین سندها</span>
-            <p>خلاصه سندهای ثبت‌شده و بدهی مرتبط با هر مشتری.</p>
+            <p>خلاصه خرید، فروش، هزینه‌ها و بدهی مرتبط با هر مشتری.</p>
           </div>
         </div>
         <div className="activity-table">
-          <div className="activity-row activity-head document-row"><span>شرح</span><span>مشتری</span><span>قیمت جدید</span><span>بدهی</span></div>
+          <div className="activity-row activity-head document-row"><span>شرح</span><span>طرف حساب</span><span>مبلغ (تومان)</span><span>بدهی</span></div>
           {latestDocuments.length ? latestDocuments.map(document => <div className="activity-row document-row" key={document.id}>
-            <span>{document.typeLabel} - {document.itemSummary}{document.productCode && <bdi className="document-product-code" dir="ltr">{document.productCode}</bdi>}</span>
-            <span>{document.customerName}</span>
-            <span>{formatNumber(document.currentAmount)}</span>
-            <b>{formatDecimal(document.gramDebt)} گرم / {formatNumber(document.rialDebt)}</b>
+            <span>{document.typeLabel} - {document.itemSummary}{document.productCode && <bdi className="document-product-code" dir="ltr">{document.productCode}</bdi>}{document.recordedAt && <small className="document-record-time">{formatRecordDate(document)}</small>}{document.type === 'expense' && <small className="document-record-time">{expenseSummary(document)}</small>}</span>
+            <span>{document.customerName || document.expensePayee || '—'}</span>
+            <span>{formatNumber(getDocumentAmount(document))}{isTradeDocument(document) && <small className="document-record-time" data-trade-gold-price>{tradeGoldPriceSummary(document)}</small>}</span>
+            <b>{document.type === 'expense' ? '—' : `${formatDecimal(document.gramDebt)} گرم / ${formatNumber(document.rialDebt)}`}</b>
           </div>) : <div className="empty-state inside-table">هنوز سندی ثبت نشده است.</div>}
         </div>
       </details>}
