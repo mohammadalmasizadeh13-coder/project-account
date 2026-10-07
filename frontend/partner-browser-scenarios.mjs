@@ -23,6 +23,7 @@ export async function checkPartnerDocuments({ cdp, evaluate, ready, until, go, f
   await click('[data-partner-save]');
   await ready('[data-partner-settlement-form]');
   const success = () => until(`document.querySelector('.partner-crm .form-message.success')`);
+  const standaloneRemittances = [];
   for (const [direction, balance] of [['debit', 10], ['credit', 0]]) {
     await fill('[data-partner-settlement-form] [name="direction"]', direction);
     await fill('[data-partner-settlement-form] [name="goldAmount"]', '۱۰');
@@ -30,9 +31,16 @@ export async function checkPartnerDocuments({ cdp, evaluate, ready, until, go, f
     await click('[data-partner-payment-save]'); await success();
     const saved = await workspace();
     assert.equal(saved.data.partners[0].goldBalance, balance);
-    assert.equal(saved.data.partners[0].entries.at(-1).paymentMethod, 'remittance');
+    const remittance = saved.data.partners[0].entries.at(-1);
+    assert.equal(remittance.paymentMethod, 'remittance');
+    assert.ok(Number.isSafeInteger(remittance.invoiceNumber) && remittance.invoiceNumber > 0);
+    assert.ok(remittance.transactionId);
+    assert.equal(remittance.documentIds.length, 0);
+    standaloneRemittances.push(remittance);
     assert.equal(saved.data.documents.length, 0);
   }
+  assert.equal(new Set(standaloneRemittances.map(entry => entry.invoiceNumber)).size, 2);
+  assert.equal(new Set(standaloneRemittances.map(entry => entry.transactionId)).size, 2);
   await fill('[data-partner-settlement-form] [name="goldAmount"]', '۷');
   await go('/account'); await ready('.workspace-page'); await open('partner-remittance');
   assert.equal(await evaluate(`document.querySelector('[name="goldAmount"]').value`), '7');
@@ -194,5 +202,54 @@ export async function checkPartnerDocuments({ cdp, evaluate, ready, until, go, f
   await click(`${remitCard} [data-invoice-view]`); await ready('[data-partner-document-dialog]');
   assert.equal(await evaluate(`document.querySelector('[data-partner-document-dialog]').textContent.includes('سند فقط حواله')`), true);
   await click('[data-partner-document-close]');
-  console.log('Partner browser checks passed: remittances, separate drafts, purchases, stock-linked sales, independent melted fee rates, mixed invoice draft/save/reload/edit, linked inventory, balances, remittance-only document and mobile.');
+
+  // The dedicated remittance form also creates a numbered, editable document.
+  const standalone = standaloneRemittances[0];
+  const standaloneCard = `[data-invoice-id="${standalone.transactionId}"]`;
+  await ready(standaloneCard);
+  await click(`${standaloneCard} [data-invoice-view]`);
+  await ready('[data-partner-document-dialog] [data-partner-remittance-details]');
+  assert.equal(await evaluate(`document.querySelector('[data-partner-remittance-details]').textContent.includes('حواله debit')`), true);
+  await ready('[data-partner-document-dialog] [data-invoice-print]');
+  await click('[data-partner-document-close]');
+  await click(`${standaloneCard} [data-invoice-edit]`);
+  await ready('[data-partner-document-dialog] [data-partner-settlement-form]');
+  const standaloneForm = '[data-partner-document-dialog] [data-partner-settlement-form]';
+  assert.equal(await evaluate(`document.querySelector('${standaloneForm} [name="direction"]').value`), 'debit');
+  assert.equal(await evaluate(`document.querySelector('${standaloneForm} [name="goldAmount"]').value`), '10');
+  for (const [name, value] of Object.entries({ direction: 'credit', goldAmount: '۴', tomanAmount: '۲۵۰۰۰۰', reference: 'حواله مستقل ویرایش‌شده', note: 'اصلاح مقدار و جهت حواله مستقل' })) {
+    await fill(`${standaloneForm} [name="${name}"]`, value);
+  }
+  await click('[data-partner-document-dialog] [data-partner-payment-save]');
+  await until(`!document.querySelector('[data-partner-document-dialog]')`);
+  const afterStandaloneEdit = (await workspace()).data;
+  const standaloneEdited = afterStandaloneEdit.partners[0].entries.find(saved => saved.id === standalone.id);
+  assert.equal(afterStandaloneEdit.partners[0].entries.length, remittanceOnly.partners[0].entries.length);
+  assert.equal(standaloneEdited.invoiceNumber, standalone.invoiceNumber);
+  assert.equal(standaloneEdited.transactionId, standalone.transactionId);
+  assert.equal(standaloneEdited.createdAt, standalone.createdAt);
+  assert.equal(standaloneEdited.paymentMethod, 'remittance');
+  assert.equal(standaloneEdited.goldDebit, 0);
+  assert.equal(standaloneEdited.goldCredit, 4);
+  assert.equal(standaloneEdited.tomanDebit, 0);
+  assert.equal(standaloneEdited.tomanCredit, 250000);
+  assert.equal(standaloneEdited.reference, 'حواله مستقل ویرایش‌شده');
+  assert.equal(standaloneEdited.note, 'اصلاح مقدار و جهت حواله مستقل');
+  assert.equal(afterStandaloneEdit.partners[0].goldBalance, round(remittanceOnly.partners[0].goldBalance - 14));
+  assert.equal(afterStandaloneEdit.partners[0].tomanBalance, remittanceOnly.partners[0].tomanBalance - 250000);
+  assert.deepEqual(afterStandaloneEdit.documents, remittanceOnly.documents);
+  await go('/account'); await ready('.workspace-page');
+  assert.deepEqual((await workspace()).data.partners[0].entries.find(saved => saved.id === standalone.id), standaloneEdited);
+  await click('[data-section="reports"]'); await click('[data-tool="search"]');
+  await fill('.search-controls input', 'حواله مستقل ویرایش‌شده');
+  await ready(standaloneCard);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-invoice-id]').length`), 1);
+  await click(`${standaloneCard} [data-invoice-view]`);
+  await ready('[data-partner-document-dialog] [data-partner-remittance-details]');
+  assert.equal(await evaluate(`document.querySelector('[data-partner-document-dialog]').textContent.includes('اصلاح مقدار و جهت حواله مستقل')`), true);
+  await resize(390, 844);
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth + 1'), true);
+  await screenshot('partner-standalone-remittance-document-mobile', '[data-partner-document-dialog]');
+  await click('[data-partner-document-close]'); await resize(1440);
+  console.log('Partner browser checks passed: numbered standalone remittance view/edit/reload/search, separate drafts, purchases, stock-linked sales, independent melted fee rates, mixed invoice draft/save/reload/edit, linked inventory, balances, remittance-only document and mobile.');
 }

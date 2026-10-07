@@ -60,6 +60,7 @@ test('partner financial writes require their own permission and purchase also re
   storage.hydrate({ revision: 0, data: emptyWorkspace() });
   storage.setWritableFields(['customers', 'documents']);
   await assert.rejects(storage.mutatePartner('settlement', 'supplier', {}, 'id'), /دسترسی/);
+  await assert.rejects(storage.mutatePartner('settlement-update', 'supplier', { entryId: 'entry' }, 'id'), /دسترسی/);
   storage.setWritableFields(['partners']);
   await assert.rejects(storage.mutatePartner('invoice', 'supplier', {}, 'id'), /اسناد/);
   await assert.rejects(storage.mutatePartner('invoice-update', 'supplier', { entryId: 'entry' }, 'id'), /اسناد/);
@@ -111,7 +112,35 @@ test('partner invoice editing requires an existing entry identifier before any r
   storage.hydrate({ revision: 0, data: emptyWorkspace() });
   for (const entryId of [undefined, '', '   ']) {
     await assert.rejects(storage.mutatePartner('invoice-update', 'supplier', { entryId }, 'id'), /شناسه/);
+    await assert.rejects(storage.mutatePartner('settlement-update', 'supplier', { entryId }, 'id'), /شناسه/);
   }
   assert.equal(called, false);
+  storage.clear();
+});
+
+test('standalone remittance edits need only partner permission and route both original units unchanged', async () => {
+  const calls = [];
+  const storage = createWorkspaceStorage(async (path, options) => {
+    calls.push({ path, ...options });
+    if (calls.length === 1) throw new Error('network failed');
+    return { revision: 2, data: { ...emptyWorkspace(), partners: [{ id: 'partner', entries: [{ id: 'remittance', goldDebit: 10, tomanDebit: 500 }] }] } };
+  });
+  storage.hydrate({ revision: 1, data: emptyWorkspace() });
+  storage.setWritableFields(['partners']);
+  const payload = { entryId: 'remittance/1', date: '2026-10-07', paymentMethod: 'remittance', direction: 'debit', goldAmount: 10, tomanAmount: 500 };
+  const before = structuredClone(payload);
+  await assert.rejects(storage.mutatePartner('settlement-update', 'partner/1', payload, 'same-remit-edit'), /network/);
+  assert.equal(storage.status().revision, 1);
+  await storage.mutatePartner('settlement-update', 'partner/1', payload, 'same-remit-edit');
+  assert.deepEqual(calls[1], calls[0]);
+  assert.equal(calls[0].path, '/api/owner/partners/partner%2F1/settlements/remittance%2F1');
+  assert.equal(calls[0].method, 'PATCH');
+  assert.equal(Object.hasOwn(calls[0].body, 'entryId'), false);
+  assert.equal(calls[0].body.goldAmount, 10);
+  assert.equal(calls[0].body.tomanAmount, 500);
+  assert.equal(calls[0].body.requestId, 'same-remit-edit');
+  assert.equal(storage.snapshot().partners[0].entries[0].tomanDebit, 500);
+  assert.equal(storage.status().revision, 2);
+  assert.deepEqual(payload, before);
   storage.clear();
 });

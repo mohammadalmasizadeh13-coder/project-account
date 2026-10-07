@@ -629,7 +629,7 @@ def register_partner_routes(application, workspace_response, encode_workspace):
         # Retrying one after an upgrade must still match its original receipt hash.
         if action == "invoice" and payload.calculationVersion == 1:
             body.pop("calculationVersion", None)
-        if action == "invoice-update":
+        if action in {"invoice-update", "settlement-update"}:
             body["entryId"] = entry_id
         try:
             body_hash = digest(json.dumps({"action": action, "partnerId": identifier, "payload": body}, sort_keys=True, ensure_ascii=False, allow_nan=False))
@@ -685,6 +685,14 @@ def register_partner_routes(application, workspace_response, encode_workspace):
                     created_id = make_mixed_partner_invoice(data, partner, payload, identity, connection,
                         existing_entry=existing_entry, previous_documents=previous_documents)
                 else:
+                    existing_entry = None
+                    if action == "settlement-update":
+                        existing_entry = next((row for row in partner["entries"] if row["id"] == entry_id), None)
+                        if existing_entry is None:
+                            raise HTTPException(404, "حوالهٔ همکار پیدا نشد.")
+                        if (existing_entry["type"] != "settlement" or existing_entry.get("paymentMethod") != "remittance"
+                                or existing_entry.get("linkedEntryId") or payload.paymentMethod != "remittance"):
+                            raise HTTPException(422, "فقط حوالهٔ مستقل همکار از این مسیر قابل ویرایش است.")
                     gold = rounded_gold(numeric(payload.goldAmount, "مقدار طلای گردش", maximum=Decimal("1e12")))
                     toman = numeric(payload.tomanAmount, "مبلغ تومانی گردش", maximum=Decimal("1e12"))
                     if not gold and not toman:
@@ -692,7 +700,21 @@ def register_partner_routes(application, workspace_response, encode_workspace):
                     entry = entry_base(payload, type="settlement", paymentMethod=payload.paymentMethod, counterpartyName=payload.counterpartyName,
                         reference=payload.reference, **{"goldCredit" if payload.direction == "credit" else "goldDebit": decimal_output(gold),
                             "tomanCredit" if payload.direction == "credit" else "tomanDebit": decimal_output(toman)})
-                    partner["entries"].append(entry)
+                    if payload.paymentMethod == "remittance":
+                        invoice_number = existing_entry.get("invoiceNumber") if existing_entry else None
+                        if invoice_number is None:
+                            numbered_rows = [*data["documents"], *(row for record in data["partners"] for row in record["entries"])]
+                            minimum_number = max((int(value) for row in numbered_rows if (value := number(row.get("invoiceNumber"))) > 0
+                                and value <= MAX_BALANCE and value == value.to_integral_value()), default=0)
+                            invoice_number = reserve_invoice_numbers(connection, minimum_number, 1, account_id)
+                        entry.update(invoiceNumber=invoice_number,
+                            transactionId=(existing_entry.get("transactionId") if existing_entry else None) or str(uuid4()))
+                    if existing_entry:
+                        entry.update(id=existing_entry["id"], createdAt=existing_entry["createdAt"])
+                        position = next(index for index, row in enumerate(partner["entries"]) if row["id"] == existing_entry["id"])
+                        partner["entries"][position] = entry
+                    else:
+                        partner["entries"].append(entry)
                     created_id = entry["id"]
                 partner["updatedAt"] = now
                 recalculate_partner(partner)
@@ -740,3 +762,7 @@ def register_partner_routes(application, workspace_response, encode_workspace):
     @application.post("/api/owner/partners/{identifier}/settlements", status_code=201)
     def post_settlement(identifier: str, payload: PartnerSettlement, response: Response, identity=Depends(require_mutation)):
         return mutate("settlement", identifier, payload, identity, response)
+
+    @application.patch("/api/owner/partners/{identifier}/settlements/{entry_id}")
+    def edit_settlement(identifier: str, entry_id: str, payload: PartnerSettlement, response: Response, identity=Depends(require_mutation)):
+        return mutate("settlement-update", identifier, payload, identity, response, entry_id=entry_id)

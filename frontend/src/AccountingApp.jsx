@@ -713,7 +713,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     setStorageMessage(rows === null ? 'سند حذف شد و حساب‌ها به‌روز شدند.' : 'تغییرات سند ذخیره شد و حساب‌ها به‌روز شدند.');
   };
   const canChangeDocument = invoice => has('documents.write') && canManageInvoice(invoice) && (invoice.rows[0].type === 'expense' || has('customers.write'));
-  const canChangePartnerDocument = invoice => invoice.partnerEntryId && has('documents.write') && has('partners.write');
+  const canChangePartnerDocument = invoice => invoice.partnerEntryId && has('partners.write') && (invoice.partnerRemittance || has('documents.write'));
   const documentActions = invoice => canChangePartnerDocument(invoice) ? <div className="document-actions"><button type="button" className="button button-ghost" data-invoice-edit onClick={() => openDocumentAction(invoice, 'edit')}>ویرایش سند</button></div> : canChangeDocument(invoice) && <div className="document-actions"><button type="button" className="button button-ghost" data-invoice-edit onClick={() => openDocumentAction(invoice, 'edit')}>ویرایش سند</button><button type="button" className="button button-ghost document-delete-link" data-invoice-delete onClick={() => openDocumentAction(invoice, 'delete')}>حذف سند</button></div>;
   const performPartnerAction = async (action, identifier, payload, requestId) => {
     const saved = await ownerStorage.mutatePartner(action, identifier, payload, requestId);
@@ -1549,7 +1549,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
             {activeTool === 'search' && <div className="search-ledger">
               <div className="search-controls">
-                <label>جستجو در سندها<input value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder="نام مشتری، آزمایشگاه، انگ آبشده یا نوع سکه"/></label>
+                <label>جستجو در سندها<input value={searchTerm} onChange={event => setSearchTerm(event.target.value)} placeholder="نام طرف حساب، شماره حواله، انگ آبشده یا نوع سکه"/></label>
                 <button className="button button-ghost" onClick={() => setSearchTerm('')}>پاک کردن</button>
               </div>
               <div className="document-list">
@@ -1563,9 +1563,9 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                     </div>
                     <div><span>{formatRecordDate(invoice)}</span>
                       {document.type === 'expense' ? <><strong>هزینه: {expenseSummary(document)}</strong>{document.expenseUnit && document.expenseUnit !== 'toman' && <small>معادل ثبت‌شده: {formatNumber(document.amount)} تومان</small>}{expenseRateSummary(document) && <small>{expenseRateSummary(document)}</small>}</> : <>
-                        <strong>مبلغ کل سند: {formatNumber(invoice.amount)} تومان</strong>
+                        {invoice.partnerRemittance ? <strong>حواله: {formatDebtGrams(invoice.goldDebit + invoice.goldCredit)} گرم ۷۵۰ / {formatNumber(invoice.tomanDebit + invoice.tomanCredit)} تومان</strong> : <strong>مبلغ کل سند: {formatNumber(invoice.amount)} تومان</strong>}
                         {isTradeDocument(document) && <small data-trade-gold-price>{tradeGoldPriceSummary(document)}</small>}
-                        {invoice.partnerEntryId ? <><small>بدهکار: {formatDebtGrams(invoice.goldDebit)} گرم · بستانکار: {formatDebtGrams(invoice.goldCredit)} گرم</small><small>مانده سند: {formatDebtGrams(invoice.gramDebt)} گرم ۷۵۰</small></> : <small>بدهی کل سند: {formatDebtGrams(invoice.gramDebt)} گرم / {formatNumber(invoice.rialDebt)} تومان</small>}
+                        {invoice.partnerEntryId ? <><small>بدهکار: {formatDebtGrams(invoice.goldDebit)} گرم · بستانکار: {formatDebtGrams(invoice.goldCredit)} گرم</small><small>مانده سند: {formatDebtGrams(invoice.gramDebt)} گرم ۷۵۰{invoice.partnerRemittance && ` / ${formatNumber(invoice.rialDebt)} تومان`}</small></> : <small>بدهی کل سند: {formatDebtGrams(invoice.gramDebt)} گرم / {formatNumber(invoice.rialDebt)} تومان</small>}
                         {invoice.settlementVersion === 1 && <small>پرداخت نقدی: {formatNumber(invoice.cashPaid)} تومان</small>}
                       </>}
                     </div>
@@ -1602,7 +1602,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       </details>}
       </div>}
     </div>
-    {editingPartnerEntry && <PartnerDocumentDialog key={editingPartnerEntry.id} partner={editingPartner} entry={editingPartnerEntry} username={username} documents={documents} prices={savedPrices} onAction={performPartnerAction} editing={partnerDocumentAction.editing} canEdit={has('partners.write') && has('documents.write')} onClose={() => setPartnerDocumentAction(null)} onSaved={() => { setPartnerDocumentAction(null); setStorageMessage('تغییرات سند همکار ذخیره شد و صندوق و مانده حساب به‌روز شدند.'); }}/>}
+    {editingPartnerEntry && <PartnerDocumentDialog key={editingPartnerEntry.id} partner={editingPartner} entry={editingPartnerEntry} username={username} documents={documents} prices={savedPrices} onAction={performPartnerAction} editing={partnerDocumentAction.editing} canEdit={has('partners.write') && (has('documents.write') || (editingPartnerEntry.type === 'settlement' && editingPartnerEntry.paymentMethod === 'remittance' && !editingPartnerEntry.linkedEntryId))} onClose={() => setPartnerDocumentAction(null)} onSaved={() => { setPartnerDocumentAction(null); setStorageMessage('تغییرات سند همکار ذخیره شد و مانده حساب به‌روز شد.'); }}/>}
     <InvoiceDetails invoice={selectedInvoice} onClose={() => setSelectedInvoice(null)} onEdit={selectedInvoice && canChangeDocument(selectedInvoice) ? () => openDocumentAction(selectedInvoice, 'edit') : undefined} onDelete={selectedInvoice && canChangeDocument(selectedInvoice) ? () => openDocumentAction(selectedInvoice, 'delete') : undefined}/>
     {documentAction && <DocumentEditor {...documentAction} customers={customers} onSave={mutateSavedDocument} onClose={() => setDocumentAction(null)}/>}
   </section>

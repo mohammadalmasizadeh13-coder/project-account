@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readAccountingDraft, writeAccountingDraft } from './accountingDrafts.js';
 import { newPartnerInvoice, newPartnerLine, newPartnerProfile, newPartnerSettlement, parsePartnerNumber,
-  partnerInvoiceDraftFromEntry, partnerInvoiceTotals, partnerLineTotals, savedPartnerLineTotals, partnerStatement, preparePartnerInvoice, preparePartnerProfile,
+  partnerInvoiceDraftFromEntry, partnerSettlementDraftFromEntry, partnerInvoiceTotals, partnerLineTotals, savedPartnerLineTotals, partnerStatement, preparePartnerInvoice, preparePartnerProfile,
   preparePartnerSettlement, upgradePartnerInvoiceDraft } from './partnerLedger.js';
 
 const line = { ...newPartnerLine({ goldGramPrice: 10000000 }), itemName: 'النگو', craftedKind: 'النگو', itemCount: '۳', weight: '۴٫۷۴۰', ayar: '۷۵۰', wagePercent: '۷' };
@@ -477,4 +477,22 @@ test('editing API-created coin rows preserves their recorded labor fields and mo
   assert.equal(totals.amount, 11865);
   assert.deepEqual(partnerInvoiceTotals(form), totals);
   assert.equal(savedPartnerLineTotals({ ...entry.lines[0], laborGold: 1 }, {}, entry).laborGold, 1);
+});
+
+test('standalone remittance edit drafts restore historical debit or credit without converting gold and money', () => {
+  for (const direction of ['debit', 'credit']) {
+    const entry = { type: 'settlement', paymentMethod: 'remittance', date: '2026-10-07',
+      [direction === 'debit' ? 'goldDebit' : 'goldCredit']: 10,
+      [direction === 'debit' ? 'tomanDebit' : 'tomanCredit']: 120000,
+      counterpartyName: 'همکار دوم', reference: 'حواله ۱۲', note: 'سند قدیمی' };
+    const before = structuredClone(entry);
+    const form = partnerSettlementDraftFromEntry(entry);
+    assert.equal(form.direction, direction);
+    assert.deepEqual(preparePartnerSettlement(form), { date: entry.date, direction, paymentMethod: 'remittance', goldAmount: 10, tomanAmount: 120000,
+      counterpartyName: entry.counterpartyName, reference: entry.reference, note: entry.note });
+    assert.deepEqual(entry, before);
+  }
+  assert.throws(() => partnerSettlementDraftFromEntry({ type: 'settlement', paymentMethod: 'remittance', linkedEntryId: 'invoice' }), /مستقل/);
+  assert.throws(() => partnerSettlementDraftFromEntry({ type: 'settlement', paymentMethod: 'cash' }), /مستقل/);
+  assert.throws(() => partnerSettlementDraftFromEntry({ type: 'settlement', paymentMethod: 'remittance', goldDebit: 10, tomanCredit: 100 }), /هم‌زمان/);
 });

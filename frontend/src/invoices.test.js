@@ -128,3 +128,63 @@ test('legacy partner documents remain unchanged by mixed document projection', (
   assert.equal(rows[0], old);
   assert.equal(groupInvoices(rows)[0].amount, 20);
 });
+
+test('historical standalone partner remittances become searchable documents without inventing a gold valuation', () => {
+  const entry = { id: 'legacy-remit', type: 'settlement', paymentMethod: 'remittance', date: '2026-10-06', createdAt: '2026-10-06T10:00:00Z',
+    goldDebit: 0, goldCredit: '۱۰', tomanDebit: 0, tomanCredit: '۲۵۰٬۰۰۰', counterpartyName: 'علی بیگلری', reference: 'حواله ۴۲', note: 'تسویه کار' };
+  const partners = [{ id: 'partner', name: 'همکار آزمون', entries: [entry] }];
+  const before = structuredClone(partners);
+  const rows = partnerDocumentRows([], partners);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].transactionId, 'partner-remittance-legacy-remit');
+  assert.equal(rows[0].partnerRemittance, true);
+  assert.equal(rows[0].partnerDisplayOnly, true);
+  assert.equal(rows[0].goldAmount, 10);
+  assert.equal(rows[0].tomanAmount, 250000);
+  assert.match(rows[0].itemSummary, /علی بیگلری.*حواله ۴۲.*۱۰ گرم طلای ۷۵۰.*۲۵۰٬۰۰۰ تومان/);
+  assert.equal(rows[0].note, 'تسویه کار');
+  assert.equal(Object.hasOwn(rows[0], 'gold18Price'), false);
+  const [invoice] = groupInvoices(rows);
+  assert.equal(invoice.id, 'partner-remittance-legacy-remit');
+  assert.equal(invoice.partnerId, 'partner');
+  assert.equal(invoice.partnerEntryId, entry.id);
+  assert.equal(invoice.partnerRemittance, true);
+  assert.equal(invoice.typeLabel, 'حواله همکار');
+  assert.equal(invoice.direction, 'بستانکار');
+  assert.equal(invoice.goldCredit, 10);
+  assert.equal(invoice.gramDebt, -10);
+  assert.equal(invoice.rialDebt, -250000);
+  assert.equal(invoice.amount, -250000);
+  assert.deepEqual(partners, before);
+});
+
+test('numbered standalone remittances preserve both units and appear beside mixed documents in time order', () => {
+  const partners = [{ id: 'partner', name: 'همکار', entries: [
+    { id: 'new-remit', type: 'settlement', paymentMethod: 'remittance', transactionId: 'recorded-remit-transaction', invoiceNumber: 101,
+      createdAt: '2026-10-07T11:00:00Z', date: '2026-10-07', goldDebit: 5, tomanDebit: 900 },
+    { id: 'gold-only', type: 'settlement', paymentMethod: 'remittance', date: '2026-10-06', createdAt: '2026-10-06T10:00:00Z', goldCredit: 2 },
+  ] }];
+  const physical = { id: 'customer', type: 'crafted-sale', amount: 20, createdAt: '2026-10-07T10:00:00Z' };
+  const grouped = groupInvoices(partnerDocumentRows([physical], partners));
+  assert.deepEqual(grouped.map(row => row.id), ['recorded-remit-transaction', 'customer', 'partner-remittance-gold-only']);
+  assert.equal(grouped[0].number, 101);
+  assert.equal(grouped[0].direction, 'بدهکار');
+  assert.equal(grouped[0].netGold, 5);
+  assert.equal(grouped[0].netToman, 900);
+  assert.equal(grouped[0].amount, 900);
+  assert.equal(grouped[2].netGold, -2);
+  assert.equal(grouped[2].amount, 0);
+  assert.equal(grouped[2].netToman, 0);
+});
+
+test('linked remittance invoice payments are never duplicated as standalone documents', () => {
+  const entries = [
+    { id: 'standalone', type: 'settlement', paymentMethod: 'remittance', goldCredit: 1 },
+    { id: 'linked-remit', type: 'settlement', paymentMethod: 'remittance', linkedEntryId: 'legacy-invoice', goldCredit: 2 },
+    { id: 'linked-v3', type: 'settlement', paymentMethod: 'remittance', linkedEntryId: 'mixed', goldCredit: 3 },
+    { id: 'cash', type: 'settlement', paymentMethod: 'cash', tomanCredit: 10 },
+    { id: 'gold', type: 'settlement', paymentMethod: 'gold', goldCredit: 4 },
+  ];
+  const rows = partnerDocumentRows([], [{ id: 'partner', entries }]);
+  assert.deepEqual(rows.map(row => row.partnerEntryId), ['standalone']);
+});

@@ -71,6 +71,16 @@ export const newPartnerSettlement = () => ({ date: iranDate(), direction: 'credi
   paymentMethod: 'gold', counterpartyName: '', reference: '', note: '',
 });
 
+export function partnerSettlementDraftFromEntry(entry) {
+  if (entry?.type !== 'settlement' || entry.paymentMethod !== 'remittance' || entry.linkedEntryId) throw new Error('این سند حواله مستقل همکار نیست.');
+  const debit = savedNumber(entry.goldDebit) > 0 || savedNumber(entry.tomanDebit) > 0;
+  const credit = savedNumber(entry.goldCredit) > 0 || savedNumber(entry.tomanCredit) > 0;
+  if (debit && credit) throw new Error('این حواله گردش هم‌زمان بدهکار و بستانکار دارد و از فرم یک‌جهته قابل ویرایش نیست.');
+  return { ...newPartnerSettlement(), date: entry.date, direction: debit ? 'debit' : 'credit', paymentMethod: 'remittance',
+    goldAmount: savedNumber(debit ? entry.goldDebit : entry.goldCredit), tomanAmount: savedNumber(debit ? entry.tomanDebit : entry.tomanCredit),
+    counterpartyName: entry.counterpartyName || '', reference: entry.reference || '', note: entry.note || '' };
+}
+
 export function upgradePartnerInvoiceDraft(invoice) {
   if (!invoice || invoice.calculationVersion === 3) return invoice;
   return { ...invoice, calculationVersion: 3, settlementUnit: 'gold',

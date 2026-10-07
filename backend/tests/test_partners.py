@@ -9,7 +9,7 @@ from sqlalchemy import event, select
 
 from app.database import empty_workspace
 from app.main import create_app
-from app.partners import PartnerInvoice, partner_requests
+from app.partners import PartnerInvoice, PartnerSettlement, partner_requests
 from app.security import digest
 from app.settings import Settings
 from test_account_isolation import register
@@ -854,3 +854,181 @@ def test_backup_restores_invoice_sequence_for_remittance_only_partner_document(c
     posted = post_invoice(other, other_headers, created["createdId"], calculationVersion=3)
     assert posted.status_code == 201, posted.text
     assert posted.json()["data"]["documents"][0]["invoiceNumber"] == 2
+
+
+def test_standalone_remittance_shares_invoice_number_sequence_and_preserves_old_request_hash(client):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    invoice_response = post_invoice(client, headers, identifier)
+    assert invoice_response.status_code == 201
+    before_docs = invoice_response.json()["data"]["documents"]
+    body = settlement_body(client, goldAmount=10)
+    path = f"/api/owner/partners/{identifier}/settlements"
+    response = client.post(path, json=body, headers=headers)
+    assert response.status_code == 201, response.text
+    saved = response.json()
+    entry = saved["data"]["partners"][0]["entries"][-1]
+    assert entry["invoiceNumber"] == 2 and entry["transactionId"] and entry["documentIds"] == []
+    assert entry["goldCredit"] == 10 and saved["data"]["documents"] == before_docs
+    old_body = PartnerSettlement.model_validate(body).model_dump(mode="json", exclude={"revision", "requestId"})
+    expected_hash = digest(json.dumps({"action": "settlement", "partnerId": identifier, "payload": old_body}, sort_keys=True, ensure_ascii=False, allow_nan=False))
+    with client.app.state.engine.connect() as connection:
+        receipt = connection.execute(select(partner_requests).where(partner_requests.c.created_id == entry["id"])).mappings().one()
+        assert receipt["body_hash"] == expected_hash
+    replay = client.post(path, json=body, headers=headers)
+    assert replay.status_code == 200 and replay.json() == saved
+    following = post_invoice(client, headers, identifier, calculationVersion=3)
+    assert following.status_code == 201 and following.json()["data"]["documents"][0]["invoiceNumber"] == 3
+
+
+def test_standalone_remittance_edit_replaces_original_and_recalculates_later_balances(client):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    original_body = settlement_body(client, goldAmount=10, tomanAmount=200000)
+    collection = f"/api/owner/partners/{identifier}/settlements"
+    original = client.post(collection, json=original_body, headers=headers)
+    assert original.status_code == 201, original.text
+    entry = original.json()["data"]["partners"][0]["entries"][0]
+    following = client.post(collection, json=settlement_body(client, direction="debit", goldAmount=3, date="2026-10-07"), headers=headers)
+    assert following.status_code == 201
+    body = settlement_body(client, direction="debit", goldAmount=4, tomanAmount=50000, date="2026-10-01", reference="اصلاح حواله", counterpartyName="نماینده جدید", note="شرح جدید")
+    path = f"{collection}/{entry['id']}"
+    response = client.patch(path, json=body, headers=headers)
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    record = saved["data"]["partners"][0]
+    assert len(record["entries"]) == 2 and record["goldBalance"] == 7 and record["tomanBalance"] == 50000
+    edited, later = record["entries"]
+    for field in ("id", "createdAt", "invoiceNumber", "transactionId"):
+        assert edited[field] == entry[field]
+    assert edited["goldDebit"] == edited["goldBalance"] == 4 and edited["goldCredit"] == edited["tomanCredit"] == 0
+    assert edited["tomanDebit"] == 50000 and later["goldBalance"] == 7
+    assert edited["reference"] == "اصلاح حواله" and edited["counterpartyName"] == "نماینده جدید" and edited["note"] == "شرح جدید"
+    assert saved["data"]["documents"] == []
+    replay = client.patch(path, json=body, headers=headers)
+    assert replay.status_code == 200 and replay.json() == saved
+    assert client.post(collection, json=original_body, headers=headers).json()["data"] == saved["data"]
+    assert client.patch(path, json={**body, "goldAmount": 5}, headers=headers).status_code == 409
+    assert client.patch(path, json={**body, "requestId": str(uuid4())}, headers=headers).status_code == 409
+    next_invoice = post_invoice(client, headers, identifier, calculationVersion=3)
+    assert next_invoice.status_code == 201 and next_invoice.json()["data"]["documents"][0]["invoiceNumber"] == 3
+
+
+def test_legacy_unnumbered_remittance_is_editable_and_allocates_number_once(client):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    response = client.post(f"/api/owner/partners/{identifier}/settlements", json=settlement_body(client, goldAmount=10), headers=headers)
+    assert response.status_code == 201
+    legacy = deepcopy(response.json()["data"])
+    entry = legacy["partners"][0]["entries"][0]
+    entry.pop("invoiceNumber")
+    entry.pop("transactionId")
+    other = TestClient(client.app)
+    _, other_headers = register(other, "old-remittance-editor")
+    imported = other.post("/api/owner/workspace/import", json={"data": legacy, "sourceUsername": "old remittance"}, headers=other_headers)
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["data"]["partners"][0]["entries"][0]["invoiceNumber"] is None
+    invoice_response = post_invoice(other, other_headers, identifier, calculationVersion=3)
+    assert invoice_response.status_code == 201
+    body = settlement_body(other, goldAmount=8)
+    path = f"/api/owner/partners/{identifier}/settlements/{entry['id']}"
+    edited = other.patch(path, json=body, headers=other_headers)
+    assert edited.status_code == 200, edited.text
+    saved = edited.json()["data"]["partners"][0]["entries"][0]
+    assert saved["invoiceNumber"] == 2 and saved["transactionId"] and saved["createdAt"] == entry["createdAt"]
+    again = other.patch(path, json=settlement_body(other, goldAmount=7), headers=other_headers)
+    assert again.status_code == 200
+    latest = again.json()["data"]["partners"][0]["entries"][0]
+    assert latest["invoiceNumber"] == 2 and latest["transactionId"] == saved["transactionId"]
+    assert len(again.json()["data"]["partners"][0]["entries"]) == 2
+
+
+@pytest.mark.parametrize("changes", [{"goldAmount": 0, "tomanAmount": 0}, {"goldAmount": -1}, {"goldAmount": "0.00000001"}, {"paymentMethod": "gold"}])
+def test_invalid_standalone_remittance_edit_is_atomic_and_correctable(client, changes):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    response = client.post(f"/api/owner/partners/{identifier}/settlements", json=settlement_body(client, goldAmount=10), headers=headers)
+    entry = response.json()["data"]["partners"][0]["entries"][0]
+    path = f"/api/owner/partners/{identifier}/settlements/{entry['id']}"
+    before = client.get("/api/owner/workspace").json()
+    body = settlement_body(client, **changes)
+    rejected = client.patch(path, json=body, headers=headers)
+    assert rejected.status_code == 422, rejected.text
+    assert client.get("/api/owner/workspace").json() == before
+    fixed = client.patch(path, json={**body, "goldAmount": 8, "tomanAmount": 0, "paymentMethod": "remittance"}, headers=headers)
+    assert fixed.status_code == 200 and fixed.json()["data"]["partners"][0]["goldBalance"] == -8
+
+
+@pytest.mark.parametrize("kind", ["invoice", "linked-payment", "cash"])
+def test_remittance_edit_rejects_nonstandalone_entries(client, kind):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    if kind == "cash":
+        response = client.post(f"/api/owner/partners/{identifier}/settlements", json=settlement_body(client, paymentMethod="cash"), headers=headers)
+    else:
+        response = post_invoice(client, headers, identifier, calculationVersion=2, paidGold=1, referenceName="نماینده")
+    assert response.status_code == 201, response.text
+    entry = response.json()["data"]["partners"][0]["entries"][0 if kind == "invoice" else -1]
+    before = client.get("/api/owner/workspace").json()
+    rejected = client.patch(f"/api/owner/partners/{identifier}/settlements/{entry['id']}", json=settlement_body(client), headers=headers)
+    assert rejected.status_code == 422 and client.get("/api/owner/workspace").json() == before
+
+
+def test_remittance_edit_requires_partner_permission_and_scopes_account_and_entry(client):
+    owner_headers = login(client)
+    created, _ = create_partner(client, owner_headers)
+    identifier = created["createdId"]
+    response = client.post(f"/api/owner/partners/{identifier}/settlements", json=settlement_body(client, goldAmount=10), headers=owner_headers)
+    entry = response.json()["data"]["partners"][0]["entries"][0]
+    path = f"/api/owner/partners/{identifier}/settlements/{entry['id']}"
+    reader = create_staff(client, owner_headers, username="remittance-editor-reader", permissions=["partners.read"])
+    browser = staff_browser(client)
+    headers = login_as(browser, reader["username"])
+    assert browser.patch(path, json=settlement_body(browser), headers=headers).status_code == 403
+    writer = create_staff(client, owner_headers, username="remittance-only-writer", permissions=["partners.write"])
+    writer_browser = staff_browser(client)
+    writer_headers = login_as(writer_browser, writer["username"])
+    payload = settlement_body(writer_browser, goldAmount=8)
+    assert writer_browser.patch(path, json=payload, headers={"Origin": ORIGIN}).status_code == 403
+    edited = writer_browser.patch(path, json=payload, headers=writer_headers)
+    assert edited.status_code == 200 and set(edited.json()["data"]) == {"partners"}
+    assert edited.json()["data"]["partners"][0]["goldBalance"] == -8
+    assert writer_browser.patch(path, json=payload, headers={**writer_headers, "Origin": "https://evil.example"}).status_code == 403
+    other = TestClient(client.app)
+    _, other_headers = register(other, "foreign-remittance-editor")
+    assert other.patch(path, json=settlement_body(other), headers=other_headers).status_code == 404
+    second, _ = create_partner(client, owner_headers, name="همکار دیگر")
+    wrong_partner_path = f"/api/owner/partners/{second['createdId']}/settlements/{entry['id']}"
+    assert client.patch(wrong_partner_path, json=settlement_body(client), headers=owner_headers).status_code == 404
+
+
+def test_standalone_remittance_create_and_edit_replay_survive_restart(tmp_path):
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'standalone-remittance.db'}", upload_dir=tmp_path / "uploads",
+        owner_username="owner", owner_password_hash=PASSWORD_HASH, cookie_secure=False, origins=(ORIGIN,))
+    with TestClient(create_app(settings)) as first:
+        headers = login(first)
+        created, _ = create_partner(first, headers)
+        collection = f"/api/owner/partners/{created['createdId']}/settlements"
+        create_body = settlement_body(first, goldAmount=10)
+        response = first.post(collection, json=create_body, headers=headers)
+        assert response.status_code == 201, response.text
+        entry = response.json()["data"]["partners"][0]["entries"][0]
+        path = f"{collection}/{entry['id']}"
+        edit_body = settlement_body(first, goldAmount=8)
+        edited = first.patch(path, json=edit_body, headers=headers)
+        assert edited.status_code == 200, edited.text
+        state = first.get("/api/owner/workspace").json()
+    with TestClient(create_app(settings)) as restarted:
+        headers = login(restarted)
+        assert restarted.get("/api/owner/workspace").json() == state
+        created_replay = restarted.post(collection, json=create_body, headers=headers)
+        edited_replay = restarted.patch(path, json=edit_body, headers=headers)
+        assert created_replay.status_code == edited_replay.status_code == 200
+        assert created_replay.json()["data"] == edited_replay.json()["data"] == state["data"]
+        invoice_response = post_invoice(restarted, headers, created["createdId"], calculationVersion=3)
+        assert invoice_response.status_code == 201 and invoice_response.json()["data"]["documents"][0]["invoiceNumber"] == 2

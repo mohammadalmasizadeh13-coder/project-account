@@ -10,13 +10,13 @@ import { readAccountingDraft, writeAccountingDraft } from './accountingDrafts.js
 import { inventoryReport, stockSaleForm } from './inventory.js';
 import { formatPartnerAmount as fmt, newPartnerInvoice, newPartnerLine, newPartnerProfile, newPartnerSettlement,
   partnerInvoiceTotals, partnerLineTotals, savedPartnerLineTotals, partnerStatement, partnerStockTypes, partnerLineTypes, partnerTradeTypes,
-  preparePartnerInvoice, preparePartnerProfile, preparePartnerSettlement, upgradePartnerInvoiceDraft, partnerInvoiceDraftFromEntry } from './partnerLedger.js';
+  preparePartnerInvoice, preparePartnerProfile, preparePartnerSettlement, upgradePartnerInvoiceDraft, partnerInvoiceDraftFromEntry, partnerSettlementDraftFromEntry, parsePartnerNumber } from './partnerLedger.js';
 import './partner-crm.css';
 
 const DRAFT_KIND = 'partner-workspace';
 const normalized = value => normalizeDigits(value).replace(/ي/g, 'ی').replace(/ك/g, 'ک').toLowerCase().trim();
 const balanceText = (value, unit) => `${fmt(Math.abs(value))} ${unit} · ${value > 0 ? 'بدهی ما به همکار' : value < 0 ? 'طلب ما از همکار' : 'تسویه'}`;
-const actionNames = { create: 'ثبت همکار', update: 'ویرایش همکار', invoice: 'ثبت فاکتور همکار', 'invoice-update': 'ویرایش سند همکار', settlement: 'ثبت سند حساب همکار' };
+const actionNames = { create: 'ثبت همکار', update: 'ویرایش همکار', invoice: 'ثبت فاکتور همکار', 'invoice-update': 'ویرایش سند همکار', settlement: 'ثبت سند حساب همکار', 'settlement-update': 'ویرایش حواله همکار' };
 const dayText = date => date ? formatPersianDate(date.slice(0, 10)) : '—';
 const initialDraft = (username, initialAction, draftKind = DRAFT_KIND) => {
   const recovered = readAccountingDraft(username, draftKind)?.form;
@@ -142,6 +142,7 @@ function PartnerStatement({ partner, username, documents }) {
 }
 
 export function PartnerDocumentDialog({ partner, entry, username, documents, prices, onAction, editing = false, canEdit = false, onClose, onSaved }) {
+  const remittance = entry.type === 'settlement' && entry.paymentMethod === 'remittance' && !entry.linkedEntryId;
   const dialog = useRef(null);
   const [edit, setEdit] = useState(editing);
   const [locked, setLocked] = useState(false);
@@ -171,11 +172,17 @@ export function PartnerDocumentDialog({ partner, entry, username, documents, pri
   return createPortal(<dialog ref={dialog} className="partner-document-dialog" data-partner-document-dialog dir="rtl" aria-label={`سند همکار ${partner.name}`} onCancel={event => { event.preventDefault(); if (!locked) closeRef.current?.(); }}>
     <div className="partner-crm">
       <div className="partner-section-heading partner-screen-only"><h2>{edit ? 'ویرایش سند همکار' : 'سند همکار'} · {partner.name}</h2><button type="button" className="partner-icon-button" data-partner-document-close disabled={locked} onClick={onClose} aria-label="بستن سند"><X size={20}/></button></div>
-      {edit ? <PartnerCRM key={entry.id} embedded username={username} partners={[partner]} documents={documents} prices={prices} onAction={onAction} initialAction="invoice" canPurchase={canEdit} readOnly={!canEdit} editingEntry={entry} onSaved={onSaved} onClose={onClose} onLockChange={setLocked}/>
+      {edit ? <PartnerCRM key={entry.id} embedded username={username} partners={[partner]} documents={documents} prices={prices} onAction={onAction} initialAction={remittance ? 'remittance' : 'invoice'} canPurchase={canEdit} readOnly={!canEdit} editingEntry={remittance ? null : entry} editingSettlement={remittance ? entry : null} onSaved={onSaved} onClose={onClose} onLockChange={setLocked}/>
         : <section className="partner-statement">
-          <header><h2>سند {fmt(entry.invoiceNumber)} · {partner.name}</h2><p>{dayText(entry.date)}{entry.externalInvoiceNumber && ` · شماره فاکتور همکار: ${entry.externalInvoiceNumber}`}</p></header>
+          <header><h2>{remittance ? 'سند حواله' : 'سند'} {entry.invoiceNumber ? fmt(entry.invoiceNumber) : entry.id.slice(-8)} · {partner.name}</h2><p>{dayText(entry.date)}{entry.externalInvoiceNumber && ` · شماره فاکتور همکار: ${entry.externalInvoiceNumber}`}</p></header>
           <div className="partner-section-heading partner-screen-only"><button type="button" className="button button-ghost" data-invoice-print onClick={print}><Printer size={17}/> چاپ سند</button>{canEdit && <button type="button" className="button button-primary" data-invoice-edit onClick={() => setEdit(true)}><Pencil size={16}/> ویرایش سند</button>}</div>
-          <StatementInvoiceLines entry={entry} docById={docById}/>
+          {remittance ? <div className="partner-statement-opening" data-partner-remittance-details>
+            <strong>{entry.goldDebit > 0 || entry.tomanDebit > 0 ? 'حواله بدهکار · بدهی ما به همکار' : 'حواله بستانکار · طلب ما از همکار'}</strong>
+            <span>مقدار حواله طلا: {fmt(entry.goldDebit + entry.goldCredit)} گرم ۷۵۰</span>
+            <span>مبلغ حواله: {fmt(entry.tomanDebit + entry.tomanCredit, 2)} تومان</span>
+            {entry.counterpartyName && <span>مرجع حواله: {entry.counterpartyName}</span>}
+            {entry.reference && <span>شماره حواله: {entry.reference}</span>}
+          </div> : <StatementInvoiceLines entry={entry} docById={docById}/>}
           {entry.note && <p>{entry.note}</p>}
           {(paidGold > 0 || paidToman > 0) && <section className="partner-statement-opening" data-partner-document-payment aria-label={receivedPayment ? 'دریافت هم‌زمان سند' : 'پرداخت هم‌زمان سند'}>
             <strong>{receivedPayment ? 'دریافت هم‌زمان از همکار · بدهکار' : 'پرداخت هم‌زمان به همکار · بستانکار'}</strong>
@@ -184,14 +191,14 @@ export function PartnerDocumentDialog({ partner, entry, username, documents, pri
             {entry.counterpartyName && <span>{receivedPayment ? 'پرداخت‌کننده' : 'دریافت‌کننده'}: {entry.counterpartyName}</span>}
             {entry.reference && <span>شماره پیگیری: {entry.reference}</span>}
           </section>}
-          <div className="partner-statement-final"><span>جمع بدهکار: {fmt(debit)} گرم ۷۵۰</span><span>جمع بستانکار: {fmt(credit)} گرم ۷۵۰</span><strong>مانده این سند: {balanceText(debit - credit, 'گرم ۷۵۰')}</strong></div>
+          <div className="partner-statement-final"><span>جمع بدهکار: {fmt(debit)} گرم ۷۵۰</span><span>جمع بستانکار: {fmt(credit)} گرم ۷۵۰</span><strong>مانده این سند: {balanceText(debit - credit, 'گرم ۷۵۰')}</strong>{remittance && <strong>مانده تومان این سند: {balanceText(entry.tomanDebit - entry.tomanCredit, 'تومان')}</strong>}</div>
         </section>}
     </div>
   </dialog>, document.body);
 }
 
-export default function PartnerCRM({ username, partners = [], documents = [], prices = {}, onAction, readOnly = false, canPurchase = false, initialAction = '', embedded = false, initialCategory = 'crafted', invoiceDirection = 'purchase', editingEntry = null, onSaved, onClose, onLockChange }) {
-  const draftKind = editingEntry ? `partner-invoice-edit:${editingEntry.id}` : DRAFT_KIND;
+export default function PartnerCRM({ username, partners = [], documents = [], prices = {}, onAction, readOnly = false, canPurchase = false, initialAction = '', embedded = false, initialCategory = 'crafted', invoiceDirection = 'purchase', editingEntry = null, editingSettlement = null, onSaved, onClose, onLockChange }) {
+  const draftKind = editingSettlement ? `partner-settlement-edit:${editingSettlement.id}` : editingEntry ? `partner-invoice-edit:${editingEntry.id}` : DRAFT_KIND;
   const [draft, setDraft] = useState(() => initialDraft(username, initialAction, draftKind));
   const draftRef = useRef(draft); draftRef.current = draft;
   const [query, setQuery] = useState('');
@@ -211,11 +218,12 @@ export default function PartnerCRM({ username, partners = [], documents = [], pr
   const invoiceKey = editingEntry ? `edit:${editingEntry.id}` : selling ? `${selectedId}:${initialCategory}:sale` : embedded ? `${selectedId}:${initialCategory}` : selectedId;
   const linkedPayment = editingEntry && selected?.entries?.find(entry => entry.linkedEntryId === editingEntry.id);
   const invoice = { ...(draft.invoices[invoiceKey] || (editingEntry ? partnerInvoiceDraftFromEntry(editingEntry, documents, linkedPayment) : newPartnerInvoice(prices, embedded ? initialCategory : 'crafted', invoiceDirection))), ...(!editingEntry && selling ? { direction: 'sale' } : {}) };
-  const settlementKey = remittance ? `${selectedId}:remittance` : selectedId;
-  const settlement = { ...(draft.settlements[settlementKey] || newPartnerSettlement()), ...(remittance ? { paymentMethod: 'remittance' } : {}) };
+  const settlementKey = editingSettlement ? `edit:${editingSettlement.id}` : remittance ? `${selectedId}:remittance` : selectedId;
+  const settlement = { ...(draft.settlements[settlementKey] || (editingSettlement ? partnerSettlementDraftFromEntry(editingSettlement) : newPartnerSettlement())), ...(remittance ? { paymentMethod: 'remittance' } : {}) };
   const stock = inventoryReport(editingEntry ? documents.filter(document => !(editingEntry.documentIds || []).includes(document.id)) : documents).available;
   const totals = partnerInvoiceTotals(invoice);
-  const statement = partnerStatement(editingEntry ? { ...selected, entries: selected?.entries?.filter(entry => entry.id !== editingEntry.id && entry.linkedEntryId !== editingEntry.id) } : selected);
+  const replacedEntry = editingEntry || editingSettlement;
+  const statement = partnerStatement(replacedEntry ? { ...selected, entries: selected?.entries?.filter(entry => entry.id !== replacedEntry.id && entry.linkedEntryId !== replacedEntry.id) } : selected);
   const visible = partners.filter(partner => normalized(`${partner.name} ${partner.phone} ${partnerTradeTypes[partner.tradeType]}`).includes(normalized(query)));
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
@@ -240,11 +248,12 @@ export default function PartnerCRM({ username, partners = [], documents = [], pr
       if (pending.action === 'create' || pending.action === 'update') { next.profileId = null; next.profile = newPartnerProfile(); }
       if (pending.action === 'invoice') next.invoices = { ...next.invoices, [pending.invoiceKey || pending.partnerId]: newPartnerInvoice(prices, embedded ? initialCategory : 'crafted', pending.payload.direction || 'purchase') };
       if (pending.action === 'invoice-update') next.invoices = {};
+      if (pending.action === 'settlement-update') next.settlements = {};
       if (pending.action === 'settlement') next.settlements = { ...next.settlements, [pending.settlementKey || pending.partnerId]: newPartnerSettlement() };
       // An acknowledged server commit remains successful even if local cleanup fails.
       try { writeAccountingDraft(username, draftKind, next); } catch { /* The retained request safely replays. */ }
       if (mounted.current) { setDraft(next); setNotice({ type: 'success', text: `${actionNames[pending.action]} انجام شد و مانده حساب به‌روز شد.` }); }
-      if (pending.action === 'invoice-update') onSaved?.(saved);
+      if (['invoice-update', 'settlement-update'].includes(pending.action)) onSaved?.(saved);
     } catch (error) {
       if (mounted.current) {
         if ([400, 403, 404, 413, 422].includes(error.status)) setDraft(previous => ({ ...previous, pending: null }));
@@ -290,10 +299,13 @@ export default function PartnerCRM({ username, partners = [], documents = [], pr
         <div className="partner-invoice-totals" aria-live="polite"><span>وزن واقعی کالاها: <b data-partner-physical-weight>{fmt(totals.actualWeight)} گرم</b></span><span>وزن معادل کالاها: <b>{fmt(totals.weight750)} گرم ۷۵۰</b></span><span>اجرت درصدی: <b>{fmt(totals.laborGold)} گرم</b></span><span>اجرت ریالی به طلا: <b>{fmt(totals.fixedLaborGold)} گرم</b></span><span>هزینه‌ها به طلا: <b>{fmt(totals.otherCostsGold)} گرم</b></span><span>سود همکار: <b>{fmt(totals.profitGold)} گرم</b></span><strong data-partner-preview-gold-debit>جمع بدهکار: {fmt(totals.goldDebit)} گرم ۷۵۰</strong><strong data-partner-preview-gold-credit>جمع بستانکار: {fmt(totals.goldCredit)} گرم ۷۵۰</strong>{totals.cashGoldCredit > 0 && <span>معادل پرداخت پولی: <b>{fmt(totals.cashGoldCredit)} گرم</b></span>}<strong data-partner-preview-balance>مانده طلای همکار پس از ثبت: {balanceText(statement.goldBalance + (invoice.calculationVersion === 3 ? 1 : selling ? -1 : 1) * (totals.goldDebit - totals.goldCredit), 'گرم ۷۵۰')}</strong></div>
         <button type="submit" className="button button-primary" data-partner-invoice-save>{busy ? 'در حال ثبت…' : editingEntry ? 'ذخیره تغییرات سند' : 'ثبت سند همکار و به‌روزرسانی صندوق'}</button>
         {editingEntry && <button type="button" className="button button-ghost" data-partner-edit-cancel onClick={onClose}>بستن ویرایش</button>}
-      </fieldset></form> : (view === 'settlement' || remittance) && canEdit ? <form data-partner-settlement-form className="partner-payment-form" onSubmit={event => submit('settlement', selectedId, () => preparePartnerSettlement(settlement), event)}><fieldset disabled={locked}>
+      </fieldset></form> : (view === 'settlement' || remittance) && canEdit ? <form data-partner-settlement-form className="partner-payment-form" onSubmit={event => submit(editingSettlement ? 'settlement-update' : 'settlement', selectedId, () => ({ ...preparePartnerSettlement(settlement), ...(editingSettlement ? { entryId: editingSettlement.id } : {}) }), event)}><fieldset disabled={locked}>
         <h3>{remittance ? 'حواله همکار' : 'دریافت و پرداخت'}</h3><p className="partner-help">{remittance ? 'حواله بدهکار یعنی باید بعداً به همکار بدهید؛ حواله بستانکار یعنی باید بعداً از همکار بگیرید. مثلاً ۱۰ گرم بدهکار یعنی همکار ۱۰ گرم پیش شما دارد.' : 'پرداخت ما بستانکار حساب همکار است و بدهی ما را کم می‌کند.'} مقدار طلا را به گرم ۷۵۰ وارد کنید.</p>
         <div className="partner-form-grid"><label>نوع سند<select name="direction" value={settlement.direction} onChange={event => updateSettlement('direction', event.target.value)}><option value="credit">{remittance ? 'بستانکار · باید از همکار بگیرم' : 'پرداخت ما به همکار · بستانکار'}</option><option value="debit">{remittance ? 'بدهکار · باید به همکار بدهم' : 'دریافت از همکار · بدهکار'}</option></select></label>{!remittance && <label>روش پرداخت<select name="paymentMethod" value={settlement.paymentMethod} onChange={event => updateSettlement('paymentMethod', event.target.value)}><option value="gold">طلا</option><option value="cash">وجه نقد / انتقال وجه</option></select></label>}<label>تاریخ سند<PersianDateInput name="date" value={settlement.date} required onChange={event => updateSettlement('date', event.target.value)}/></label><NumberField label="مقدار طلای ۷۵۰ (گرم)" name="goldAmount" value={settlement.goldAmount} onChange={updateSettlement}/><NumberField label="مبلغ (تومان)" name="tomanAmount" value={settlement.tomanAmount} onChange={updateSettlement}/><TextField label={remittance ? 'نام مرجع حواله (اختیاری)' : 'نام دریافت‌کننده'} name="counterpartyName" value={settlement.counterpartyName} onChange={updateSettlement}/><TextField label={remittance ? 'شماره حواله' : 'شماره پیگیری پرداخت'} name="reference" value={settlement.reference} onChange={updateSettlement}/></div>
-        <label className="partner-wide-field">شرح سند<textarea name="note" value={settlement.note} maxLength={5000} rows={2} onChange={event => updateSettlement('note', event.target.value)}/></label><button type="submit" className="button button-primary" data-partner-payment-save>{busy ? 'در حال ثبت…' : remittance ? 'ثبت حواله' : 'ثبت سند دریافت / پرداخت'}</button>
+        <label className="partner-wide-field">شرح سند<textarea name="note" value={settlement.note} maxLength={5000} rows={2} onChange={event => updateSettlement('note', event.target.value)}/></label>
+        {remittance && <div className="partner-invoice-totals" aria-live="polite"><strong>مانده طلا پس از ثبت: {balanceText(statement.goldBalance + (settlement.direction === 'debit' ? 1 : -1) * (parsePartnerNumber(settlement.goldAmount) || 0), 'گرم ۷۵۰')}</strong><strong>مانده تومان پس از ثبت: {balanceText(statement.tomanBalance + (settlement.direction === 'debit' ? 1 : -1) * (parsePartnerNumber(settlement.tomanAmount) || 0), 'تومان')}</strong></div>}
+        <button type="submit" className="button button-primary" data-partner-payment-save>{busy ? 'در حال ثبت…' : editingSettlement ? 'ذخیره تغییرات حواله' : remittance ? 'ثبت حواله' : 'ثبت سند دریافت / پرداخت'}</button>
+        {editingSettlement && <button type="button" className="button button-ghost" data-partner-edit-cancel onClick={onClose}>بستن ویرایش</button>}
       </fieldset></form> : <PartnerStatement key={selected.id} partner={selected} username={username} documents={documents}/>}
     </> : <div className="partner-empty partner-start"><Coins size={34}/><h2>دفتر همکاران شما آماده است</h2><p>همکار را ثبت کنید، فاکتور خرید را وارد کنید و پرداخت‌های او را در همان پرونده ثبت کنید.</p></div>}</main></div>
   </div>;

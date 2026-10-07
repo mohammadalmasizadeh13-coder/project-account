@@ -292,7 +292,7 @@ export function createWorkspaceStorage(request = api, delay = 150, recoveryStora
     async mutatePartner(action, identifier, payload, requestId) {
       if (!allowedFields.has('partners')) throw new Error('برای تغییر حساب همکاران دسترسی ندارید.');
       if (['invoice', 'invoice-update'].includes(action) && !allowedFields.has('documents')) throw new Error('برای ثبت فاکتور همکار، دسترسی ثبت اسناد نیز لازم است.');
-      if (action === 'invoice-update' && !String(payload?.entryId || '').trim()) throw new Error('شناسهٔ سند همکار برای ویرایش مشخص نیست.');
+      if (['invoice-update', 'settlement-update'].includes(action) && !String(payload?.entryId || '').trim()) throw new Error('شناسهٔ سند همکار برای ویرایش مشخص نیست.');
       if (!active || committing || mutatingInventory || importing) throw new Error('ابتدا ذخیرهٔ جاری را کامل کنید.');
       if (!requestId) throw new Error('شناسهٔ ثبت مشخص نیست؛ فرم را دوباره باز کنید.');
       const mutationGeneration = generation;
@@ -300,13 +300,14 @@ export function createWorkspaceStorage(request = api, delay = 150, recoveryStora
       if (generation !== mutationGeneration || !active) return null;
       if (committing || mutatingInventory || importing) throw new Error('ابتدا ذخیرهٔ جاری را کامل کنید.');
       const routes = { create: ['', 'POST'], update: [`/${encodeURIComponent(identifier)}`, 'PATCH'], invoice: [`/${encodeURIComponent(identifier)}/invoices`, 'POST'],
-        'invoice-update': [`/${encodeURIComponent(identifier)}/invoices/${encodeURIComponent(payload?.entryId)}`, 'PATCH'], settlement: [`/${encodeURIComponent(identifier)}/settlements`, 'POST'] };
+        'invoice-update': [`/${encodeURIComponent(identifier)}/invoices/${encodeURIComponent(payload?.entryId)}`, 'PATCH'], settlement: [`/${encodeURIComponent(identifier)}/settlements`, 'POST'],
+        'settlement-update': [`/${encodeURIComponent(identifier)}/settlements/${encodeURIComponent(payload?.entryId)}`, 'PATCH'] };
       if (!routes[action]) throw new Error('عملیات همکار معتبر نیست.');
       const [suffix, method] = routes[action];
       mutatingInventory = true; notify();
       try {
         const body = { ...structuredClone(payload), revision, requestId };
-        if (action === 'invoice-update') delete body.entryId;
+        if (['invoice-update', 'settlement-update'].includes(action)) delete body.entryId;
         const saved = await request(`/api/owner/partners${suffix}`, { method, body });
         if (generation !== mutationGeneration || !active) return null;
         if (!Number.isSafeInteger(saved?.revision) || !Array.isArray(saved?.data?.partners)) throw new Error('تأیید ثبت حساب همکار دریافت نشد؛ دوباره تلاش کنید.');
