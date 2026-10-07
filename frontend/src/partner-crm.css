@@ -1,3 +1,6 @@
+.partner-document-dialog{width:min(1200px,calc(100vw - 28px));max-width:calc(100vw - 28px);max-height:calc(100dvh - 32px);padding:0;border:1px solid #dfe6da;border-radius:14px;background:#fff;color:#355849;overflow:auto;box-sizing:border-box}
+.partner-document-dialog::backdrop{background:rgba(25,42,34,.48)}
+.partner-document-dialog .partner-crm-embedded>.partner-toolbar{display:none}
 .partner-crm{padding:26px 32px;color:#355849;min-width:0;font-family:Vazirmatn,Tahoma,sans-serif}
 .partner-toolbar,.partner-section-heading,.partner-profile-heading,.partner-line-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px}
 .partner-search{display:flex;align-items:center;gap:9px;flex:1;max-width:470px;padding:10px 13px;min-height:46px;border:1px solid #dfe8e1;border-radius:8px;background:#fff}

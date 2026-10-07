@@ -1,4 +1,5 @@
 from copy import deepcopy
+from decimal import Decimal, ROUND_HALF_UP
 import json
 from uuid import uuid4
 
@@ -560,7 +561,7 @@ def test_legacy_invoice_receipt_hash_and_missing_version_keep_original_math(clie
 
 
 @pytest.mark.parametrize("changes", [
-    {"calculationVersion": 3}, {"calculationVersion": "2"}, {"settlementUnit": "toman"},
+    {"calculationVersion": 4}, {"calculationVersion": "2"}, {"settlementUnit": "toman"},
     {"lines": [{"category": "crafted", "itemName": "نامعتبر", "weight": "4", "profitPercent": "100.01"}]},
     {"lines": [{"category": "crafted", "itemName": "نامعتبر", "weight": "4", "profitPercent": "-1"}]},
     {"paidToman": "0.000001"},
@@ -575,3 +576,281 @@ def test_invalid_gold_invoice_is_atomic(client, changes):
     assert client.get("/api/owner/workspace").json() == original
     retry = post_invoice(client, headers, created["createdId"], calculationVersion=2)
     assert retry.status_code == 201 and retry.json()["data"]["documents"][0]["invoiceNumber"] == 1
+
+
+def mixed_rows(source_id):
+    return [
+        {"category": "crafted", "direction": "purchase", "itemName": "کار ساخته", "weight": "10", "ayar": "750", "profitPercent": 0},
+        {"category": "coin", "direction": "sale", "inventorySourceId": source_id, "coinCount": 2, "coinPrice": 200000, "profitPercent": 0},
+        {"category": "remittance", "remittanceDirection": "credit", "goldAmount": 10, "counterpartyName": "نماینده علی", "reference": "حواله ۱۰", "note": "بابت سند"},
+        {"category": "melted", "direction": "purchase", "itemName": "آب‌شده", "meltedWeight": 20, "meltedAyar": 750,
+            "assayCode": "123", "laboratoryName": "آزمایشگاه", "meltedFee": 110000, "meltedGramPrice": 999999},
+    ]
+
+
+def coin_inventory(browser, headers, count=3):
+    response = browser.post("/api/owner/inventory", headers=headers, json={
+        "revision": browser.get("/api/owner/workspace").json()["revision"], "requestId": str(uuid4()),
+        "item": {"category": "coin", "itemName": "سکه صندوق", "coinType": "امامی", "coinCount": count, "coinPrice": 200000},
+    })
+    assert response.status_code == 201, response.text
+    return response.json()["data"]["documents"][0]
+
+
+def post_mixed(browser, headers, identifier, source):
+    body = supplier_payload(browser, calculationVersion=3, date=source["date"], lines=mixed_rows(source["id"]))
+    response = post_invoice(browser, headers, identifier, body)
+    assert response.status_code == 201, response.text
+    return response, body
+
+
+def test_mixed_partner_document_posts_four_operations_with_one_invoice_and_fee(client):
+    headers = login(client)
+    created, _ = create_partner(client, headers, name="علی بیگلری")
+    source = coin_inventory(client, headers)
+    response, body = post_mixed(client, headers, created["createdId"], source)
+    saved = response.json()
+    record = saved["data"]["partners"][0]
+    assert len(record["entries"]) == 1
+    entry = record["entries"][0]
+    expected_melted = Decimal(110000) / Decimal("4.3318") * 20
+    expected_debit = (Decimal(10) + expected_melted / 100000).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+    assert entry["type"] == "mixed" and entry["calculationVersion"] == 3
+    assert entry["goldDebit"] == float(expected_debit) and entry["goldCredit"] == 14
+    assert record["goldBalance"] == pytest.approx(float(expected_debit) - 14)
+    assert [row["goldCredit"] for row in entry["lines"]] == [0, 4, 10, 0]
+    assert entry["lines"][1]["goldDebit"] == 0 and entry["lines"][2]["reference"] == "حواله ۱۰"
+    assert "documentId" not in entry["lines"][2]
+    docs = [row for row in saved["data"]["documents"] if row["id"] in entry["documentIds"]]
+    assert len(docs) == 3 and len(entry["lines"]) == 4
+    assert {row["invoiceNumber"] for row in docs} == {entry["invoiceNumber"]}
+    assert {row["transactionId"] for row in docs} == {entry["transactionId"]}
+    assert [row["invoiceLine"] for row in docs] == [1, 2, 3]
+    assert {row["invoiceLineCount"] for row in docs} == {3}
+    assert docs[1]["inventorySourceId"] == source["id"]
+    melted = docs[2]
+    assert melted["meltedFee"] == 110000 and melted["amount"] == pytest.approx(float(expected_melted))
+    assert float(melted["meltedGramPrice"]) == pytest.approx(110000 / 4.3318)
+    assert entry["lines"][3]["meltedGramPrice"] == melted["meltedGramPrice"]
+    assert melted["scaleWeight"] == melted["totalWeight750"] == 20
+    replay = post_invoice(client, headers, created["createdId"], body)
+    assert replay.status_code == 200 and replay.json() == saved
+    repriced = save(client, headers, saved["data"]["documents"], prices={"goldGramPrice": "200000", "meltedFee": "220000"})
+    assert repriced.status_code == 200, repriced.text
+    assert repriced.json()["data"]["partners"] == saved["data"]["partners"]
+    other = TestClient(client.app)
+    _, other_headers = register(other, "mixed-partner-backup")
+    imported = other.post("/api/owner/workspace/import", json={"data": saved["data"], "sourceUsername": "mixed backup"}, headers=other_headers)
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["data"]["partners"] == saved["data"]["partners"]
+
+
+@pytest.mark.parametrize("direction", ["purchase", "sale"])
+def test_mixed_remittances_and_payments_allow_net_zero_in_one_entry(client, direction):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    response = post_invoice(client, headers, created["createdId"], calculationVersion=3, direction=direction,
+        paidGold=1, paidToman=100000, lines=[
+            {"category": "remittance", "remittanceDirection": "debit" if direction == "purchase" else "credit", "goldAmount": 12},
+            {"category": "remittance", "remittanceDirection": "credit" if direction == "purchase" else "debit", "goldAmount": 10},
+        ])
+    assert response.status_code == 201, response.text
+    record = response.json()["data"]["partners"][0]
+    assert len(record["entries"]) == 1 and record["goldBalance"] == 0
+    entry = record["entries"][0]
+    assert entry["goldDebit"] == entry["goldCredit"] == 12
+    assert entry["paidGold"] == entry["convertedPaidTomanGold"] == 1 and entry["paidToman"] == 100000
+    assert entry["invoiceNumber"] == 1 and entry["documentIds"] == []
+    assert response.json()["data"]["documents"] == []
+    next_invoice = post_invoice(client, headers, created["createdId"], calculationVersion=3)
+    assert next_invoice.status_code == 201 and next_invoice.json()["data"]["documents"][0]["invoiceNumber"] == 2
+
+
+@pytest.mark.parametrize("category", ["melted", "currency"])
+def test_v3_sale_uses_authoritative_melted_or_currency_lot_identity(client, category):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    purchase = ({"category": "melted", "itemName": "آب‌شده", "meltedWeight": 8, "meltedAyar": 600, "itemCount": 2,
+        "assayCode": "123", "laboratoryName": "آزمایشگاه", "meltedFee": 433180}
+        if category == "melted" else {"category": "currency", "itemName": "دلار", "currencyType": "USD", "currencyAmount": 10, "currencyRate": 75000})
+    bought = post_invoice(client, headers, created["createdId"], calculationVersion=3, lines=[purchase])
+    assert bought.status_code == 201, bought.text
+    stock = bought.json()["data"]["documents"][0]
+    line = {**purchase, "direction": "sale", "inventorySourceId": stock["id"]}
+    if category == "melted":
+        line.update(itemCount=1, meltedWeight=999, meltedAyar=999, assayCode="tampered", laboratoryName="tampered", meltedFee=216590)
+    else:
+        line.update(currencyAmount=3, currencyType="EUR", currencyRate=80000)
+    sold = post_invoice(client, headers, created["createdId"], calculationVersion=3, lines=[line])
+    assert sold.status_code == 201, sold.text
+    entry = sold.json()["data"]["partners"][0]["entries"][-1]
+    doc = sold.json()["data"]["documents"][0]
+    assert entry["type"] == "sale" and entry["goldDebit"] == entry["lines"][0]["goldDebit"] == 0
+    if category == "melted":
+        assert entry["goldCredit"] == 1.6 and doc["totalWeight750"] == 3.2
+        assert doc["meltedWeight"] == "4" and doc["meltedAyar"] == "600" and doc["assayCode"] == "123"
+    else:
+        assert entry["goldCredit"] == 2.4 and doc["currencyType"] == "USD"
+
+
+def test_v3_melted_fee_prices_purity_labor_and_profit_using_monetary_base(client):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    response = post_invoice(client, headers, created["createdId"], calculationVersion=3, lines=[{
+        "category": "melted", "itemName": "آب‌شده", "meltedWeight": 10, "meltedAyar": 600, "itemCount": 2,
+        "assayCode": "123", "laboratoryName": "آزمایشگاه", "meltedFee": 216590, "meltedGramPrice": 99999,
+        "wagePercent": 10, "wageFixed": 1000, "otherCosts": 2000, "profitPercent": 20,
+    }])
+    assert response.status_code == 201, response.text
+    doc = response.json()["data"]["documents"][0]
+    # 8 g at fee/4.3318 = 50,000: (400,000 + 40,000 + 2,000 + 4,000) * 1.2.
+    assert doc["amount"] == 535200 and doc["totalWeight750"] == 8
+    line = response.json()["data"]["partners"][0]["entries"][0]["lines"][0]
+    assert line["goldDebit"] == 5.352 and line["principalGold"] == 4 and line["laborGold"] == 0.4
+
+
+@pytest.mark.parametrize("invalid", ["repeat-sale", "missing-fee", "bad-remittance", "bad-direction"])
+def test_invalid_mixed_document_rolls_back_every_row_and_invoice_number(client, invalid):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    source = coin_inventory(client, headers)
+    rows = mixed_rows(source["id"])
+    if invalid == "repeat-sale":
+        rows.append(dict(rows[1]))
+    elif invalid == "missing-fee":
+        rows[-1].pop("meltedFee")
+    elif invalid == "bad-remittance":
+        rows[2]["goldAmount"] = 0
+    else:
+        rows[0]["direction"] = ["purchase"]
+    before = client.get("/api/owner/workspace").json()
+    rejected = post_invoice(client, headers, created["createdId"], calculationVersion=3, date=source["date"], lines=rows)
+    assert rejected.status_code == 422, rejected.text
+    assert client.get("/api/owner/workspace").json() == before
+    valid, _ = post_mixed(client, headers, created["createdId"], source)
+    assert valid.json()["data"]["partners"][0]["entries"][0]["invoiceNumber"] == 1
+
+
+def edit_payload(browser, body, entry):
+    lines = deepcopy(body["lines"])
+    for line, saved in zip(lines, entry["lines"]):
+        if saved.get("documentId"):
+            line["documentId"] = saved["documentId"]
+    return {**body, "revision": browser.get("/api/owner/workspace").json()["revision"], "requestId": str(uuid4()), "lines": lines}
+
+
+def test_edit_mixed_invoice_replaces_balances_preserves_ids_and_replays(client):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    source = coin_inventory(client, headers)
+    saved, body = post_mixed(client, headers, created["createdId"], source)
+    entry = saved.json()["data"]["partners"][0]["entries"][0]
+    payload = edit_payload(client, body, entry)
+    payload["lines"][0]["weight"] = 12
+    payload["lines"][2]["goldAmount"] = 8
+    payload["lines"] = list(reversed(payload["lines"]))
+    path = f"/api/owner/partners/{created['createdId']}/invoices/{entry['id']}"
+    response = client.patch(path, json=payload, headers=headers)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    record = result["data"]["partners"][0]
+    assert len(record["entries"]) == 1 and record["goldBalance"] == pytest.approx(saved.json()["data"]["partners"][0]["goldBalance"] + 4)
+    updated = record["entries"][0]
+    for field in ("id", "transactionId", "invoiceNumber", "createdAt"):
+        assert updated[field] == entry[field]
+    assert set(updated["documentIds"]) == set(entry["documentIds"])
+    assert len(result["data"]["documents"]) == 4
+    replay = client.patch(path, json=payload, headers=headers)
+    assert replay.status_code == 200 and replay.json() == result
+    assert client.patch(path, json={**payload, "note": "different"}, headers=headers).status_code == 409
+    assert client.patch(path, json={**payload, "requestId": str(uuid4())}, headers=headers).status_code == 409
+    later = post_invoice(client, headers, created["createdId"], calculationVersion=3)
+    assert later.status_code == 201 and later.json()["data"]["documents"][0]["invoiceNumber"] == 2
+
+
+@pytest.mark.parametrize("change", ["quantity", "remove", "category", "oversale", "foreign-id"])
+def test_mixed_edit_rejects_stock_history_damage_atomically(client, change):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    source = coin_inventory(client, headers)
+    saved, body = post_mixed(client, headers, created["createdId"], source)
+    entry = saved.json()["data"]["partners"][0]["entries"][0]
+    purchase = saved.json()["data"]["documents"][0]
+    sold = post_invoice(client, headers, created["createdId"], calculationVersion=3, date=source["date"], lines=[{
+        "category": "crafted", "direction": "sale", "inventorySourceId": purchase["id"], "itemCount": 1, "profitPercent": 0}])
+    assert sold.status_code == 201, sold.text
+    payload = edit_payload(client, body, entry)
+    if change == "quantity":
+        payload["lines"][0]["weight"] = 11
+    elif change == "remove":
+        payload["lines"].pop(0)
+    elif change == "category":
+        payload["lines"][0] = {**payload["lines"][1], "documentId": entry["lines"][0]["documentId"]}
+    elif change == "oversale":
+        payload["lines"][1]["coinCount"] = 4
+    else:
+        payload["lines"][0]["documentId"] = source["id"]
+    before = client.get("/api/owner/workspace").json()
+    response = client.patch(f"/api/owner/partners/{created['createdId']}/invoices/{entry['id']}", json=payload, headers=headers)
+    assert response.status_code == 422, response.text
+    assert client.get("/api/owner/workspace").json() == before
+
+
+def test_mixed_document_and_edited_receipt_survive_restart(tmp_path):
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'mixed-partners.db'}", upload_dir=tmp_path / "uploads",
+        owner_username="owner", owner_password_hash=PASSWORD_HASH, cookie_secure=False, origins=(ORIGIN,))
+    with TestClient(create_app(settings)) as first:
+        headers = login(first)
+        created, _ = create_partner(first, headers)
+        source = coin_inventory(first, headers)
+        saved, body = post_mixed(first, headers, created["createdId"], source)
+        entry = saved.json()["data"]["partners"][0]["entries"][0]
+        edited_body = edit_payload(first, body, entry)
+        edited_body["paidToman"] = 100000
+        path = f"/api/owner/partners/{created['createdId']}/invoices/{entry['id']}"
+        edited = first.patch(path, json=edited_body, headers=headers)
+        assert edited.status_code == 200, edited.text
+        state = first.get("/api/owner/workspace").json()
+    with TestClient(create_app(settings)) as restarted:
+        headers = login(restarted)
+        assert restarted.get("/api/owner/workspace").json() == state
+        assert post_invoice(restarted, headers, created["createdId"], body).json()["data"] == state["data"]
+        replay = restarted.patch(path, json=edited_body, headers=headers)
+        assert replay.status_code == 200 and replay.json()["data"] == state["data"]
+
+
+def test_v3_noop_edit_preserves_total_weight_for_multiple_pieces_already_sold(client):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    body = supplier_payload(client, calculationVersion=3)
+    saved = post_invoice(client, headers, created["createdId"], body)
+    assert saved.status_code == 201, saved.text
+    entry = saved.json()["data"]["partners"][0]["entries"][0]
+    stock = saved.json()["data"]["documents"][0]
+    sold = post_invoice(client, headers, created["createdId"], calculationVersion=3, lines=[{
+        "category": "crafted", "direction": "sale", "inventorySourceId": stock["id"], "itemCount": 1}])
+    assert sold.status_code == 201, sold.text
+    before = sold.json()["data"]
+    payload = edit_payload(client, body, entry)
+    response = client.patch(f"/api/owner/partners/{created['createdId']}/invoices/{entry['id']}", json=payload, headers=headers)
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]
+    assert result["partners"][0]["goldBalance"] == before["partners"][0]["goldBalance"]
+    unchanged = next(row for row in result["documents"] if row["id"] == stock["id"])
+    assert unchanged["weight"] == "1.580" and unchanged["scaleWeight"] == 4.74 and unchanged["itemCount"] == "3"
+    assert unchanged["amount"] == stock["amount"]
+
+
+def test_backup_restores_invoice_sequence_for_remittance_only_partner_document(client):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    response = post_invoice(client, headers, created["createdId"], calculationVersion=3, lines=[{
+        "category": "remittance", "remittanceDirection": "credit", "goldAmount": 10}])
+    assert response.status_code == 201, response.text
+    other = TestClient(client.app)
+    _, other_headers = register(other, "remittance-number-restore")
+    imported = other.post("/api/owner/workspace/import", json={"data": response.json()["data"], "sourceUsername": "remittance backup"}, headers=other_headers)
+    assert imported.status_code == 200, imported.text
+    posted = post_invoice(other, other_headers, created["createdId"], calculationVersion=3)
+    assert posted.status_code == 201, posted.text
+    assert posted.json()["data"]["documents"][0]["invoiceNumber"] == 2

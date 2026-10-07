@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupInvoices, invoiceItemName } from './invoices.js';
+import { groupInvoices, invoiceItemName, partnerDocumentRows } from './invoices.js';
 
 test('mixed gold, coin and crafted rows become one ordered invoice with one combined balance', () => {
   const common = { transactionId: 'mixed-sale', invoiceVersion: 1, invoiceLineCount: 3, invoiceNumber: 180, customerId: 'customer', customerName: 'مشتری آزمون', date: '2026-09-27', recordedAt: '2026-09-27T12:00:00Z', direction: 'فروش' };
@@ -57,4 +57,74 @@ test('invoice descriptions use saved names, linked inventory names and legacy ca
   assert.equal(invoiceItemName({ category: 'currency', currencyType: 'USD' }), 'دلار آمریکا');
   assert.deepEqual(groupInvoices([]), []);
   assert.equal(invoiceItemName({ type: 'misc-purchase', category: 'crafted', craftedKind: 'سایر' }), 'طلای متفرقه');
+});
+
+test('partner document view keeps purchases, sales and remittance together in original row order', () => {
+  const common = { transactionId: 'partner-mixed', invoiceNumber: 91, partnerId: 'partner', counterpartyType: 'partner', createdAt: '2026-10-07T10:00:00Z' };
+  const documents = [
+    { ...common, id: 'melted', invoiceLine: 3, category: 'melted', type: 'melted-purchase', amount: 3000 },
+    { ...common, id: 'coin', invoiceLine: 2, category: 'coin', type: 'coin-sale', amount: 200, inventorySourceId: 'coin-lot' },
+    { ...common, id: 'crafted', invoiceLine: 1, category: 'crafted', type: 'crafted-purchase', amount: 1000 },
+    { id: 'customer', type: 'crafted-sale', amount: 150, createdAt: '2026-10-06T10:00:00Z' },
+  ];
+  const entry = { id: 'mixed-entry', type: 'mixed', direction: 'purchase', calculationVersion: 3,
+    transactionId: common.transactionId, invoiceNumber: 91, date: '2026-10-07', createdAt: common.createdAt,
+    gold18Price: 100, goldDebit: 40, goldCredit: 13, paidGold: 1, paidToman: 0,
+    lines: [
+      { documentId: 'crafted', category: 'crafted', direction: 'purchase', amount: 1000 },
+      { documentId: 'coin', category: 'coin', direction: 'sale', amount: 200 },
+      { category: 'remittance', remittanceDirection: 'credit', goldAmount: 10, reference: 'حواله در همین سند' },
+      { documentId: 'melted', category: 'melted', direction: 'purchase', amount: 3000 },
+    ] };
+  const partners = [{ id: 'partner', name: 'همکار', entries: [entry] }];
+  const before = structuredClone({ documents, partners });
+  const projected = partnerDocumentRows(documents, partners);
+  const invoices = groupInvoices(projected);
+  assert.equal(invoices.length, 2);
+  assert.deepEqual(invoices[0].rows.map(row => row.category), ['crafted', 'coin', 'remittance', 'melted']);
+  assert.equal(invoices[0].rows[1].id, 'coin');
+  assert.equal(invoices[0].rows[1].inventorySourceId, 'coin-lot');
+  assert.equal(invoices[0].rows[2].partnerDisplayOnly, true);
+  assert.equal(invoices[0].rows[3].invoiceLine, 4);
+  assert.equal(invoices[0].partnerEntryId, entry.id);
+  assert.equal(invoices[0].partnerId, 'partner');
+  assert.equal(invoices[0].typeLabel, 'سند همکار');
+  assert.equal(invoices[0].direction, 'ترکیبی');
+  assert.equal(invoices[0].goldDebit, 40);
+  assert.equal(invoices[0].goldCredit, 13);
+  assert.equal(invoices[0].netGold, 27);
+  assert.equal(invoices[0].gramDebt, 27);
+  assert.equal(invoices[0].amount, 2700);
+  assert.equal(invoices[0].customerName, 'همکار');
+  assert.equal(invoices[1].amount, 150);
+  assert.equal(projected.at(-1), documents.at(-1));
+  assert.deepEqual({ documents, partners }, before);
+});
+
+test('remittance-only partner invoices remain visible with zero net and include linked settlement once', () => {
+  const entry = { id: 'only-remit', type: 'mixed', calculationVersion: 3, transactionId: 'remittance-transaction', invoiceNumber: 92,
+    date: '2026-10-07', createdAt: '2026-10-07T12:00:00Z', gold18Price: 100,
+    goldDebit: 10, goldCredit: 8, lines: [
+      { category: 'remittance', remittanceDirection: 'debit', goldAmount: 10 },
+      { category: 'remittance', remittanceDirection: 'credit', goldAmount: 8 },
+    ] };
+  const payment = { id: 'settlement', type: 'settlement', linkedEntryId: entry.id, goldCredit: 2 };
+  const partner = { id: 'partner', name: 'همکار حواله', entries: [entry, payment] };
+  const [invoice] = groupInvoices(partnerDocumentRows([], [partner]));
+  assert.equal(invoice.number, 92);
+  assert.equal(invoice.rows.length, 2);
+  assert.ok(invoice.rows.every(row => row.partnerDisplayOnly && row.category === 'remittance'));
+  assert.equal(invoice.goldDebit, 10);
+  assert.equal(invoice.goldCredit, 10);
+  assert.equal(invoice.netGold, 0);
+  assert.equal(invoice.amount, 0);
+  assert.equal(invoiceItemName(invoice.rows[0]), 'حواله طلای ۷۵۰');
+});
+
+test('legacy partner documents remain unchanged by mixed document projection', () => {
+  const old = { id: 'old', transactionId: 'legacy-partner', type: 'crafted-purchase', partnerId: 'partner', amount: 20 };
+  const partner = { id: 'partner', entries: [{ id: 'old-entry', transactionId: 'legacy-partner', calculationVersion: 2, lines: [{ documentId: 'old' }] }] };
+  const rows = partnerDocumentRows([old], [partner]);
+  assert.equal(rows[0], old);
+  assert.equal(groupInvoices(rows)[0].amount, 20);
 });

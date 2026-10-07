@@ -13,8 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import Column, Float, Integer, String, Table, select, update
 
 from .database import account_column, metadata, read_workspace, workspaces
-from .inventory import amount, create_stock, decimal_output, find_source, item_summary, numeric, quantity
-from .invoices import guard_invoice_stock, prepare_invoices
+from .inventory import amount, create_stock, decimal_output, find_source, guard_linked_inventory_changes, item_summary, numeric, quantity
+from .invoices import guard_invoice_stock, prepare_invoices, reserve_invoice_numbers, validate_group
 from .pricing import iso_now, number
 from .security import account_request_id, digest, get_user, has_permission, require_mutation
 
@@ -55,7 +55,8 @@ class PartnerProfile(StrictModel):
 
 class LedgerEntry(StrictModel):
     id: str = Field(min_length=1, max_length=64)
-    type: Literal["purchase", "sale", "settlement"]
+    type: Literal["purchase", "sale", "mixed", "settlement"]
+    direction: Literal["purchase", "sale"] | None = None
     date: str = Field(min_length=10, max_length=10)
     createdAt: str = Field(min_length=1, max_length=60)
     goldDebit: float = Field(default=0, ge=0, le=float(MAX_BALANCE))
@@ -76,7 +77,7 @@ class LedgerEntry(StrictModel):
     settlementUnit: Literal["gold", "toman"] | None = None
     gold18Price: float | None = Field(default=None, gt=0, le=1e12)
     linkedEntryId: str | None = Field(default=None, max_length=64)
-    calculationVersion: Literal[1, 2] = 1
+    calculationVersion: Literal[1, 2, 3] = 1
     conversionGoldPrice: float | None = Field(default=None, gt=0, le=1e12)
     paidGold: float = Field(default=0, ge=0, le=1e12)
     paidToman: float = Field(default=0, ge=0, le=1e12)
@@ -97,7 +98,9 @@ class LedgerEntry(StrictModel):
 
     @model_validator(mode="after")
     def one_direction(self):
-        if self.goldDebit and self.goldCredit or self.tomanDebit and self.tomanCredit:
+        if self.type == "mixed" and self.calculationVersion != 3:
+            raise ValueError("سند ترکیبی باید با نسخهٔ سوم محاسبات ثبت شود.")
+        if self.calculationVersion != 3 and (self.goldDebit and self.goldCredit or self.tomanDebit and self.tomanCredit):
             raise ValueError("ردیف دفتر نمی‌تواند همزمان بدهکار و بستانکار باشد.")
         if not any((self.goldDebit, self.goldCredit, self.tomanDebit, self.tomanCredit)):
             raise ValueError("مقدار ردیف دفتر باید بیشتر از صفر باشد.")
@@ -160,7 +163,7 @@ class PartnerInvoice(PartnerMutation):
     paidToman: Any = 0
     referenceName: str = Field(default="", max_length=200)
     refNumber: str = Field(default="", max_length=200)
-    calculationVersion: Literal[1, 2] = 1
+    calculationVersion: Literal[1, 2, 3] = 1
 
     @field_validator("date")
     @classmethod
@@ -170,7 +173,7 @@ class PartnerInvoice(PartnerMutation):
 
     @model_validator(mode="after")
     def gold_settlement_for_current_version(self):
-        if self.calculationVersion == 2 and self.settlementUnit != "gold":
+        if self.calculationVersion >= 2 and self.settlementUnit != "gold":
             raise ValueError("تسویهٔ خرید همکار با طلای ۷۵۰ ثبت می‌شود.")
         return self
 
@@ -261,6 +264,8 @@ def entry_base(payload, **values):
 
 
 def make_supplier_invoice(data, partner, payload, identity, connection):
+    if payload.calculationVersion == 3:
+        return make_mixed_partner_invoice(data, partner, payload, identity, connection)
     selling = payload.direction == "sale"
     gold_invoice = payload.calculationVersion == 2
     rate = numeric(payload.gold18Price, "نرخ طلای ۷۵۰", minimum=Decimal("0.00000001"))
@@ -407,13 +412,213 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
     return entry["id"]
 
 
+def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, existing_entry=None, previous_documents=None):
+    """Freeze each row's direction and prices in one atomic partner posting."""
+    rate = numeric(payload.gold18Price, "نرخ طلای ۷۵۰", minimum=Decimal("0.00000001"))
+    paid_gold = numeric(payload.paidGold, "پرداخت طلا")
+    paid_toman = numeric(payload.paidToman, "پرداخت تومان")
+    if paid_gold and not rounded_gold(paid_gold):
+        raise HTTPException(422, "مقدار پرداخت طلا کمتر از دقت مجاز دفتر است.")
+    paid_gold = rounded_gold(paid_gold)
+    transaction = existing_entry["transactionId"] if existing_entry else str(uuid4())
+    created_at = existing_entry["createdAt"] if existing_entry else iso_now()
+    old_documents = {row["id"]: row for row in previous_documents or [] if existing_entry and row["id"] in existing_entry["documentIds"]}
+    used_document_ids = set()
+    documents, details, directions = [], [], set()
+    totals = {"goldDebit": Decimal(0), "goldCredit": Decimal(0)}
+    draft = {**data, "documents": list(data["documents"])}
+    physical_fields = ("itemName", "craftedKind", "weight", "ayar", "coinType", "parsianWeight",
+        "meltedWeight", "meltedAyar", "assayCode", "laboratoryName", "currencyType")
+    with localcontext() as context:
+        context.prec = 80
+        for original in payload.lines:
+            line = dict(original)
+            category = line.get("category")
+            if category == "remittance":
+                allowed = {"category", "remittanceDirection", "goldAmount", "counterpartyName", "reference", "note"}
+                direction = line.get("remittanceDirection")
+                if set(line) - allowed or not isinstance(direction, str) or direction not in {"debit", "credit"}:
+                    raise HTTPException(422, "مشخصات یا جهت حوالهٔ ردیف معتبر نیست.")
+                remittance = rounded_gold(numeric(line.get("goldAmount"), "وزن حواله", minimum=Decimal("0.000001")))
+                for field, limit in (("counterpartyName", 200), ("reference", 200), ("note", 5000)):
+                    value = line.get(field, "")
+                    if not isinstance(value, str) or len(value) > limit:
+                        raise HTTPException(422, "متن حواله معتبر نیست.")
+                    line[field] = value.strip()
+                amounts = {"goldDebit": 0, "goldCredit": 0, "tomanDebit": 0, "tomanCredit": 0}
+                field = "goldCredit" if direction == "credit" else "goldDebit"
+                amounts[field] = decimal_output(remittance)
+                totals[field] += remittance
+                details.append({**line, "goldAmount": decimal_output(remittance), **amounts,
+                    "amount": decimal_output(remittance * rate), "calculationVersion": 3,
+                    "conversionGoldPrice": decimal_output(rate)})
+                directions.add("remittance")
+                continue
+            if not isinstance(category, str) or category not in {"crafted", "melted", "coin", "currency"}:
+                raise HTTPException(422, "نوع کالای فاکتور معتبر نیست.")
+            document_id = line.pop("documentId", None)
+            old_document = None
+            if document_id is not None:
+                if not isinstance(document_id, str) or document_id not in old_documents or document_id in used_document_ids:
+                    raise HTTPException(422, "شناسهٔ ردیف ویرایش‌شده معتبر نیست.")
+                old_document = old_documents[document_id]
+                if old_document["category"] != category:
+                    raise HTTPException(422, "برای تغییر نوع کالا، ردیف قبلی را حذف و ردیف تازه اضافه کنید.")
+                used_document_ids.add(document_id)
+            direction = line.pop("direction", payload.direction)
+            if not isinstance(direction, str) or direction not in {"purchase", "sale"}:
+                raise HTTPException(422, "جهت معاملهٔ ردیف معتبر نیست.")
+            directions.add(direction)
+            source_id = line.pop("inventorySourceId", None)
+            source = None
+            if direction == "sale":
+                source = find_source(data, str(source_id or ""))
+                if source["category"] != category:
+                    raise HTTPException(422, "نوع کالای فروش با موجودی انتخاب‌شده مطابقت ندارد.")
+                for field in physical_fields:
+                    if field in source:
+                        line[field] = source[field]
+                line["weightMode"] = "unit"
+            elif source_id:
+                raise HTTPException(422, "خرید همکار نباید به موجودی فروش متصل باشد.")
+            weight_mode = line.pop("weightMode", "total")
+            if not isinstance(weight_mode, str) or weight_mode not in {"total", "unit"}:
+                raise HTTPException(422, "روش ثبت وزن معتبر نیست.")
+            fee = line.pop("meltedFee", None)
+            if category == "crafted":
+                line.setdefault("craftedKind", "سایر")
+                line.setdefault("ayar", 750)
+                line["gramPrice"] = format(rate, "f")
+            elif category == "melted":
+                fee = numeric(fee, "فی آب‌شده", minimum=Decimal("0.00000001"))
+                line.setdefault("meltedAyar", 750)
+                line["meltedGramPrice"] = format(fee / Decimal("4.3318"), "f")
+            elif fee is not None:
+                raise HTTPException(422, "فی آب‌شده فقط برای ردیف آب‌شده معتبر است.")
+            profit_percent = numeric(line.get("profitPercent"), "سود همکار", maximum=Decimal(100), default=7 if category == "crafted" else 0)
+            line["profitPercent"] = format(profit_percent, "f")
+            scale_weight = Decimal(0)
+            if category in {"crafted", "melted"}:
+                field = "weight" if category == "crafted" else "meltedWeight"
+                physical = numeric(line.get(field), "وزن فاکتور", minimum=Decimal("0.000001"), maximum=Decimal("100000"))
+                count = quantity(line)
+                scale_weight = physical if weight_mode == "total" else physical * count
+                line[field] = format(physical / count if weight_mode == "total" else physical, "f")
+            created, _ = create_stock(draft, line, identity)
+            document = created["documents"][0]
+            count = quantity(document)
+            equivalent = Decimal(0)
+            if category in {"crafted", "melted"}:
+                purity = number(document["ayar" if category == "crafted" else "meltedAyar"])
+                equivalent = scale_weight * purity / 750
+                principal = equivalent if category == "crafted" else equivalent * fee / Decimal("4.3318") / rate
+                document.update(scaleWeight=decimal_output(scale_weight), weightMode=weight_mode,
+                    weight750=decimal_output(equivalent / count), totalWeight750=decimal_output(equivalent))
+            else:
+                price_field = "currencyRate" if category == "currency" else "parsianPrice" if document.get("coinType") == "پارسیان" else "coinPrice"
+                principal = count * number(document[price_field]) / rate
+            labor = Decimal(0) if category == "currency" else principal * number(document.get("wagePercent")) / 100
+            fixed_labor = Decimal(0) if category == "currency" else count * number(document.get("wageFixed")) / rate
+            other_costs = count * number(document.get("otherCosts")) / rate
+            profit = (principal + labor + fixed_labor + other_costs) * profit_percent / 100
+            line_gold = principal + labor + fixed_labor + other_costs + profit
+            if not rounded_gold(line_gold):
+                raise HTTPException(422, "مقدار ردیف کمتر از دقت مجاز دفتر است.")
+            snapshot = {"calculationVersion": 3, "conversionGoldPrice": decimal_output(rate),
+                "principalGold": decimal_output(principal), "laborGold": decimal_output(labor),
+                "fixedLaborGold": decimal_output(fixed_labor), "otherCostsGold": decimal_output(other_costs),
+                "profitGold": decimal_output(profit), "profitPercent": decimal_output(profit_percent)}
+            if category == "melted":
+                snapshot.update(meltedFee=decimal_output(fee), meltedGramPrice=document["meltedGramPrice"])
+            document.update(id=document_id or f"document-partner-{uuid4()}", source="partner-invoice", entryMethod="supplier-invoice",
+                type=f"{category}-{direction}", typeLabel="فروش به همکار" if direction == "sale" else "خرید از همکار",
+                direction="فروش" if direction == "sale" else "خرید", customerId=partner["id"], customerName=partner["name"],
+                counterpartyType="partner", partnerId=partner["id"], externalInvoiceNumber=payload.externalInvoiceNumber,
+                date=payload.date, createdAt=created_at, recordedAt=created_at, invoiceVersion=1,
+                invoiceLine=len(documents) + 1, transactionId=transaction, gold18Price=decimal_output(rate),
+                amount=decimal_output(line_gold * rate), **{key: value for key, value in snapshot.items() if key != "profitPercent"})
+            if source is not None:
+                document.update(inventorySourceId=source["id"], productCode=source["productCode"])
+            elif old_document is not None and old_document["type"].endswith("-purchase"):
+                document["productCode"] = old_document["productCode"]
+            amounts = {"goldDebit": 0, "goldCredit": 0, "tomanDebit": 0, "tomanCredit": 0}
+            field = "goldCredit" if direction == "sale" else "goldDebit"
+            amounts[field] = decimal_output(rounded_gold(line_gold))
+            totals[field] += line_gold
+            document["partnerGoldCredit" if direction == "sale" else "partnerGoldDebit"] = amounts[field]
+            document["itemSummary"] = item_summary(document)
+            documents.append(document)
+            # Persist authoritative physical fields and derived prices, never client snapshots.
+            details.append({**line, **{field: document[field] for field in physical_fields if field in document},
+                **({"inventorySourceId": source["id"]} if source else {}), "direction": direction,
+                "weightMode": weight_mode, "documentId": document["id"], "productCode": document["productCode"],
+                "scaleWeight": decimal_output(scale_weight), "weight750": decimal_output(equivalent),
+                **amounts, "amount": document["amount"], **snapshot})
+            draft["documents"] = [document, *draft["documents"]]
+        converted_cash = paid_toman / rate
+        payment = rounded_gold(paid_gold + converted_cash)
+        if (paid_gold or paid_toman) and not payment:
+            raise HTTPException(422, "مقدار پرداخت کمتر از دقت مجاز دفتر است.")
+        totals["goldDebit" if payload.direction == "sale" else "goldCredit"] += payment
+        totals = {field: decimal_output(rounded_gold(value)) for field, value in totals.items()}
+    if documents:
+        for document in documents:
+            document["invoiceLineCount"] = len(documents)
+        try:
+            guard_invoice_stock([*documents, *data["documents"]], documents)
+        except HTTPException as error:
+            raise HTTPException(422, error.detail) from error
+        if existing_entry:
+            invoice_number = existing_entry["invoiceNumber"]
+            for document in documents:
+                document["invoiceNumber"] = invoice_number
+            validate_group(documents)
+            incoming = [*documents, *data["documents"]]
+            try:
+                guard_linked_inventory_changes(previous_documents, incoming)
+                # Revalidate only downstream sales of edited lots; unrelated legacy
+                # sales may predate mandatory inventory source references.
+                downstream = [row for row in data["documents"] if str(row.get("inventorySourceId", "")) in old_documents]
+                guard_invoice_stock(incoming, [*documents, *downstream])
+            except HTTPException as error:
+                raise HTTPException(422, error.detail) from error
+        else:
+            incoming = prepare_invoices(data["documents"], [*documents, *data["documents"]], connection, account_id=identity["user"]["account_id"])
+            invoice_number = incoming[0]["invoiceNumber"]
+        data["documents"] = incoming
+    else:
+        if existing_entry:
+            try:
+                guard_linked_inventory_changes(previous_documents, data["documents"])
+            except HTTPException as error:
+                raise HTTPException(422, error.detail) from error
+            invoice_number = existing_entry["invoiceNumber"]
+        else:
+            previous_number = max((int(number(row.get("invoiceNumber"))) for row in data["documents"]), default=0)
+            invoice_number = reserve_invoice_numbers(connection, previous_number, 1, identity["user"]["account_id"])
+    entry = entry_base(payload, type=next(iter(directions)) if len(directions) == 1 and "remittance" not in directions else "mixed",
+        direction=payload.direction,
+        externalInvoiceNumber=payload.externalInvoiceNumber, invoiceNumber=invoice_number, transactionId=transaction,
+        documentIds=[row["id"] for row in documents], lines=details, settlementUnit="gold", gold18Price=decimal_output(rate),
+        calculationVersion=3, conversionGoldPrice=decimal_output(rate), paidGold=decimal_output(paid_gold),
+        paidToman=decimal_output(paid_toman), convertedPaidTomanGold=decimal_output(converted_cash),
+        counterpartyName=payload.referenceName, reference=payload.refNumber, **totals)
+    if existing_entry:
+        entry.update(id=existing_entry["id"], createdAt=created_at)
+        position = next(index for index, row in enumerate(partner["entries"]) if row["id"] == existing_entry["id"])
+        partner["entries"][position] = entry
+    else:
+        partner["entries"].append(entry)
+    return entry["id"]
+
+
 def register_partner_routes(application, workspace_response, encode_workspace):
     engine = application.state.engine
 
-    def mutate(action, identifier, payload, identity, response):
+    def mutate(action, identifier, payload, identity, response, entry_id=None):
         if not has_permission(identity, "partners.write"):
             raise HTTPException(403, "اجازهٔ ویرایش دفتر همکاران ندارید.")
-        if action == "invoice" and not has_permission(identity, "documents.write"):
+        if action in {"invoice", "invoice-update"} and not has_permission(identity, "documents.write"):
             raise HTTPException(403, "ثبت خرید همکار به اجازهٔ افزودن موجودی نیز نیاز دارد.")
         account_id, actor_id = identity["user"]["account_id"], identity["user"]["id"]
         request_id = account_request_id(account_id, str(payload.requestId))
@@ -424,6 +629,8 @@ def register_partner_routes(application, workspace_response, encode_workspace):
         # Retrying one after an upgrade must still match its original receipt hash.
         if action == "invoice" and payload.calculationVersion == 1:
             body.pop("calculationVersion", None)
+        if action == "invoice-update":
+            body["entryId"] = entry_id
         try:
             body_hash = digest(json.dumps({"action": action, "partnerId": identifier, "payload": body}, sort_keys=True, ensure_ascii=False, allow_nan=False))
         except ValueError:
@@ -466,6 +673,17 @@ def register_partner_routes(application, workspace_response, encode_workspace):
                     created_id = partner["id"]
                 elif action == "invoice":
                     created_id = make_supplier_invoice(data, partner, payload, identity, connection)
+                elif action == "invoice-update":
+                    existing_entry = next((row for row in partner["entries"] if row["id"] == entry_id), None)
+                    if existing_entry is None:
+                        raise HTTPException(404, "سند همکار پیدا نشد.")
+                    if existing_entry.get("calculationVersion") != 3 or payload.calculationVersion != 3 or existing_entry["type"] == "settlement":
+                        raise HTTPException(422, "ویرایش فقط برای سند جدید همکار فعال است.")
+                    previous_documents = list(data["documents"])
+                    old_ids = set(existing_entry["documentIds"])
+                    data["documents"] = [row for row in data["documents"] if row["id"] not in old_ids]
+                    created_id = make_mixed_partner_invoice(data, partner, payload, identity, connection,
+                        existing_entry=existing_entry, previous_documents=previous_documents)
                 else:
                     gold = rounded_gold(numeric(payload.goldAmount, "مقدار طلای گردش", maximum=Decimal("1e12")))
                     toman = numeric(payload.tomanAmount, "مبلغ تومانی گردش", maximum=Decimal("1e12"))
@@ -514,6 +732,10 @@ def register_partner_routes(application, workspace_response, encode_workspace):
     @application.post("/api/owner/partners/{identifier}/invoices", status_code=201)
     def post_invoice(identifier: str, payload: PartnerInvoice, response: Response, identity=Depends(require_mutation)):
         return mutate("invoice", identifier, payload, identity, response)
+
+    @application.patch("/api/owner/partners/{identifier}/invoices/{entry_id}")
+    def edit_invoice(identifier: str, entry_id: str, payload: PartnerInvoice, response: Response, identity=Depends(require_mutation)):
+        return mutate("invoice-update", identifier, payload, identity, response, entry_id=entry_id)
 
     @application.post("/api/owner/partners/{identifier}/settlements", status_code=201)
     def post_settlement(identifier: str, payload: PartnerSettlement, response: Response, identity=Depends(require_mutation)):

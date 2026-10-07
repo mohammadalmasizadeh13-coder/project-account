@@ -149,7 +149,10 @@ def validate_group(rows):
         direction = kind.rsplit("-", 1)[1]
         if row.get("direction") not in (None, "فروش" if direction == "sale" else "خرید"):
             invoice_error("نوع معاملهٔ ردیف با فاکتور مطابقت ندارد.")
-        headers.append((customer, name.strip(), recorded_date, created_at, row.get("recordedAt"), direction))
+        # A partner's mixed document explicitly carries both purchase and sale rows.
+        # Keep ordinary customer invoices subject to their single-direction contract.
+        group_direction = ("partner-v3", row["partnerId"]) if row.get("calculationVersion") == 3 and row.get("counterpartyType") == "partner" and row.get("partnerId") == customer else direction
+        headers.append((customer, name.strip(), recorded_date, created_at, row.get("recordedAt"), group_direction))
         validate_item(row)
         total += numeric(row.get("amount"), "مبلغ ردیف", maximum=Decimal(MAX_SAFE_INTEGER))
         for field in ("gramDebt", "rialDebt"):

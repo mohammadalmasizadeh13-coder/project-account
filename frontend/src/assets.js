@@ -27,6 +27,7 @@ export const currencyRate = (code, prices) => number(prices[currencyCatalog.find
 export const coinRate = (name, prices) => number(prices[coinCatalog.find(item => item.name === name)?.price]);
 export const marketPriceFields = [
   ['goldGramPrice', 'قیمت هر گرم طلای ۷۵۰'],
+  ['meltedFee', 'فی آب‌شده'],
   ...coinCatalog.filter(item => item.price).map(item => [item.price, item.name]),
   ...currencyCatalog.map(item => [item.price, `نرخ ${item.name}`]),
 ];

@@ -5,6 +5,7 @@ import { normalizeDigits } from './persianDate.js';
 import { isMiscPurchase } from './miscGold.js';
 
 export function invoiceItemName(row, source) {
+  if (row.category === 'remittance') return row.itemName || row.note || 'حواله طلای ۷۵۰';
   const savedName = customerItemName(row, source);
   if (savedName !== 'نام جنس ثبت نشده') return savedName;
   if (isMiscPurchase(row)) return 'طلای متفرقه';
@@ -20,6 +21,64 @@ export function invoiceRowAmount(row) {
   return row.type === 'expense' ? number(expenseValue(row)) : documentBreakdown(row).total;
 }
 
+const roundLedger = value => Math.round((value + Number.EPSILON) * 1e6) / 1e6;
+
+// Ledger-only rows are projected for document browsing, never added to stock.
+// Keep the ledger's original order because inventory numbering omits remittances.
+export function partnerDocumentRows(documents = [], partners = []) {
+  const byId = new Map(documents.map(row => [String(row.id), row]));
+  const projected = new Map();
+  for (const partner of partners) for (const entry of partner.entries || []) {
+    if (entry.calculationVersion !== 3 || !entry.transactionId || !entry.lines?.length || entry.type === 'settlement') continue;
+    const linked = (partner.entries || []).filter(payment => payment.linkedEntryId === entry.id);
+    const ledger = [entry, ...linked];
+    const totals = Object.fromEntries(['goldDebit', 'goldCredit', 'tomanDebit', 'tomanCredit'].map(field =>
+      [field, roundLedger(ledger.reduce((sum, row) => sum + number(row[field]), 0))]));
+    totals.netGold = roundLedger(totals.goldDebit - totals.goldCredit);
+    totals.netToman = roundLedger(totals.tomanDebit - totals.tomanCredit);
+    const rate = number(entry.gold18Price);
+    const rowDirection = line => line.category === 'remittance'
+      ? line.remittanceDirection === 'debit' ? 'purchase' : 'sale'
+      : line.direction || entry.direction || (entry.type === 'sale' ? 'sale' : 'purchase');
+    const linesAmount = entry.lines.reduce((sum, line) => sum + (rowDirection(line) === 'sale' ? -1 : 1) *
+      (line.category === 'remittance' ? number(line.amount ?? number(line.goldAmount) * rate) : invoiceRowAmount(line)), 0);
+    const paymentAmount = (number(entry.paidGold) * rate + number(entry.paidToman)) * (entry.direction === 'sale' ? 1 : -1);
+    totals.amount = linesAmount + paymentAmount + linked.reduce((sum, payment) => sum +
+      (number(payment.goldDebit) - number(payment.goldCredit)) * rate + number(payment.tomanDebit) - number(payment.tomanCredit), 0);
+    projected.set(String(entry.transactionId), entry.lines.map((line, index) => {
+      const original = byId.get(String(line.documentId));
+      const remittance = line.category === 'remittance';
+      return {
+        ...(original || line),
+        id: original?.id || `partner-entry-${entry.id}-line-${index + 1}`,
+        ...(original ? {} : { partnerDisplayOnly: true }),
+        transactionId: entry.transactionId, invoiceNumber: entry.invoiceNumber, invoiceLine: index + 1,
+        invoiceLineCount: entry.lines.length, date: entry.date, createdAt: entry.createdAt, recordedAt: original?.recordedAt || entry.createdAt,
+        counterpartyType: 'partner', partnerId: partner.id, customerId: partner.id, customerName: partner.name,
+        partnerEntryId: entry.id, partnerEntry: entry, partnerLedgerTotals: totals,
+        externalInvoiceNumber: entry.externalInvoiceNumber, calculationVersion: 3,
+        ...(remittance ? { category: 'remittance', type: 'partner-remittance', typeLabel: 'حواله همکار',
+          direction: line.remittanceDirection === 'debit' ? 'بدهکار' : 'بستانکار', itemName: line.note || 'حواله طلای ۷۵۰',
+          itemSummary: [line.counterpartyName, line.reference].filter(Boolean).join(' · '), amount: line.amount ?? number(line.goldAmount) * rate } : {}),
+      };
+    }));
+  }
+  const emitted = new Set();
+  const rows = documents.flatMap(row => {
+    const key = String(row.transactionId);
+    if (!projected.has(key)) return [row];
+    if (emitted.has(key)) return [];
+    emitted.add(key);
+    return projected.get(key);
+  });
+  for (const [key, additions] of projected) if (!emitted.has(key)) {
+    const timestamp = Date.parse(additions[0].createdAt) || 0;
+    const before = rows.findIndex(row => (Date.parse(row.createdAt || row.recordedAt) || 0) <= timestamp);
+    rows.splice(before < 0 ? rows.length : before, 0, ...additions);
+  }
+  return rows;
+}
+
 // A grouped view never changes the physical stock rows or their recorded values.
 // First appearance controls invoice order; numbered rows control its item order.
 export function groupInvoices(documents = []) {
@@ -33,6 +92,8 @@ export function groupInvoices(documents = []) {
     const rows = [...group.rows].sort((a, b) => (number(a.invoiceLine) || Infinity) - (number(b.invoiceLine) || Infinity));
     const first = rows[0];
     const invoiceNumber = rows.find(row => row.invoiceNumber != null && String(row.invoiceNumber).trim())?.invoiceNumber;
+    const partnerEntry = first.partnerEntry;
+    const partnerTotals = first.partnerLedgerTotals;
     return {
       id: group.id,
       rows,
@@ -46,6 +107,11 @@ export function groupInvoices(documents = []) {
       amount: rows.reduce((sum, row) => sum + invoiceRowAmount(row), 0),
       rialDebt: rows.reduce((sum, row) => sum + number(row.rialDebt), 0),
       gramDebt: rows.reduce((sum, row) => sum + number(row.gramDebt), 0),
+      ...(partnerEntry?.calculationVersion === 3 && partnerTotals ? {
+        typeLabel: 'سند همکار', direction: partnerEntry.type === 'mixed' ? 'ترکیبی' : partnerEntry.type === 'sale' ? 'فروش' : 'خرید',
+        partnerId: first.partnerId, partnerEntryId: partnerEntry.id, partnerEntry,
+        ...partnerTotals, gramDebt: partnerTotals.netGold, rialDebt: partnerTotals.netToman,
+      } : {}),
       ...(first.settlementVersion === 1 ? {
         settlementVersion: 1, cashPaid: number(first.cashPaid),
         settlementGoldPrice: number(first.settlementGoldPrice),

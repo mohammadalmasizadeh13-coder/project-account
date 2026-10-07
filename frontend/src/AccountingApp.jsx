@@ -8,7 +8,7 @@ import './styles.css';
 import './ledger.css';
 import SalesDashboard from './SalesDashboard';
 import CustomerCRM from './CustomerCRM';
-import PartnerCRM from './PartnerCRM';
+import PartnerCRM, { PartnerDocumentDialog } from './PartnerCRM';
 import ChequeManager, { ChequeAlerts } from './ChequeManager';
 import { getChequeReminders } from './checks';
 import PersianDateInput from './PersianDateInput';
@@ -19,7 +19,7 @@ import { validateDocument } from './documentValidation';
 import { profitPercentInput } from './profitDefaults';
 import { isMiscPurchase, miscGoldDefaults, miscGoldWeight750 } from './miscGold';
 import { cleanInvoiceLine, expandInvoiceDraft, invoiceHeader, invoiceHeaderFields, invoiceLineForms, invoiceLinePreview } from './invoiceDraft';
-import { groupInvoices } from './invoices';
+import { groupInvoices, partnerDocumentRows } from './invoices';
 import { invoiceSettlement, settlementRowAmount } from './invoiceSettlement';
 import InvoiceDetails from './InvoiceDetails';
 import DocumentEditor, { canManageInvoice } from './DocumentEditor';
@@ -659,6 +659,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const [vaultSaleRequest, setVaultSaleRequest] = useState(null);
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [documentAction, setDocumentAction] = useState(null);
+  const [partnerDocumentAction, setPartnerDocumentAction] = useState(null);
   const [priceMessage, setPriceMessage] = useState(null);
 
   useEffect(() => {
@@ -696,6 +697,10 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     try {
       await ownerStorage.flush();
       setSelectedInvoice(null);
+      if (invoice.partnerEntryId) {
+        setPartnerDocumentAction({ partnerId: invoice.partnerId, entryId: invoice.partnerEntryId, editing: mode === 'edit' });
+        return;
+      }
       const first = invoice.rows[0];
       const legacySet = !first.transactionId && first.setId ? documents.filter(row => !row.transactionId && row.setId === first.setId && row.type === first.type && String(row.customerId ?? '') === String(first.customerId ?? '') && row.customerName === first.customerName && row.date === first.date) : null;
       const editingInvoice = legacySet ? { ...invoice, rows: legacySet, amount: legacySet.reduce((sum, row) => sum + getDocumentAmount(row), 0), gramDebt: legacySet.reduce((sum, row) => sum + toNumber(row.gramDebt), 0), rialDebt: legacySet.reduce((sum, row) => sum + toNumber(row.rialDebt), 0) } : invoice;
@@ -708,7 +713,8 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     setStorageMessage(rows === null ? 'سند حذف شد و حساب‌ها به‌روز شدند.' : 'تغییرات سند ذخیره شد و حساب‌ها به‌روز شدند.');
   };
   const canChangeDocument = invoice => has('documents.write') && canManageInvoice(invoice) && (invoice.rows[0].type === 'expense' || has('customers.write'));
-  const documentActions = invoice => canChangeDocument(invoice) && <div className="document-actions"><button type="button" className="button button-ghost" data-invoice-edit onClick={() => openDocumentAction(invoice, 'edit')}>ویرایش سند</button><button type="button" className="button button-ghost document-delete-link" data-invoice-delete onClick={() => openDocumentAction(invoice, 'delete')}>حذف سند</button></div>;
+  const canChangePartnerDocument = invoice => invoice.partnerEntryId && has('documents.write') && has('partners.write');
+  const documentActions = invoice => canChangePartnerDocument(invoice) ? <div className="document-actions"><button type="button" className="button button-ghost" data-invoice-edit onClick={() => openDocumentAction(invoice, 'edit')}>ویرایش سند</button></div> : canChangeDocument(invoice) && <div className="document-actions"><button type="button" className="button button-ghost" data-invoice-edit onClick={() => openDocumentAction(invoice, 'edit')}>ویرایش سند</button><button type="button" className="button button-ghost document-delete-link" data-invoice-delete onClick={() => openDocumentAction(invoice, 'delete')}>حذف سند</button></div>;
   const performPartnerAction = async (action, identifier, payload, requestId) => {
     const saved = await ownerStorage.mutatePartner(action, identifier, payload, requestId);
     applyStockWorkspace(saved);
@@ -821,7 +827,8 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const assets = assetReport(stock, savedPrices);
   const liveInventoryValue = assetReport(stock, priceForm).totalToman;
   const normalizedSearch = searchTerm.trim().toLocaleLowerCase('fa-IR');
-  const filteredDocuments = documents.filter(document => {
+  const searchableDocuments = partnerDocumentRows(documents, partners);
+  const filteredDocuments = searchableDocuments.filter(document => {
     if (!normalizedSearch) return true;
     return [
       document.customerName,
@@ -846,7 +853,9 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     ].some(value => String(value || '').toLocaleLowerCase('fa-IR').includes(normalizedSearch));
   });
   const matchingInvoiceIds = new Set(filteredDocuments.map(row => String(row.transactionId || row.id)));
-  const filteredInvoices = groupInvoices(documents).filter(invoice => matchingInvoiceIds.has(invoice.id));
+  const filteredInvoices = groupInvoices(searchableDocuments).filter(invoice => matchingInvoiceIds.has(invoice.id));
+  const editingPartner = partners.find(partner => partner.id === partnerDocumentAction?.partnerId);
+  const editingPartnerEntry = editingPartner?.entries?.find(entry => entry.id === partnerDocumentAction?.entryId);
 
   const persistDocuments = nextDocuments => {
     const coded = assignProductCodes(nextDocuments);
@@ -1549,14 +1558,14 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                   return <article className="document-card" key={invoice.id} data-invoice-id={invoice.id}>
                     <div><span>{document.type === 'expense' ? document.typeLabel : `${invoice.direction || document.typeLabel} · ${formatNumber(invoice.rows.length)} ردیف`}{document.invoiceNumber && ` · سند ${formatNumber(document.invoiceNumber)}`}</span><strong>{document.type === 'expense' ? document.expensePayee || 'هزینه فروشگاه' : invoice.customerName}</strong>
                       {invoice.rows.map(row => <div key={row.id}>{row.itemName && <small>{row.itemName}</small>}{row.productCode && <bdi className="document-product-code" dir="ltr">{row.productCode}</bdi>}<small>{row.itemSummary}</small></div>)}
-                      {document.type !== 'expense' && <button type="button" className="button button-ghost" data-invoice-view onClick={() => setSelectedInvoice(invoice)}>مشاهده و چاپ سند</button>}
+                      {document.type !== 'expense' && <button type="button" className="button button-ghost" data-invoice-view onClick={() => invoice.partnerEntryId ? openDocumentAction(invoice, 'view') : setSelectedInvoice(invoice)}>مشاهده و چاپ سند</button>}
                       {documentActions(invoice)}
                     </div>
                     <div><span>{formatRecordDate(invoice)}</span>
                       {document.type === 'expense' ? <><strong>هزینه: {expenseSummary(document)}</strong>{document.expenseUnit && document.expenseUnit !== 'toman' && <small>معادل ثبت‌شده: {formatNumber(document.amount)} تومان</small>}{expenseRateSummary(document) && <small>{expenseRateSummary(document)}</small>}</> : <>
                         <strong>مبلغ کل سند: {formatNumber(invoice.amount)} تومان</strong>
                         {isTradeDocument(document) && <small data-trade-gold-price>{tradeGoldPriceSummary(document)}</small>}
-                        <small>بدهی کل سند: {formatDebtGrams(invoice.gramDebt)} گرم / {formatNumber(invoice.rialDebt)} تومان</small>
+                        {invoice.partnerEntryId ? <><small>بدهکار: {formatDebtGrams(invoice.goldDebit)} گرم · بستانکار: {formatDebtGrams(invoice.goldCredit)} گرم</small><small>مانده سند: {formatDebtGrams(invoice.gramDebt)} گرم ۷۵۰</small></> : <small>بدهی کل سند: {formatDebtGrams(invoice.gramDebt)} گرم / {formatNumber(invoice.rialDebt)} تومان</small>}
                         {invoice.settlementVersion === 1 && <small>پرداخت نقدی: {formatNumber(invoice.cashPaid)} تومان</small>}
                       </>}
                     </div>
@@ -1593,6 +1602,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       </details>}
       </div>}
     </div>
+    {editingPartnerEntry && <PartnerDocumentDialog key={editingPartnerEntry.id} partner={editingPartner} entry={editingPartnerEntry} username={username} documents={documents} prices={savedPrices} onAction={performPartnerAction} editing={partnerDocumentAction.editing} canEdit={has('partners.write') && has('documents.write')} onClose={() => setPartnerDocumentAction(null)} onSaved={() => { setPartnerDocumentAction(null); setStorageMessage('تغییرات سند همکار ذخیره شد و صندوق و مانده حساب به‌روز شدند.'); }}/>}
     <InvoiceDetails invoice={selectedInvoice} onClose={() => setSelectedInvoice(null)} onEdit={selectedInvoice && canChangeDocument(selectedInvoice) ? () => openDocumentAction(selectedInvoice, 'edit') : undefined} onDelete={selectedInvoice && canChangeDocument(selectedInvoice) ? () => openDocumentAction(selectedInvoice, 'delete') : undefined}/>
     {documentAction && <DocumentEditor {...documentAction} customers={customers} onSave={mutateSavedDocument} onClose={() => setDocumentAction(null)}/>}
   </section>

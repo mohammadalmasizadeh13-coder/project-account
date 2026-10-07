@@ -16,7 +16,8 @@ from .accounts import register_account_routes
 from .database import imports, initialize, make_engine, read_workspace, sessions, users, workspace_requests, workspaces
 from .document_edits import register_document_routes
 from .inventory import create_stock, delete_stock, edit_stock, guard_linked_inventory_changes, guard_new_document_identity, inventory_requests, sync_misc_purchase_caches
-from .invoices import prepare_invoices
+from .invoices import prepare_invoices, reserve_invoice_numbers
+from .pricing import number
 from .partners import canonical_partner_records, guard_partner_documents, register_partner_routes
 from .security import (COOKIE_NAME, account_request_id, bootstrap_owner, digest, filter_workspace, get_user, has_permission,
     hash_password, issue_session, login_throttle, normalize_username, public_user, require_mutation, require_origin,
@@ -343,6 +344,12 @@ def create_app(settings=None):
                 return {**workspace_response(current, identity, connection), "imported": False}
             if not semantically_empty(current["data"]):
                 raise HTTPException(409, "دفتر سرور دارای اطلاعات است؛ برای جلوگیری از حذف داده، انتقال خودکار انجام نشد.")
+            # Remittance-only partner invoices have numbers without inventory rows.
+            # Include them when restoring the sequence from a workspace backup.
+            numbered_rows = [*data["documents"], *(entry for partner in data["partners"] for entry in partner["entries"])]
+            minimum_number = max((int(value) for row in numbered_rows if (value := number(row.get("invoiceNumber"))) > 0
+                and value <= 9007199254740991 and value == value.to_integral_value()), default=0)
+            reserve_invoice_numbers(connection, minimum_number, 0, identity["user"]["account_id"])
             revision = current["revision"] + 1
             result = connection.execute(update(workspaces).where(workspaces.c.account_id == identity["user"]["account_id"], workspaces.c.revision == current["revision"]).values(data=encoded, revision=revision))
             if result.rowcount != 1:
