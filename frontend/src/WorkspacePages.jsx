@@ -27,8 +27,12 @@ const entryGroups = [
     ['settlement-entry', 'دریافت و پرداخت', 'تسویه حساب مشتری', Wallet],
   ] },
   { key: 'partner', title: 'اسناد همکار', tools: [
-    ['partner-invoice', 'خرید از همکار', 'ثبت سند خرید ساخته، آب‌شده و سکه', ReceiptText],
-    ['partner-remittance', 'حواله همکار', 'بخش حواله؛ در انتظار تکمیل روش ثبت', ArrowLeft],
+    ['partner-crafted-purchase', 'خرید کار ساخته', 'خرید کار ساخته از همکار و ورود به صندوق', Gem],
+    ['partner-coin-purchase', 'خرید سکه', 'خرید سکه از همکار و ورود به صندوق', Coins],
+    ['partner-crafted-sale', 'فروش کار ساخته', 'فروش کار ساخته به همکار و خروج از صندوق', Gem],
+    ['partner-coin-sale', 'فروش سکه', 'فروش سکه به همکار و خروج از صندوق', Coins],
+    ['partner-melted-purchase', 'خرید آب‌شده', 'ثبت خرید آب‌شده از همکار', ReceiptText],
+    ['partner-remittance', 'حواله همکار', 'ثبت حواله بدهکار یا بستانکار همکار', ArrowLeft],
   ] },
 ];
 export const entryTools = entryGroups.flatMap(group => group.tools);
@@ -40,7 +44,7 @@ export const reportTools = [
 ];
 export function ToolHub({ kind, onOpen, canOpen = () => true }) {
   if (kind === 'entries') {
-    const groups = entryGroups.map(group => ({ ...group, tools: group.tools.filter(([key]) => canOpen(key)) })).filter(group => group.tools.length);
+    const groups = entryGroups.map(group => ({ ...group, tools: group.tools.filter(([key]) => canOpen(key.startsWith('partner-') && key !== 'partner-remittance' ? 'partner-invoice' : key)) })).filter(group => group.tools.length);
     return <div className="workspace-hub document-hub"><div className="document-groups">
       {groups.map(group => <section key={group.key} className="document-group" data-document-group={group.key} aria-labelledby={`document-group-${group.key}`}>
         <h2 id={`document-group-${group.key}`}>{group.title}</h2>

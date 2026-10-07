@@ -13,8 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import Column, Float, Integer, String, Table, select, update
 
 from .database import account_column, metadata, read_workspace, workspaces
-from .inventory import amount, create_stock, decimal_output, item_summary, numeric, quantity
-from .invoices import prepare_invoices
+from .inventory import amount, create_stock, decimal_output, find_source, item_summary, numeric, quantity
+from .invoices import guard_invoice_stock, prepare_invoices
 from .pricing import iso_now, number
 from .security import account_request_id, digest, get_user, has_permission, require_mutation
 
@@ -55,7 +55,7 @@ class PartnerProfile(StrictModel):
 
 class LedgerEntry(StrictModel):
     id: str = Field(min_length=1, max_length=64)
-    type: Literal["purchase", "settlement"]
+    type: Literal["purchase", "sale", "settlement"]
     date: str = Field(min_length=10, max_length=10)
     createdAt: str = Field(min_length=1, max_length=60)
     goldDebit: float = Field(default=0, ge=0, le=float(MAX_BALANCE))
@@ -149,6 +149,7 @@ class PartnerPatch(PartnerMutation):
 
 
 class PartnerInvoice(PartnerMutation):
+    direction: Literal["purchase", "sale"] = "purchase"
     date: str = Field(min_length=10, max_length=10)
     externalInvoiceNumber: str = Field(default="", max_length=200)
     note: str = Field(default="", max_length=5000)
@@ -260,6 +261,7 @@ def entry_base(payload, **values):
 
 
 def make_supplier_invoice(data, partner, payload, identity, connection):
+    selling = payload.direction == "sale"
     gold_invoice = payload.calculationVersion == 2
     rate = numeric(payload.gold18Price, "نرخ طلای ۷۵۰", minimum=Decimal("0.00000001"))
     paid_gold = numeric(payload.paidGold, "پرداخت طلا", maximum=Decimal("1e12"))
@@ -272,6 +274,19 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
     draft = {**data, "documents": list(data["documents"])}
     for position, original in enumerate(payload.lines):
         line = dict(original)
+        source_id = line.pop("inventorySourceId", None)
+        source = None
+        if selling:
+            source = find_source(data, str(source_id or ""))
+            if source["category"] not in {"crafted", "coin"} or source["category"] != line.get("category"):
+                raise HTTPException(422, "نوع کالای فروش همکار با موجودی ساخته یا سکه مطابقت ندارد.")
+            # Physical identity belongs to the selected lot; only quantity and sale rates are editable.
+            for field in ("itemName", "craftedKind", "weight", "ayar", "coinType", "parsianWeight"):
+                if field in source:
+                    line[field] = source[field]
+            line["weightMode"] = "unit"
+        elif source_id:
+            raise HTTPException(422, "خرید همکار نباید به موجودی فروش متصل باشد.")
         weight_mode = line.pop("weightMode", "total")
         if not isinstance(weight_mode, str) or weight_mode not in {"total", "unit"}:
             raise HTTPException(422, "روش ثبت وزن معتبر نیست.")
@@ -307,11 +322,13 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
             created, identifier = create_stock(draft, line, identity)
             document = created["documents"][0]
             document.update(id=f"document-partner-{uuid4()}", source="partner-invoice", entryMethod="supplier-invoice",
-                type=f"{category}-purchase", typeLabel="خرید از همکار", direction="خرید", customerId=partner["id"],
+                type=f"{category}-{'sale' if selling else 'purchase'}", typeLabel="فروش به همکار" if selling else "خرید از همکار", direction="فروش" if selling else "خرید", customerId=partner["id"],
                 customerName=partner["name"], counterpartyType="partner", partnerId=partner["id"],
                 externalInvoiceNumber=payload.externalInvoiceNumber, date=payload.date, createdAt=created_at, recordedAt=created_at,
                 invoiceVersion=1, invoiceLine=position + 1, invoiceLineCount=len(payload.lines), transactionId=transaction,
                 gold18Price=decimal_output(rate))
+            if source is not None:
+                document.update(inventorySourceId=source["id"], productCode=source["productCode"])
             line_value = number(document["amount"])
             snapshot = {}
             if category in {"crafted", "melted"}:
@@ -346,10 +363,10 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
                 document["amount"] = decimal_output(line_gold * rate)
             gold_total += line_gold
             toman_total += line_toman
-            document["partnerGoldDebit"] = decimal_output(rounded_gold(line_gold))
+            document["partnerGoldCredit" if selling else "partnerGoldDebit"] = decimal_output(rounded_gold(line_gold))
             document["itemSummary"] = item_summary(document)
             documents.append(document)
-            details.append({**original, "documentId": document["id"], "productCode": document["productCode"],
+            details.append({**original, **({"weightMode": "unit", **{field: document[field] for field in ("itemName", "weight", "ayar", "craftedKind", "coinType", "parsianWeight") if field in document}} if selling else {}), "documentId": document["id"], "productCode": document["productCode"],
                 "scaleWeight": decimal_output(scale_weight) if scale_weight is not None else 0,
                 "weight750": decimal_output(equivalent), "laborGold": decimal_output(labor),
                 "goldDebit": decimal_output(rounded_gold(line_gold)), "tomanDebit": decimal_output(line_toman), "amount": document["amount"], **snapshot})
@@ -359,12 +376,19 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
         raise HTTPException(422, "مقدار فاکتور کمتر از دقت مجاز دفتر است.")
     documents[0]["gramDebt"] = decimal_output(gold_total)
     documents[0]["rialDebt"] = decimal_output(toman_total)
+    if selling:
+        try:
+            guard_invoice_stock([*documents, *data["documents"]], documents)
+        except HTTPException as error:
+            # A rejected stock choice has not committed. Let the editor correct
+            # it, while workspace revision conflicts still use safe replay.
+            raise HTTPException(422, error.detail) from error
     incoming = prepare_invoices(data["documents"], [*documents, *data["documents"]], connection, account_id=identity["user"]["account_id"])
     data["documents"] = incoming
-    entry = entry_base(payload, type="purchase", externalInvoiceNumber=payload.externalInvoiceNumber,
+    entry = entry_base(payload, type="sale" if selling else "purchase", externalInvoiceNumber=payload.externalInvoiceNumber,
         invoiceNumber=incoming[0]["invoiceNumber"], transactionId=transaction, documentIds=[row["id"] for row in documents],
         lines=details, settlementUnit=payload.settlementUnit, gold18Price=decimal_output(rate),
-        goldDebit=decimal_output(gold_total), tomanDebit=decimal_output(toman_total),
+        **{"goldCredit" if selling else "goldDebit": decimal_output(gold_total), "tomanCredit" if selling else "tomanDebit": decimal_output(toman_total)},
         **({"calculationVersion": 2, "conversionGoldPrice": decimal_output(rate)} if gold_invoice else {}))
     partner["entries"].append(entry)
     if paid_gold or paid_toman:
@@ -374,8 +398,8 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
             gold_credit = rounded_gold(paid_gold + converted_cash)
         if gold_invoice and not gold_credit:
             raise HTTPException(422, "مقدار پرداخت کمتر از دقت مجاز دفتر است.")
-        partner["entries"].append(entry_base(payload, type="settlement", goldCredit=decimal_output(gold_credit),
-            tomanCredit=0 if gold_invoice else decimal_output(paid_toman), counterpartyName=payload.referenceName,
+        partner["entries"].append(entry_base(payload, type="settlement",
+            **{"goldDebit" if selling else "goldCredit": decimal_output(gold_credit), "tomanDebit" if selling else "tomanCredit": 0 if gold_invoice else decimal_output(paid_toman)}, counterpartyName=payload.referenceName,
             reference=payload.refNumber, paymentMethod="remittance" if payload.referenceName or payload.refNumber else "cash" if paid_toman else "gold",
             linkedEntryId=entry["id"], **({"calculationVersion": 2, "settlementUnit": "gold", "gold18Price": decimal_output(rate),
                 "conversionGoldPrice": decimal_output(rate), "paidGold": decimal_output(paid_gold), "paidToman": decimal_output(paid_toman),
@@ -394,6 +418,8 @@ def register_partner_routes(application, workspace_response, encode_workspace):
         account_id, actor_id = identity["user"]["account_id"], identity["user"]["id"]
         request_id = account_request_id(account_id, str(payload.requestId))
         body = payload.model_dump(mode="json", exclude={"revision", "requestId"}, exclude_unset=action == "update")
+        if action == "invoice" and payload.direction == "purchase":
+            body.pop("direction", None)
         # Requests saved before gold-only invoices did not contain a version field.
         # Retrying one after an upgrade must still match its original receipt hash.
         if action == "invoice" and payload.calculationVersion == 1:

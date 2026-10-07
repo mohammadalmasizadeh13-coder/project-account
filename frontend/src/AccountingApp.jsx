@@ -60,6 +60,8 @@ const documentTypes = [
 ];
 
 const partnerDocumentTypes = [
+  { value: 'partner-crafted-sale', label: 'فروش کار ساخته به همکار', category: 'crafted' },
+  { value: 'partner-coin-sale', label: 'فروش سکه به همکار', category: 'coin' },
   { value: 'partner-crafted-purchase', label: 'خرید کار ساخته از همکار', category: 'crafted' },
   { value: 'partner-melted-purchase', label: 'خرید آب‌شده از همکار', category: 'melted' },
   { value: 'partner-coin-purchase', label: 'خرید سکه از همکار', category: 'coin' },
@@ -755,10 +757,11 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   }, [menuOpen, isMobile]);
 
   const openTool = tool => {
-    if (!canOpen(tool)) { setStorageMessage('دسترسی این بخش برای حساب شما فعال نشده است.'); return; }
-    if (tool === 'partner-invoice' || tool === 'partner-remittance') {
+    const partnerDocument = partnerDocumentTypes.find(type => type.value === tool);
+    if (!canOpen(partnerDocument && tool !== 'partner-remittance' ? 'partner-invoice' : tool)) { setStorageMessage('دسترسی این بخش برای حساب شما فعال نشده است.'); return; }
+    if (tool === 'partner-invoice' || partnerDocument) {
       if (documentSaving || documentLocked || documentOperation.current) { setStorageMessage('ابتدا وضعیت ثبت سند جاری را مشخص کنید.'); return; }
-      setPartnerEntryType(tool === 'partner-remittance' ? tool : 'partner-crafted-purchase');
+      setPartnerEntryType(partnerDocument ? tool : 'partner-crafted-purchase');
       tool = 'register';
     }
     if (tool === 'crm' && !has('customers.read')) tool = 'partners';
@@ -1365,7 +1368,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
               {documentTypeSelector}
               <PartnerCRM key={partnerEntryType} embedded username={username} partners={partners} documents={documents} prices={savedPrices} onAction={performPartnerAction}
                 readOnly={!has('partners.write')} canPurchase={has('partners.write') && has('documents.write')}
-                initialAction={partnerEntryType === 'partner-remittance' ? 'remittance' : 'invoice'} initialCategory={partnerDocumentTypes.find(type => type.value === partnerEntryType)?.category || 'crafted'}/>
+                invoiceDirection={partnerEntryType.endsWith('-sale') ? 'sale' : 'purchase'} initialAction={partnerEntryType === 'partner-remittance' ? 'remittance' : 'invoice'} initialCategory={partnerDocumentTypes.find(type => type.value === partnerEntryType)?.category || 'crafted'}/>
             </section>}
             {activeTool === 'register' && !partnerEntryType && <form className="document-form" onSubmit={submitDocument} noValidate aria-busy={documentSaving}>
               {formMessage && <div className={`form-message ${formMessage.type}`} role={formMessage.type === 'error' ? 'alert' : 'status'}>{formMessage.text}</div>}

@@ -203,17 +203,25 @@ export function preparePartnerInvoice(form) {
   const calculationVersion = form.calculationVersion === 2 ? 2 : 1;
   const gold18Price = numeric(form.gold18Price, 'نرخ طلای ۷۵۰ هنگام ثبت', { positive: true });
   if (!Array.isArray(form.lines) || form.lines.length < 1 || form.lines.length > 100) throw new Error('فاکتور باید بین یک تا صد ردیف داشته باشد.');
+  if (form.direction && !['purchase', 'sale'].includes(form.direction)) throw new Error('نوع فاکتور همکار معتبر نیست.');
   return { date: validDate(form.date), externalInvoiceNumber: text(form.externalInvoiceNumber), note: text(form.note), gold18Price,
+    ...(form.direction === 'sale' ? { direction: 'sale' } : {}),
     ...(calculationVersion === 2 ? { calculationVersion } : {}),
-    settlementUnit: 'gold', lines: form.lines.map(line => preparePartnerLine(line, gold18Price, calculationVersion)),
+    settlementUnit: 'gold', lines: form.lines.map(line => {
+      const prepared = preparePartnerLine(line, gold18Price, calculationVersion);
+      if (form.direction === 'sale') {
+        if (!text(line.inventorySourceId)) throw new Error('کالای موجود در صندوق را برای هر ردیف فروش انتخاب کنید.');
+        prepared.inventorySourceId = text(line.inventorySourceId);
+      }
+      return prepared;
+    }),
     paidGold: roundPartnerAmount(numeric(form.paidGold, 'طلای پرداخت‌شده', { optional: true })),
     paidToman: roundPartnerAmount(numeric(form.paidToman, 'مبلغ پرداخت‌شده', { optional: true })),
     referenceName: text(form.referenceName), refNumber: text(form.refNumber),
   };
 }
 export function preparePartnerSettlement(form) {
-  if (form.paymentMethod === 'remittance') throw new Error('بخش حواله همکار پس از مشخص شدن روش انجام حواله تکمیل می‌شود.');
-  if (!['credit', 'debit'].includes(form.direction) || !['gold', 'cash'].includes(form.paymentMethod)) throw new Error('نوع دریافت یا پرداخت را انتخاب کنید.');
+  if (!['credit', 'debit'].includes(form.direction) || !['gold', 'cash', 'remittance'].includes(form.paymentMethod)) throw new Error('نوع دریافت یا پرداخت را انتخاب کنید.');
   const goldAmount = roundPartnerAmount(numeric(form.goldAmount, 'مقدار طلای ۷۵۰', { optional: true }));
   const tomanAmount = roundPartnerAmount(numeric(form.tomanAmount, 'مبلغ تومان', { optional: true }));
   if (!(goldAmount > 0 || tomanAmount > 0)) throw new Error('حداقل مقدار طلا یا مبلغ تومان را وارد کنید.');

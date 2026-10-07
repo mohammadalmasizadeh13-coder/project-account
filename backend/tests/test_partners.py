@@ -45,6 +45,66 @@ def partner(browser, identifier):
     return next(item for item in browser.get("/api/owner/workspace").json()["data"]["partners"] if item["id"] == identifier)
 
 
+@pytest.mark.parametrize("direction,expected", [("debit", 10), ("credit", -10)])
+def test_ten_gram_remittance_records_our_debt_or_claim_and_replays(client, direction, expected):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    body = settlement_body(client, direction=direction, goldAmount=10)
+    path = f"/api/owner/partners/{identifier}/settlements"
+    saved = client.post(path, json=body, headers=headers)
+    assert saved.status_code == 201, saved.text
+    assert saved.json()["data"]["partners"][0]["goldBalance"] == expected
+    assert saved.json()["data"]["documents"] == []
+    replay = client.post(path, json=body, headers=headers)
+    assert replay.status_code == 200
+    assert replay.json()["revision"] == saved.json()["revision"]
+    assert len(partner(client, identifier)["entries"]) == 1
+
+
+@pytest.mark.parametrize("category", ["crafted", "coin"])
+def test_partner_sale_credits_claim_links_stock_and_receipt_debits_it(client, category):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    line = ({"category": "crafted", "itemName": "انگشتر", "craftedKind": "انگشتر", "weight": 6, "ayar": 750, "itemCount": 3, "wagePercent": 0, "profitPercent": 0}
+        if category == "crafted" else {"category": "coin", "itemName": "سکه", "coinType": "امامی", "coinCount": 3, "coinPrice": 200000, "profitPercent": 0})
+    purchase = post_invoice(client, headers, identifier, calculationVersion=2, lines=[line])
+    assert purchase.status_code == 201, purchase.text
+    stock = purchase.json()["data"]["documents"][0]
+    sale_line = {**line, "inventorySourceId": stock["id"], "itemCount" if category == "crafted" else "coinCount": 1}
+    # Crafted weight is taken from the original lot, even with a tampered input.
+    if category == "crafted":
+        sale_line.update(weight=999, ayar=999)
+    body = supplier_payload(client, direction="sale", calculationVersion=2, lines=[sale_line], paidGold=0.5, paidToman=50000)
+    response = post_invoice(client, headers, identifier, body=body)
+    assert response.status_code == 201, response.text
+    data = response.json()["data"]
+    record = data["partners"][0]
+    sale, receipt = record["entries"][-2:]
+    assert sale["type"] == "sale" and sale["goldCredit"] == 2 and sale["goldDebit"] == 0
+    assert receipt["goldDebit"] == 1 and receipt["goldCredit"] == 0
+    assert record["goldBalance"] == 5
+    document = data["documents"][0]
+    assert document["type"] == f"{category}-sale" and document["inventorySourceId"] == stock["id"]
+    assert document["productCode"] == stock["productCode"] and document["partnerId"] == identifier
+    assert document["amount"] == 200000 and document["partnerGoldCredit"] == 2
+    assert data["customers"] == []
+    if category == "crafted":
+        assert document["weight"] == "2" and document["ayar"] == "750"
+    replay = post_invoice(client, headers, identifier, body=body)
+    assert replay.status_code == 200 and replay.json()["revision"] == response.json()["revision"]
+    assert len(replay.json()["data"]["documents"]) == 2
+    too_many = {**sale_line, "itemCount" if category == "crafted" else "coinCount": 3}
+    rejected = post_invoice(client, headers, identifier, direction="sale", calculationVersion=2, lines=[too_many])
+    assert rejected.status_code == 422, rejected.text
+    assert client.get("/api/owner/workspace").json()["data"] == data
+    repeated = post_invoice(client, headers, identifier, direction="sale", calculationVersion=2, lines=[sale_line] * 3)
+    assert repeated.status_code == 422, repeated.text
+    missing = post_invoice(client, headers, identifier, direction="sale", calculationVersion=2, lines=[line])
+    assert missing.status_code == 404, missing.text
+
+
 def test_partner_profiles_are_separate_from_customer_crm_and_opening_balances_are_explicit(client):
     headers = login(client)
     result, _ = create_partner(client, headers, openingGoldBalance=-2, openingTomanBalance=100000)
@@ -489,7 +549,7 @@ def test_legacy_invoice_receipt_hash_and_missing_version_keep_original_math(clie
     response = post_invoice(client, headers, created["createdId"], payload)
     assert response.status_code == 201, response.text
     assert response.json()["data"]["partners"][0]["goldBalance"] == 5.0718
-    old_body = PartnerInvoice.model_validate(payload).model_dump(mode="json", exclude={"revision", "requestId", "calculationVersion"})
+    old_body = PartnerInvoice.model_validate(payload).model_dump(mode="json", exclude={"revision", "requestId", "calculationVersion", "direction"})
     expected_hash = digest(json.dumps({"action": "invoice", "partnerId": created["createdId"], "payload": old_body}, sort_keys=True, ensure_ascii=False, allow_nan=False))
     with client.app.state.engine.connect() as connection:
         receipt = connection.execute(select(partner_requests).where(partner_requests.c.created_id == response.json()["createdId"])).mappings().one()

@@ -117,7 +117,12 @@ try {
     await writeFile(resolve(`artifacts/${name}.png`), Buffer.from(result.data, 'base64'));
   };
   const workspace = () => evaluate(`fetch('/api/owner/workspace').then(r=>r.json())`);
-  const tool = name => navigateWorkspace(name, { click, evaluate, pause });
+  const tool = async name => {
+    if (name === 'partner-invoice') {
+      await navigateWorkspace('entries', { click, evaluate, pause });
+      await click('[data-tool="partner-crafted-purchase"]');
+    } else await navigateWorkspace(name, { click, evaluate, pause });
+  };
   await cdp('Page.enable'); await cdp('Runtime.enable');
   await cdp('Fetch.enable', { patterns: [{ urlPattern: '*fonts.googleapis.com*' }, { urlPattern: '*fonts.gstatic.com*' }] });
   await resize(1440); await go('/'); await ready('.accounting-hero');
@@ -280,8 +285,8 @@ try {
   const beforeRemittance = await workspace();
   assert.equal(beforeRemittance.data.partners[0].goldBalance, 19.866667, 'Melted purchase converts lower purity to 750');
   assert.equal(beforeRemittance.data.customers.length, 1);
-  await fill('[data-document-type]', 'partner-remittance'); await ready('[data-partner-remittance-placeholder]');
-  assert.equal(await evaluate(`document.querySelector('[data-partner-document-entry] button[type="submit"]') !== null`), false, 'Remittance is a placeholder without financial submit');
+  await fill('[data-document-type]', 'partner-remittance'); await ready('[data-partner-settlement-form]');
+  assert.equal(await evaluate(`document.querySelector('[data-partner-document-entry] button[type="submit"]') !== null`), true, 'Remittance offers financial submit');
   assert.equal((await workspace()).revision, beforeRemittance.revision, 'Opening remittance cannot post a ledger entry');
   await screenshot('accounting-partner-remittance', '[data-partner-document-entry]');
   await fill('[data-document-type]', 'crafted-sale');
@@ -293,7 +298,7 @@ try {
   for (const path of ['/api/public/products', '/api/public/gallery', '/api/public/contact']) assert.equal((await fetch(`${backendOrigin}${path}`)).status, 404);
   assert.equal(requests.some(item => item.path.startsWith('/api/public/')), false, 'Accounting pages never request a public catalog');
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
-  console.log('Accounting browser checks passed: isolated accounts/drafts, misc750, inline supplier crafted/melted/coin purchase, editable profit and rial labor in gold, durable replay, payments, remittance placeholder, mobile/print, retired storefront.');
+  console.log('Accounting browser checks passed: isolated accounts/drafts, misc750, inline supplier crafted/melted/coin purchase, editable profit and rial labor in gold, durable replay, payments, remittance entry, mobile/print, retired storefront.');
 } catch (error) {
   if (evaluate) { try { console.error('Browser state:', await evaluate(`JSON.stringify({path:location.pathname,text:document.body.innerText.slice(-4500)})`)); } catch {} }
   if (exceptions.length) console.error('Browser exceptions:', JSON.stringify(exceptions));

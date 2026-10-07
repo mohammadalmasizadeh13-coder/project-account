@@ -230,9 +230,25 @@ test('saved version two details preserve audited gold values without recomputing
   assert.equal(saved.conversionGoldPrice, 100000);
 });
 
-test('new remittance submission remains unavailable while historical remittance credits remain visible', () => {
-  assert.throws(() => preparePartnerSettlement({ ...newPartnerSettlement(), goldAmount: 1, paymentMethod: 'remittance' }), /حواله/);
+test('remittance supports both our debt and our claim while preserving historical credits', () => {
+  for (const direction of ['debit', 'credit']) {
+    const payload = preparePartnerSettlement({ ...newPartnerSettlement(), direction, goldAmount: '۱۰', paymentMethod: 'remittance' });
+    assert.equal(payload.goldAmount, 10);
+    assert.equal(payload.direction, direction);
+    assert.equal(payload.paymentMethod, 'remittance');
+    const statement = partnerStatement({ entries: [{ date: payload.date, [direction === 'debit' ? 'goldDebit' : 'goldCredit']: payload.goldAmount }] });
+    assert.equal(statement.goldBalance, direction === 'debit' ? 10 : -10);
+  }
   const statement = partnerStatement({ openingGoldBalance: 5, entries: [{ id: 'historical-remittance', date: '2026-10-07', paymentMethod: 'remittance', goldCredit: 2 }] });
   assert.equal(statement.goldBalance, 3);
   assert.equal(statement.rows[0].paymentMethod, 'remittance');
+});
+
+test('partner sales require stock selection and carry sale direction without changing purchase replay payloads', () => {
+  const invoice = { ...newPartnerInvoice({ goldGramPrice: 1000 }), lines: [line] };
+  assert.equal(Object.hasOwn(preparePartnerInvoice(invoice), 'direction'), false);
+  assert.throws(() => preparePartnerInvoice({ ...invoice, direction: 'sale' }), /صندوق/);
+  const sale = preparePartnerInvoice({ ...invoice, direction: 'sale', lines: [{ ...line, inventorySourceId: 'stock-1' }] });
+  assert.equal(sale.direction, 'sale');
+  assert.equal(sale.lines[0].inventorySourceId, 'stock-1');
 });
