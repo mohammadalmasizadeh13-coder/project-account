@@ -24,16 +24,30 @@ backend.stdout.on('data', data => { backendLog += data; });
 backend.stderr.on('data', data => { backendLog += data; });
 const requests = [];
 let dropNextInvoiceResponse = false;
+let dropNextExpenseResponse = false;
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, origin).pathname;
   if (path.startsWith('/api/')) {
-    requests.push({ path, method: req.method });
+    const entry = { path, method: req.method };
+    requests.push(entry);
+    if (path === '/api/owner/workspace' && req.method === 'PUT') {
+      const chunks = [];
+      req.on('data', chunk => chunks.push(chunk));
+      req.on('end', () => { entry.body = JSON.parse(Buffer.concat(chunks).toString()); });
+    }
     const forwarded = request(`${backendOrigin}${req.url}`, { method: req.method, headers: req.headers }, upstream => {
       if (dropNextInvoiceResponse && req.method === 'POST' && /\/partners\/[^/]+\/invoices$/.test(path) && upstream.statusCode >= 200 && upstream.statusCode < 300) {
         dropNextInvoiceResponse = false;
         upstream.resume(); upstream.on('end', () => {
           res.writeHead(502, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ detail: 'پاسخ ثبت دریافت نشد؛ همان ثبت را بازیابی کنید.' }));
+        }); return;
+      }
+      if (dropNextExpenseResponse && req.method === 'PUT' && path === '/api/owner/workspace' && upstream.statusCode >= 200 && upstream.statusCode < 300) {
+        dropNextExpenseResponse = false;
+        upstream.resume(); upstream.on('end', () => {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ detail: 'پاسخ ثبت هزینه دریافت نشد؛ همان ثبت را بازیابی کنید.' }));
         }); return;
       }
       res.writeHead(upstream.statusCode, upstream.headers); upstream.pipe(res);
@@ -118,10 +132,25 @@ try {
   };
   const workspace = () => evaluate(`fetch('/api/owner/workspace').then(r=>r.json())`);
   const tool = async name => {
-    if (name === 'partner-invoice') {
-      await navigateWorkspace('entries', { click, evaluate, pause });
-      await click('[data-tool="partner-crafted-purchase"]');
-    } else await navigateWorkspace(name, { click, evaluate, pause });
+    if (name !== 'partner-invoice') return navigateWorkspace(name, { click, evaluate, pause });
+    await navigateWorkspace('entries', { click, evaluate, pause });
+    const genericEntry = await evaluate(`Boolean(document.querySelector('[data-tool="partner-invoice"]'))`);
+    await click(genericEntry ? '[data-tool="partner-invoice"]' : '[data-tool="partner-crafted-purchase"]');
+  };
+  const entryTypes = {
+    customer: ['crafted-sale', 'crafted-purchase', 'misc-purchase', 'coin-sale', 'coin-purchase', 'melted-sale', 'melted-purchase', 'currency-sale', 'currency-purchase'],
+    store: ['expense'],
+    partner: ['partner-crafted-purchase', 'partner-melted-purchase', 'partner-coin-purchase', 'partner-remittance'],
+  };
+  const assertEntryScope = async scope => {
+    await ready(`[data-document-scope="${scope}"]`);
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-document-scope]'), element => element.dataset.documentScope)`), [scope], 'Only the selected group has an open document form');
+    const options = await evaluate(`Array.from(document.querySelectorAll('[data-document-type] option'), option => option.value)`);
+    if (scope === 'partner') {
+      assert.ok(entryTypes.partner.every(type => options.includes(type)), 'Partner entry retains purchase and remittance choices');
+      assert.ok(options.every(type => type.startsWith('partner-')), 'Partner document choices stay inside their group');
+    } else assert.deepEqual(options, entryTypes[scope], `${scope} document choices stay inside their group`);
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth+1'), true, `${scope} entry has no page overflow`);
   };
   await cdp('Page.enable'); await cdp('Runtime.enable');
   await cdp('Fetch.enable', { patterns: [{ urlPattern: '*fonts.googleapis.com*' }, { urlPattern: '*fonts.gstatic.com*' }] });
@@ -145,6 +174,7 @@ try {
   assert.equal(alphaEmpty.data.documents.length, 0);
   assert.equal(alphaEmpty.data.customers.length, 0);
   await resize(1440); await tool('register');
+  await assertEntryScope('customer');
   await fill('.document-form select[name="type"]', 'misc-purchase');
   await fill('.document-form input[name="customerName"]', 'فروشنده طلای دست‌دوم');
   await fill('.document-form input[name="gold18Price"]', '7500000');
@@ -186,13 +216,41 @@ try {
   assert.equal(betaEmpty.data.partners?.length || 0, 0);
   await tool('register');
   assert.equal(await evaluate(`document.querySelector('.document-form input[name="customerName"]').value`), '', 'No previous account draft');
+  const legacyExpenseDraft = { version: 1, requestId: null, form: { type: 'expense', description: 'پیش‌نویس هزینه نسخه قبل', expenseUnit: 'toman', expenseAmount: '۱۲۳', expensePayee: 'پیک حساب دوم' } };
+  await evaluate(`localStorage.removeItem('noor-accounting-draft:v1:beta-account:expense'); localStorage.setItem('noor-accounting-draft:v1:beta-account:document', ${JSON.stringify(JSON.stringify(legacyExpenseDraft))})`);
+  await go('/account'); await ready('.workspace-page'); await tool('register');
+  await assertEntryScope('customer');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="customerName"]').value`), '', 'A legacy expense draft cannot open as a customer document');
+  await tool('expense'); await assertEntryScope('store');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="description"]').value`), legacyExpenseDraft.form.description, 'The old shared expense draft moves to store registration');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="expenseAmount"]').value`), '123', 'Legacy expense migration retains entered values');
+  await go('/account'); await ready('.workspace-page'); await tool('expense');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="description"]').value`), legacyExpenseDraft.form.description, 'Migrated expense survives another reload');
   await click('[aria-label="خروج از حساب"]'); await ready('.accounting-hero');
   await go('/owner/login'); await ready('#account-username'); await until(`!document.querySelector('.accounting-submit').disabled`);
   await fill('#account-username', 'alpha-account'); await fill('#account-password', 'browser-password-alpha'); await click('.accounting-submit'); await ready('.workspace-page');
   assert.equal((await workspace()).data.documents[0].id, misc.id, 'Login restores own ledger');
   await tool('register');
   await fill('.document-form [name="customerName"]', 'پیش‌نویس مشتری محفوظ');
-  await fill('[data-document-type]', 'partner-crafted-purchase');
+  await fill('.document-form [name="note"]', 'یادداشت پیش‌نویس مشتری');
+  await tool('expense'); await assertEntryScope('store');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="description"]').value`), '', 'Store drafts remain isolated between accounts');
+  await fill('.document-form [name="description"]', 'هزینه ارسال اسناد');
+  await fill('.document-form [name="expenseAmount"]', '۱۲۳۰۰۰');
+  await fill('.document-form [name="expensePayee"]', 'پیک فروشگاه');
+  assert.equal(await evaluate(`Boolean(document.querySelector('.document-form [name="customerName"]'))`), false, 'Store expense does not show customer fields');
+  await tool('register'); await assertEntryScope('customer');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="customerName"]').value`), 'پیش‌نویس مشتری محفوظ', 'Opening an expense preserves the customer draft');
+  await tool('expense');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="description"]').value`), 'هزینه ارسال اسناد', 'Returning from customer registration preserves the expense draft');
+  await go('/account'); await ready('.workspace-page'); await tool('register');
+  await assertEntryScope('customer');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="customerName"]').value`), 'پیش‌نویس مشتری محفوظ', 'Reload restores the customer draft independently');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="note"]').value`), 'یادداشت پیش‌نویس مشتری', 'Reload preserves all customer header fields');
+  await tool('expense'); await assertEntryScope('store');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="description"]').value`), 'هزینه ارسال اسناد', 'Reload restores the expense draft independently');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="expenseAmount"]').value`), '123,000', 'Reload preserves the entered expense amount');
+  await tool('partner-invoice'); await assertEntryScope('partner');
   await ready('[data-partner-new]');
   await click('[data-partner-new]');
   await fill('[data-partner-profile] [name="name"]', 'بنکداری آزمایشی');
@@ -201,7 +259,7 @@ try {
   await until(`document.querySelector('[data-partner-select]')?.value`);
   const partnerId = (await workspace()).data.partners[0].id;
   await ready('[data-partner-invoice]');
-  assert.ok(await evaluate(`document.querySelector('[data-partner-document-entry]')?.contains(document.querySelector('[data-partner-invoice]'))`), 'Supplier purchase is inside normal document entry');
+  assert.ok(await evaluate(`document.querySelector('[data-document-scope="partner"]')?.contains(document.querySelector('[data-partner-invoice]'))`), 'Supplier purchase belongs to partner registration');
   await fill('[data-partner-invoice] [name="externalInvoiceNumber"]', '3054');
   await fill('[data-partner-invoice] [name="gold18Price"]', '5000000');
   await fill('[data-partner-line="0"] [name="itemName"]', 'دستبند خرید از همکار');
@@ -233,6 +291,10 @@ try {
   assert.ok(supplierStock, 'Supplier invoice creates stock');
   assert.ok(Math.abs(Number(supplierStock.weight)*Number(supplierStock.itemCount)-10)<1e-9, 'Stock excludes labor and profit and counts total weight once');
   await go('/account'); await ready('.workspace-page'); await tool('register');
+  await assertEntryScope('customer');
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-partner-retry]'))`), false, 'A pending supplier invoice cannot replace customer registration');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="customerName"]').value`), 'پیش‌نویس مشتری محفوظ', 'Pending supplier recovery preserves the customer draft');
+  await tool('partner-invoice'); await assertEntryScope('partner');
   assert.equal(await evaluate(`document.querySelector('[data-document-type]').value`), 'partner-crafted-purchase', 'Reload keeps the supplier entry type');
   await click('[data-partner-retry]');
   await until(`!document.querySelector('[data-partner-retry]')`);
@@ -263,7 +325,7 @@ try {
   await screenshot('accounting-partner-print');
   await cdp('Emulation.setEmulatedMedia', { media: '' }); await resize(1440);
   await evaluate(`document.body.classList.remove('partner-print-open')`);
-  await tool('register'); await fill('[data-document-type]', 'partner-coin-purchase');
+  await tool('partner-invoice'); await assertEntryScope('partner'); await fill('[data-document-type]', 'partner-coin-purchase');
   await fill('[data-partner-invoice] [name="gold18Price"]', '5000000');
   await fill('[data-partner-line="0"] [name="itemName"]', 'سکه همکار');
   await fill('[data-partner-line="0"] [name="coinCount"]', '۲');
@@ -285,12 +347,70 @@ try {
   const beforeRemittance = await workspace();
   assert.equal(beforeRemittance.data.partners[0].goldBalance, 19.866667, 'Melted purchase converts lower purity to 750');
   assert.equal(beforeRemittance.data.customers.length, 1);
-  await fill('[data-document-type]', 'partner-remittance'); await ready('[data-partner-settlement-form]');
-  assert.equal(await evaluate(`document.querySelector('[data-partner-document-entry] button[type="submit"]') !== null`), true, 'Remittance offers financial submit');
+  await fill('[data-document-type]', 'partner-remittance'); await ready('[data-partner-remittance-placeholder], [data-partner-settlement-form]');
+  if (await evaluate(`Boolean(document.querySelector('[data-partner-remittance-placeholder]'))`)) {
+    assert.equal(await evaluate(`document.querySelector('[data-partner-document-entry] button[type="submit"]') !== null`), false, 'Remittance placeholder has no financial submit');
+  }
   assert.equal((await workspace()).revision, beforeRemittance.revision, 'Opening remittance cannot post a ledger entry');
   await screenshot('accounting-partner-remittance', '[data-partner-document-entry]');
-  await fill('[data-document-type]', 'crafted-sale');
+  await assertEntryScope('partner');
+  await tool('register'); await assertEntryScope('customer');
   assert.equal(await evaluate(`document.querySelector('.document-form [name="customerName"]').value`), 'پیش‌نویس مشتری محفوظ', 'Customer draft survives supplier entry');
+  assert.equal(await evaluate(`document.querySelector('.recent-documents-details').textContent.includes('دستبند خرید از همکار')`), false, 'Customer recent documents exclude supplier purchases');
+  await tool('expense'); await assertEntryScope('store');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="description"]').value`), 'هزینه ارسال اسناد', 'Supplier entry and recovery preserve the independent expense draft');
+  await resize(390, 844); await assertEntryScope('store'); await screenshot('accounting-store-expense-mobile', '[data-document-scope="store"]');
+  const beforeExpense = await workspace();
+  const readExpenseDrafts = () => evaluate(`({ customer: JSON.parse(localStorage.getItem('noor-accounting-draft:v1:alpha-account:document')), expense: JSON.parse(localStorage.getItem('noor-accounting-draft:v1:alpha-account:expense')) })`);
+  const beforeExpenseDrafts = await readExpenseDrafts();
+  const expenseRequestStart = requests.length;
+  dropNextExpenseResponse = true;
+  await click('.document-form button[type="submit"]');
+  await until(`document.querySelector('.document-form .form-message.error') && document.querySelector('[data-retry-commit]') && !document.querySelector('[data-retry-commit]').disabled`);
+  assert.equal(dropNextExpenseResponse, false, 'The expense commits before its acknowledgment is lost');
+  assert.equal(await evaluate(`Boolean(document.querySelector('.document-form .form-message.success'))`), false, 'Expense success waits for server acknowledgment');
+  const pendingExpenseDrafts = await readExpenseDrafts();
+  assert.ok(pendingExpenseDrafts.expense.requestId, 'Unconfirmed expense keeps a durable retry identity');
+  assert.deepEqual(pendingExpenseDrafts.expense.form, beforeExpenseDrafts.expense.form, 'Unconfirmed expense retains every form value');
+  assert.deepEqual(pendingExpenseDrafts.customer, beforeExpenseDrafts.customer, 'The customer draft is unchanged by the expense request');
+  const expenseRecovery = await evaluate(`JSON.parse(localStorage.getItem('noor:pending-workspace:v1:alpha-account'))`);
+  assert.equal(expenseRecovery.body.requestId, pendingExpenseDrafts.expense.requestId, 'Expense draft and recovery refer to the same request');
+  const committedExpense = await workspace();
+  assert.equal(committedExpense.data.documents.length, beforeExpense.data.documents.length + 1, 'The expense exists once despite the lost response');
+  await tool('register');
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-document-scope="customer"]'))`), false, 'Pending expense blocks opening customer registration');
+  await tool('partner-invoice');
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-document-scope="partner"]'))`), false, 'Pending expense blocks opening partner registration');
+  assert.deepEqual(await readExpenseDrafts(), pendingExpenseDrafts, 'Blocked cross-group navigation cannot replace either draft or the expense request identity');
+  assert.deepEqual(await workspace(), committedExpense, 'Blocked navigation makes no financial changes');
+  await tool('home'); await go('/account'); await ready('.workspace-page'); await tool('expense'); await assertEntryScope('store');
+  assert.deepEqual(await readExpenseDrafts(), pendingExpenseDrafts, 'Reload retains the pending expense and independent customer draft');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="expenseAmount"]').value`), '123,000', 'Reopening pending expense restores its amount');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="expenseAmount"]').matches(':disabled')`), true, 'Pending expense stays locked to its original payload');
+  await click('.document-form button[type="submit"]');
+  await until(`document.querySelector('.document-form .form-message.success') && !document.querySelector('[data-retry-commit]')`);
+  const afterExpense = await workspace();
+  assert.deepEqual(afterExpense, committedExpense, 'Retry acknowledges the same expense without another document or revision');
+  const expenseWrites = requests.slice(expenseRequestStart).filter(entry => entry.path === '/api/owner/workspace' && entry.method === 'PUT');
+  assert.equal(expenseWrites.length, 2, 'Expense save and its one retry issue exactly two requests');
+  assert.deepEqual(expenseWrites[1].body, expenseWrites[0].body, 'Expense retry replays the exact revision, payload and request identity');
+  assert.equal(expenseWrites[1].body.requestId, pendingExpenseDrafts.expense.requestId);
+  assert.equal(afterExpense.data.documents.length, beforeExpense.data.documents.length + 1, 'Store registration saves one expense');
+  assert.equal(afterExpense.data.documents[0].type, 'expense');
+  assert.equal(afterExpense.data.documents[0].amount, 123000);
+  assert.deepEqual(afterExpense.data.documents.slice(1), beforeExpense.data.documents, 'Saving store expense preserves all customer and partner documents');
+  assert.deepEqual(afterExpense.data.customers, beforeExpense.data.customers, 'Store expense does not change customer balances');
+  assert.deepEqual(afterExpense.data.partners, beforeExpense.data.partners, 'Store expense does not change partner balances');
+  await tool('register'); await assertEntryScope('customer');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="customerName"]').value`), 'پیش‌نویس مشتری محفوظ', 'Saving expense cannot clear the customer draft');
+  assert.equal(await evaluate(`document.querySelector('.recent-documents-details').textContent.includes('هزینه ارسال اسناد')`), false, 'Customer recent documents exclude store expenses');
+  await go('/account'); await ready('.workspace-page'); await tool('register');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="customerName"]').value`), 'پیش‌نویس مشتری محفوظ', 'Customer draft survives reload after expense acknowledgment');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="note"]').value`), 'یادداشت پیش‌نویس مشتری', 'Expense acknowledgment preserves the complete customer header');
+  await tool('expense'); await assertEntryScope('store');
+  assert.equal(await evaluate(`document.querySelector('.document-form [name="description"]').value`), '', 'Confirmed expense clears only its own draft');
+  await tool('partner-remittance'); await assertEntryScope('partner'); await ready('[data-partner-remittance-placeholder], [data-partner-settlement-form]');
+  await resize(1440);
   await click('[aria-label="خروج از حساب"]'); await ready('.accounting-hero');
   await go('/login'); await ready('#account-username'); await until(`!document.querySelector('.accounting-submit').disabled`);
   await fill('#account-username', 'beta-account'); await fill('#account-password', 'browser-password-beta'); await click('.accounting-submit'); await ready('.workspace-page');
@@ -298,7 +418,7 @@ try {
   for (const path of ['/api/public/products', '/api/public/gallery', '/api/public/contact']) assert.equal((await fetch(`${backendOrigin}${path}`)).status, 404);
   assert.equal(requests.some(item => item.path.startsWith('/api/public/')), false, 'Accounting pages never request a public catalog');
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
-  console.log('Accounting browser checks passed: isolated accounts/drafts, misc750, inline supplier crafted/melted/coin purchase, editable profit and rial labor in gold, durable replay, payments, remittance entry, mobile/print, retired storefront.');
+  console.log('Accounting browser checks passed: scoped customer/store/partner forms, independent drafts and legacy expense migration, isolated accounts, misc750, supplier crafted/melted/coin purchase, editable profit and rial labor in gold, durable replay, payments, remittance navigation, mobile/print, retired storefront.');
 } catch (error) {
   if (evaluate) { try { console.error('Browser state:', await evaluate(`JSON.stringify({path:location.pathname,text:document.body.innerText.slice(-4500)})`)); } catch {} }
   if (exceptions.length) console.error('Browser exceptions:', JSON.stringify(exceptions));

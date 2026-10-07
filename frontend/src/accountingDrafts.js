@@ -8,13 +8,22 @@ export function readAccountingDraft(username, kind, storage) {
   } catch { return null; }
 }
 
+export function readDocumentDraft(username, kind, storage) {
+  if (kind !== 'document' && kind !== 'expense') return null;
+  const draft = readAccountingDraft(username, kind, storage);
+  if (kind === 'document') return draft?.form.type === 'expense' ? null : draft;
+  if (draft?.form.type === 'expense') return draft;
+  const legacyDraft = readAccountingDraft(username, 'document', storage);
+  return legacyDraft?.form.type === 'expense' ? legacyDraft : null;
+}
+
 export function writeAccountingDraft(username, kind, form, requestId = null, storage) {
   storage ||= globalThis.localStorage;
   storage?.setItem(key(username, kind), JSON.stringify({ version: 1, form, requestId }));
 }
 
 export function clearCommittedDraft(username, requestId, storage) {
-  for (const kind of ['document', 'opening']) {
+  for (const kind of ['document', 'expense', 'opening']) {
     try {
       storage ||= globalThis.localStorage;
       if (readAccountingDraft(username, kind, storage)?.requestId === requestId) storage?.removeItem(key(username, kind));

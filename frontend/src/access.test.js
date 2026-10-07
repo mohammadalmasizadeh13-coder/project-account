@@ -14,12 +14,25 @@ test('staff sees only assigned reports and no write or management tools', () => 
   assert.deepEqual(writableFields(staff), []);
 });
 
-test('trade requires permissions for both ledger and customer balances', () => {
+test('expense access alone does not grant customer or partner registration', () => {
   const staff = { role: 'staff', permissions: ['documents.read', 'documents.write'] };
+  assert.equal(canOpenTool(staff, 'entries'), true);
   assert.equal(canOpenTool(staff, 'expense'), true);
   assert.equal(canOpenTool(staff, 'register'), false);
-  staff.permissions.push('customers.read', 'customers.write');
+  assert.equal(canOpenTool(staff, 'partner-invoice'), false);
+  assert.equal(canOpenTool(staff, 'partner-remittance'), false);
+  assert.deepEqual(writableFields(staff), ['documents']);
+});
+
+test('customer registration requires ledger and customer writes without granting partner tools', () => {
+  const staff = { role: 'staff', permissions: ['customers.read', 'customers.write'] };
+  assert.equal(canOpenTool(staff, 'register'), false);
+  staff.permissions.push('documents.read', 'documents.write');
   assert.equal(canOpenTool(staff, 'register'), true);
+  assert.equal(canOpenTool(staff, 'customer-entry'), true);
+  assert.equal(canOpenTool(staff, 'settlement-entry'), true);
+  assert.equal(canOpenTool(staff, 'partner-invoice'), false);
+  assert.equal(canOpenTool(staff, 'partner-remittance'), false);
   assert.deepEqual(writableFields(staff), ['documents', 'customers']);
 });
 
@@ -48,9 +61,14 @@ test('business partner access is separate from customers and purchasing requires
   assert.equal(canOpenTool(staff, 'partners'), true);
   assert.equal(can(staff, 'customers.read'), false);
   assert.equal(canOpenTool(staff, 'partner-invoice'), false);
+  assert.equal(canOpenTool(staff, 'partner-remittance'), true);
+  assert.equal(canOpenTool(staff, 'entries'), true);
+  assert.equal(canOpenTool(staff, 'register'), false);
   staff.permissions.push('documents.read', 'documents.write');
   assert.equal(canOpenTool(staff, 'partner-invoice'), true);
-  assert.equal(canOpenTool(staff, 'register'), true);
+  assert.equal(canOpenTool(staff, 'register'), false);
+  assert.equal(canOpenTool(staff, 'customer-entry'), false);
+  assert.equal(canOpenTool(staff, 'settlement-entry'), false);
   assert.equal(canOpenTool(staff, 'partner-remittance'), true);
   assert.equal(can(staff, 'customers.write'), false, 'Supplier entry does not grant customer writes');
 });

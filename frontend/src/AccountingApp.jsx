@@ -1,5 +1,5 @@
 import { ownerStorage } from './ownerStorage.js';
-import { readAccountingDraft, writeAccountingDraft, clearCommittedDraft } from './accountingDrafts.js';
+import { readAccountingDraft, readDocumentDraft, writeAccountingDraft, clearCommittedDraft } from './accountingDrafts.js';
 import StoreSettings from './StoreSettings.jsx';
 import { can, canOpenTool } from './access.js';
 import React, { useEffect, useRef, useState } from 'react';
@@ -628,18 +628,31 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const notificationsRef = useRef(null);
   const activeSection = toolSections[activeTool] || 'home';
   const sectionTitle = key => workspaceSections[key];
-  const initialDocumentDraft = useRef(readAccountingDraft(username, 'document'));
-  const documentRequestId = useRef(initialDocumentDraft.current?.requestId || null);
+  const initialDocumentDraft = useRef(readDocumentDraft(username, 'document'));
+  const initialExpenseDraft = useRef(readDocumentDraft(username, 'expense'));
+  const customerRequestId = useRef(initialDocumentDraft.current?.requestId || null);
+  const expenseRequestId = useRef(initialExpenseDraft.current?.requestId || null);
+  const documentDraftKind = activeTool === 'expense' ? 'expense' : 'document';
+  const documentRequestId = documentDraftKind === 'expense' ? expenseRequestId : customerRequestId;
   const documentOperation = useRef(false);
   const [documentSaving, setDocumentSaving] = useState(false);
-  const [documentLocked, setDocumentLocked] = useState(Boolean(documentRequestId.current && ownerStorage.status().recovery?.requestId === documentRequestId.current));
+  const [documentLocks, setDocumentLocks] = useState(() => ({
+    document: Boolean(customerRequestId.current && ownerStorage.status().recovery?.requestId === customerRequestId.current),
+    expense: Boolean(expenseRequestId.current && ownerStorage.status().recovery?.requestId === expenseRequestId.current),
+  }));
+  const documentLocked = documentLocks[documentDraftKind];
+  const setDocumentLocked = locked => setDocumentLocks(current => ({ ...current, [documentDraftKind]: locked }));
   const [draftError, setDraftError] = useState('');
-  const [documentForm, setDocumentForm] = useState(() => ({ ...createEmptyDocumentForm(), gramPrice: priceForm.goldGramPrice, ...initialDocumentDraft.current?.form }));
-  const [partnerEntryType, setPartnerEntryType] = useState(() => {
+  const [customerDocumentForm, setCustomerDocumentForm] = useState(() => ({ ...createEmptyDocumentForm(), gramPrice: priceForm.goldGramPrice, ...initialDocumentDraft.current?.form }));
+  const [expenseDocumentForm, setExpenseDocumentForm] = useState(() => ({ ...createEmptyDocumentForm('expense'), ...initialExpenseDraft.current?.form }));
+  const documentForm = documentDraftKind === 'expense' ? expenseDocumentForm : customerDocumentForm;
+  const setDocumentForm = documentDraftKind === 'expense' ? setExpenseDocumentForm : setCustomerDocumentForm;
+  const [partnerPurchaseType, setPartnerPurchaseType] = useState(() => {
     const saved = readAccountingDraft(username, 'document-entry-mode')?.form?.type;
-    if (partnerDocumentTypes.some(type => type.value === saved) && canOpen(saved === 'partner-remittance' ? 'partner-remittance' : 'partner-invoice')) return saved;
-    return !has('customers.write') && canOpen('partner-invoice') ? 'partner-crafted-purchase' : '';
+    return partnerDocumentTypes.some(type => type.value === saved && type.category) ? saved : 'partner-crafted-purchase';
   });
+  const partnerEntry = ['partner-invoice', 'partner-remittance'].includes(activeTool);
+  const partnerEntryType = activeTool === 'partner-remittance' ? activeTool : partnerPurchaseType;
   const [searchTerm, setSearchTerm] = useState('');
   const [formMessage, setFormMessage] = useState(null);
   const [documentErrors, setDocumentErrors] = useState({});
@@ -649,13 +662,18 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const [priceMessage, setPriceMessage] = useState(null);
 
   useEffect(() => {
-    try { writeAccountingDraft(username, 'document', documentForm, documentRequestId.current); setDraftError(''); }
+    try {
+      // Save a migrated expense before replacing its old shared draft slot.
+      writeAccountingDraft(username, 'expense', expenseDocumentForm, expenseRequestId.current);
+      writeAccountingDraft(username, 'document', customerDocumentForm, customerRequestId.current);
+      setDraftError('');
+    }
     catch { setDraftError('پیش‌نویس در مرورگر ذخیره نشد؛ تا تأیید ثبت در سرور، این صفحه را نبندید.'); }
-  }, [username, documentForm]);
+  }, [username, customerDocumentForm, expenseDocumentForm]);
   useEffect(() => {
-    try { writeAccountingDraft(username, 'document-entry-mode', { type: partnerEntryType }); }
+    try { writeAccountingDraft(username, 'document-entry-mode', { type: partnerPurchaseType }); }
     catch { setDraftError('نوع سند انتخاب‌شده در مرورگر ذخیره نشد.'); }
-  }, [username, partnerEntryType]);
+  }, [username, partnerPurchaseType]);
 
   const applyStockWorkspace = saved => {
     if (!saved) throw new Error('نشست تغییر کرده است؛ دوباره وارد حساب شوید.');
@@ -758,26 +776,26 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
   const openTool = tool => {
     const partnerDocument = partnerDocumentTypes.find(type => type.value === tool);
-    if (!canOpen(partnerDocument && tool !== 'partner-remittance' ? 'partner-invoice' : tool)) { setStorageMessage('دسترسی این بخش برای حساب شما فعال نشده است.'); return; }
-    if (tool === 'partner-invoice' || partnerDocument) {
-      if (documentSaving || documentLocked || documentOperation.current) { setStorageMessage('ابتدا وضعیت ثبت سند جاری را مشخص کنید.'); return; }
-      setPartnerEntryType(partnerDocument ? tool : 'partner-crafted-purchase');
-      tool = 'register';
+    if (!canOpen(partnerDocument && tool !== 'partner-remittance' ? 'partner-invoice' : tool)) { setStorageMessage('دسترسی این بخش برای حساب شما فعال نشده است.'); return false; }
+    if (partnerDocument && tool !== 'partner-remittance') tool = 'partner-invoice';
+    if (['register', 'expense', 'partner-invoice', 'partner-remittance'].includes(tool)) {
+      const pendingKind = documentLocks.expense ? 'expense' : 'document';
+      const savingKind = documentOperation.current ? documentOperation.current : pendingKind;
+      const pendingTool = savingKind === 'expense' ? 'expense' : 'register';
+      if ((documentSaving || documentOperation.current || documentLocks.document || documentLocks.expense) && tool !== pendingTool) {
+        setStorageMessage(`ابتدا وضعیت ثبت ${pendingTool === 'expense' ? 'هزینه فروشگاه' : 'سند مشتری'} را مشخص کنید.`); return false;
+      }
+      if (tool !== activeTool) { setDocumentErrors({}); setFormMessage(null); }
     }
+    if (partnerDocument?.category) setPartnerPurchaseType(partnerDocument.value);
     if (tool === 'crm' && !has('customers.read')) tool = 'partners';
     if (tool === 'settings') setSettingsVisited(true);
     setStorageMessage('');
-    if (tool === 'expense') {
-      if (documentSaving || documentLocked || documentOperation.current) { setStorageMessage('ثبت سند در حال تأیید است؛ ابتدا وضعیت ذخیره را مشخص کنید.'); return; }
-      if (documentForm.invoiceRows?.length) { setStorageMessage('سند چندردیفی در حال تکمیل است؛ ابتدا آن را ثبت کنید یا ردیف‌هایش را حذف کنید.'); return; }
-      setDocumentForm(createEmptyDocumentForm('expense'));
-      setPartnerEntryType('');
-      setStockQuery(''); setDocumentErrors({}); setFormMessage(null);
-    }
-    setActiveTool(tool === 'expense' ? 'register' : tool); setMenuOpen(false); setSelectedChequeId('');
+    setActiveTool(tool); setMenuOpen(false); setSelectedChequeId('');
     if (tool !== 'crm') setSelectedCrmId('');
     if (notificationsRef.current) notificationsRef.current.open = false;
     window.scrollTo({ top: 0, behavior: 'instant' });
+    return true;
   };
   const openCustomer = id => { openTool('crm'); setSelectedCrmId(id); };
   const openCheque = cheque => { openTool('cheques'); setSelectedChequeId(cheque?.id || ''); };
@@ -799,7 +817,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const previewAmount = previewRows.reduce((sum, row) => sum + (saleMode ? settlementRowAmount(row) : getDocumentAmount(row)), 0);
   const paymentStep = saleMode && Boolean(documentForm.invoicePaymentStep);
   const paymentPreview = invoiceSettlement(previewRows, documentForm.cashPaid, documentForm.gold18Price ?? savedPrices.goldGramPrice ?? '');
-  const latestDocuments = groupInvoices(documents).slice(0, 5);
+  const latestDocuments = groupInvoices(documents.filter(document => expenseMode ? document.type === 'expense' : isTradeDocument(document) && !document.partnerId)).slice(0, 5);
   const assets = assetReport(stock, savedPrices);
   const liveInventoryValue = assetReport(stock, priceForm).totalToman;
   const normalizedSearch = searchTerm.trim().toLocaleLowerCase('fa-IR');
@@ -935,9 +953,8 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     setStockQuery(''); setDocumentErrors({}); setFormMessage(null);
   };
   const continueVaultSale = request => {
-    openTool('register');
-    setPartnerEntryType('');
     setVaultSaleRequest(request);
+    if (!openTool('register')) return;
     if (documentSaving || documentLocked || documentOperation.current) {
       setStorageMessage('ثبت سند در حال تأیید است؛ پس از مشخص شدن وضعیت ذخیره، فروش جنس انتخاب‌شده را ادامه دهید.');
       return;
@@ -950,7 +967,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       return;
     }
     if (invoiceRows.some(row => !String(row.type).endsWith('-sale')) || (!documentForm.invoiceCurrentEmpty && !saleMode)) {
-      setFormMessage({ type: 'info', text: 'پیش‌نویس خرید یا هزینه محفوظ است. ابتدا آن را ثبت یا پاک کنید، سپس فروش جنس انتخاب‌شده را ادامه دهید.' });
+      setFormMessage({ type: 'info', text: 'پیش‌نویس خرید محفوظ است. ابتدا آن را ثبت یا پاک کنید، سپس فروش جنس انتخاب‌شده را ادامه دهید.' });
       return;
     }
     const currentIds = separateSetMode
@@ -1107,19 +1124,22 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const chooseDocumentEntryType = event => {
     const value = event.target.value;
     if (documentSaving || documentLocked || documentOperation.current) return;
-    const partnerType = partnerDocumentTypes.find(type => type.value === value);
-    if (partnerType) {
+    if (partnerEntry) {
+      if (!partnerDocumentTypes.some(type => type.value === value)) return;
       if (!canOpen(value === 'partner-remittance' ? 'partner-remittance' : 'partner-invoice')) return;
-      setPartnerEntryType(value); setFormMessage(null); setStorageMessage('');
+      if (value !== 'partner-remittance') setPartnerPurchaseType(value);
+      setActiveTool(value === 'partner-remittance' ? value : 'partner-invoice');
+      setFormMessage(null); setStorageMessage('');
       return;
     }
-    if (!has('customers.write') && value !== 'expense') return;
-    setPartnerEntryType('');
+    if (activeTool !== 'register' || !has('customers.write') || !documentTypes.some(type => type.value === value && type.value !== 'expense')) return;
     if (value !== documentForm.type) updateDocumentField(event);
   };
-  const documentTypeSelector = <label className="document-type-select">نوع سند<select data-document-type name="type" value={partnerEntryType || documentForm.type} disabled={documentSaving || documentLocked} onChange={chooseDocumentEntryType}>
-    <optgroup label="اسناد مشتری و فروشگاه">{documentTypes.filter(type => has('customers.write') || type.value === 'expense').map(type => <option key={type.value} value={type.value}>{type.label}</option>)}</optgroup>
-    {(canOpen('partner-invoice') || canOpen('partner-remittance')) && <optgroup label="اسناد همکاران">{partnerDocumentTypes.filter(type => canOpen(type.value === 'partner-remittance' ? 'partner-remittance' : 'partner-invoice')).map(type => <option key={type.value} value={type.value}>{type.label}</option>)}</optgroup>}
+  const availableDocumentTypes = partnerEntry
+    ? partnerDocumentTypes.filter(type => canOpen(type.value === 'partner-remittance' ? 'partner-remittance' : 'partner-invoice'))
+    : documentTypes.filter(type => expenseMode ? type.value === 'expense' : type.value !== 'expense');
+  const documentTypeSelector = <label className="document-type-select">{partnerEntry ? 'نوع سند همکار' : expenseMode ? 'نوع سند فروشگاه' : 'نوع سند مشتری'}<select data-document-type name="type" value={partnerEntry ? partnerEntryType : documentForm.type} disabled={documentSaving || documentLocked} onChange={chooseDocumentEntryType}>
+    {availableDocumentTypes.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
   </select></label>;
 
   const updatePriceField = event => {
@@ -1174,11 +1194,11 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
   const confirmDocument = async (changes, successMessage, resetType = 'crafted-sale') => {
     if (documentOperation.current) return;
-    documentOperation.current = true; setDocumentSaving(true); setFormMessage(null);
+    documentOperation.current = documentDraftKind; setDocumentSaving(true); setFormMessage(null);
     const requestId = documentRequestId.current || crypto.randomUUID();
     documentRequestId.current = requestId;
     try {
-      writeAccountingDraft(username, 'document', documentForm, requestId);
+      writeAccountingDraft(username, documentDraftKind, documentForm, requestId);
       const saved = await ownerStorage.commit(changes, requestId);
       applyStockWorkspace(saved);
       clearCommittedDraft(username, requestId);
@@ -1190,7 +1210,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       if (invoice?.settlementVersion === 1) setSelectedInvoice(invoice);
       setFormMessage({ type: 'success', text: invoice ? `سند شمارهٔ ${formatNumber(invoice.number)} با ${formatNumber(invoice.rows.length)} ردیف ثبت شد؛ موجودی و حساب مشتری به‌روز شد.` : successMessage });
     } catch (error) {
-      setDocumentLocked(Boolean(ownerStorage.status().recovery));
+      setDocumentLocked(ownerStorage.status().recovery?.requestId === requestId);
       setFormMessage({ type: 'error', text: `ثبت هنوز تأیید نشده و اطلاعات فرم محفوظ است. ${error.message || 'دوباره تلاش کنید.'}` });
     } finally { documentOperation.current = false; setDocumentSaving(false); }
   };
@@ -1203,6 +1223,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       await confirmDocument(recovery.changes, 'سند و تغییرات مرتبط در سرور ذخیره و تأیید شد.', documentForm.type === 'expense' ? 'expense' : 'crafted-sale');
       return;
     }
+    if (recovery) { setFormMessage({ type: 'error', text: 'ابتدا ثبت قبلی را با گزینهٔ تلاش دوباره تأیید کنید.' }); return; }
     if (!has('documents.write') || (!expenseMode && !has('customers.write'))) {
       setFormMessage({ type: 'error', text: 'برای ثبت خرید و فروش اجازهٔ ویرایش اسناد و مشتریان لازم است.' }); return;
     }
@@ -1340,9 +1361,9 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       {user.role === 'owner' && <div hidden={activeTool !== 'opening'}><OpeningInventoryPage username={username} prices={savedPrices} onComplete={completeOpeningInventory}/></div>}
       {settingsVisited && <div hidden={activeTool !== 'settings'}><StoreSettings user={user} onSessionChanged={onSessionChanged} migrationNotice={migrationNotice} onImported={onImported}/></div>}
       {activeSection === 'crm' && <nav className="section-tabs" aria-label="گروه طرف حساب">{has('customers.read') && <button type="button" data-crm-group="customers" aria-pressed={!['partners', 'partner-invoice'].includes(activeTool)} onClick={() => openTool('crm')}>مشتریان</button>}{has('partners.read') && <button type="button" data-crm-group="partners" aria-pressed={['partners', 'partner-invoice'].includes(activeTool)} onClick={() => openTool('partners')}>همکاران تجاری</button>}</nav>}
-      {activeTool === 'settings' ? null : ['partners', 'partner-invoice'].includes(activeTool) ? <PartnerCRM key={activeTool} username={username} partners={partners} documents={documents} prices={savedPrices} onAction={performPartnerAction} readOnly={!has('partners.write')} canPurchase={has('partners.write') && has('documents.write')} initialAction={activeTool === 'partner-invoice' ? 'invoice' : ''}/> : activeTool === 'home' && user.role !== 'owner' ? <div><p className="form-message">{username}</p>{canOpen('entries') && <ToolHub kind="entries" onOpen={openTool} canOpen={canOpen}/>}<ToolHub kind="reports" onOpen={openTool} canOpen={canOpen}/></div> : activeTool === 'home' ? <HomePage username={username} documents={documents} prices={savedPrices} assets={assets} customers={customers} cheques={cheques} today={today} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount }} onOpen={openTool}/> : ['entries','reports'].includes(activeTool) ? <ToolHub kind={activeTool} onOpen={openTool} canOpen={canOpen}/> : ['dashboard','products','balance','gold-entry'].includes(activeTool) ? <SalesDashboard key={activeTool} view={{ dashboard:'sales', products:'products', balance:'balance', 'gold-entry':'gold-entry' }[activeTool]} onOpen={openTool} username={username} documents={documents} prices={savedPrices} goldPurchases={goldPurchases} onSaveGoldPurchases={has('goldPurchases.write') ? persistGoldPurchases : undefined} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount, number: toNumber }}/> : activeTool === 'profit' ? <ProfitPage documents={documents} today={today} onOpen={openTool} canOpen={canOpen}/> : activeTool === 'rates' ? <RatesPage prices={savedPrices} onOpen={has('prices.write') ? openTool : undefined}/> : activeTool === 'customer-reports' ? <CustomerReports customers={customers} documents={documents} today={today} onSelect={openCustomer}/> : activeTool === 'cheque-reports' ? <ChequeReportPage cheques={cheques} today={today} onEdit={has('cheques.write') ? openCheque : undefined}/> : activeTool === 'opening' ? null : activeTool === 'vault' ? <><InventoryVault report={stock} assets={assets} prices={savedPrices} onCreateItem={has('documents.write') ? createStockItem : undefined} onEditItem={has('documents.write') ? (id, changes) => mutateStockItem(id, changes) : undefined} onDeleteItem={has('documents.write') ? id => mutateStockItem(id, null) : undefined} canEditPurchases={has('customers.write')} onPrices={has('prices.write') ? () => openTool('pricing') : undefined} onSell={canOpen('register') ? sellStock : undefined} onSellSet={canOpen('register') ? sellSet : undefined} onReceive={canOpen('register') ? () => { openTool('register'); updateDocumentField({ target: { name: 'type', value: 'crafted-purchase' } }); } : undefined} onLinkSale={has('documents.write') ? (saleId, sourceId) => persistDocuments(linkHistoricalSale(currentDocuments(), saleId, sourceId)) : undefined}/></> : activeTool === 'cheques' ? <ChequeManager key={selectedChequeId} cheques={cheques} customers={customers} onSave={persistCheques} parseNumber={toNumber} today={today} initialChequeId={selectedChequeId}/> : ['crm','crm-occasions','customer-entry','settlement-entry'].includes(activeTool) ? <div className="workspace-tools crm-section-page"><CustomerCRM key={activeTool + selectedCrmId} customers={customers} documents={documents} onSave={saveCustomerProfile} readOnly={!has('customers.write')} parseNumber={toNumber} today={today} initialSelectedId={selectedCrmId} initialView={activeTool === 'crm-occasions' ? 'occasions' : 'customers'} initialAction={activeTool === 'customer-entry' ? 'new' : activeTool === 'settlement-entry' ? 'settlement' : ''}/></div> : <div className="workspace-tools">
+      {activeTool === 'settings' ? null : activeTool === 'partners' ? <PartnerCRM key={activeTool} username={username} partners={partners} documents={documents} prices={savedPrices} onAction={performPartnerAction} readOnly={!has('partners.write')} canPurchase={has('partners.write') && has('documents.write')} initialAction={activeTool === 'partner-invoice' ? 'invoice' : ''}/> : activeTool === 'home' && user.role !== 'owner' ? <div><p className="form-message">{username}</p>{canOpen('entries') && <ToolHub kind="entries" onOpen={openTool} canOpen={canOpen}/>}<ToolHub kind="reports" onOpen={openTool} canOpen={canOpen}/></div> : activeTool === 'home' ? <HomePage username={username} documents={documents} prices={savedPrices} assets={assets} customers={customers} cheques={cheques} today={today} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount }} onOpen={openTool}/> : ['entries','reports'].includes(activeTool) ? <ToolHub kind={activeTool} onOpen={openTool} canOpen={canOpen}/> : ['dashboard','products','balance','gold-entry'].includes(activeTool) ? <SalesDashboard key={activeTool} view={{ dashboard:'sales', products:'products', balance:'balance', 'gold-entry':'gold-entry' }[activeTool]} onOpen={openTool} username={username} documents={documents} prices={savedPrices} goldPurchases={goldPurchases} onSaveGoldPurchases={has('goldPurchases.write') ? persistGoldPurchases : undefined} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount, number: toNumber }}/> : activeTool === 'profit' ? <ProfitPage documents={documents} today={today} onOpen={openTool} canOpen={canOpen}/> : activeTool === 'rates' ? <RatesPage prices={savedPrices} onOpen={has('prices.write') ? openTool : undefined}/> : activeTool === 'customer-reports' ? <CustomerReports customers={customers} documents={documents} today={today} onSelect={openCustomer}/> : activeTool === 'cheque-reports' ? <ChequeReportPage cheques={cheques} today={today} onEdit={has('cheques.write') ? openCheque : undefined}/> : activeTool === 'opening' ? null : activeTool === 'vault' ? <><InventoryVault report={stock} assets={assets} prices={savedPrices} onCreateItem={has('documents.write') ? createStockItem : undefined} onEditItem={has('documents.write') ? (id, changes) => mutateStockItem(id, changes) : undefined} onDeleteItem={has('documents.write') ? id => mutateStockItem(id, null) : undefined} canEditPurchases={has('customers.write')} onPrices={has('prices.write') ? () => openTool('pricing') : undefined} onSell={canOpen('register') ? sellStock : undefined} onSellSet={canOpen('register') ? sellSet : undefined} onReceive={canOpen('register') ? () => { if (openTool('register')) updateDocumentField({ target: { name: 'type', value: 'crafted-purchase' } }); } : undefined} onLinkSale={has('documents.write') ? (saleId, sourceId) => persistDocuments(linkHistoricalSale(currentDocuments(), saleId, sourceId)) : undefined}/></> : activeTool === 'cheques' ? <ChequeManager key={selectedChequeId} cheques={cheques} customers={customers} onSave={persistCheques} parseNumber={toNumber} today={today} initialChequeId={selectedChequeId}/> : ['crm','crm-occasions','customer-entry','settlement-entry'].includes(activeTool) ? <div className="workspace-tools crm-section-page"><CustomerCRM key={activeTool + selectedCrmId} customers={customers} documents={documents} onSave={saveCustomerProfile} readOnly={!has('customers.write')} parseNumber={toNumber} today={today} initialSelectedId={selectedCrmId} initialView={activeTool === 'crm-occasions' ? 'occasions' : 'customers'} initialAction={activeTool === 'customer-entry' ? 'new' : activeTool === 'settlement-entry' ? 'settlement' : ''}/></div> : <div className="workspace-tools">
         <div className="account-main-panel">
-          <div className="panel-heading"><div><span>{({ register: 'ثبت خرید، فروش و هزینه', search: 'جستجو در سندها', cheques: 'مدیریت چک‌ها', pricing: 'ثبت نرخ طلا، سکه و ارز', crm: 'پرونده مشتریان' })[activeTool]}</span></div></div>
+          <div className="panel-heading"><div><span>{({ register: 'ثبت سند مشتری', expense: 'ثبت هزینه فروشگاه', 'partner-invoice': 'ثبت سند همکار', 'partner-remittance': 'حواله همکار', search: 'جستجو در سندها', cheques: 'مدیریت چک‌ها', pricing: 'ثبت نرخ طلا، سکه و ارز', crm: 'پرونده مشتریان' })[activeTool]}</span></div></div>
           <div className="ledger-panel">
             {activeTool === 'pricing' && <form className="price-form" onSubmit={submitPrices}>
               {priceMessage && <div className={`form-message ${priceMessage.type}`}>{priceMessage.text}</div>}
@@ -1364,21 +1385,20 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
               <button className="button button-primary full" type="submit"><TrendingUp size={17}/> ثبت قیمت و بروزرسانی جنس‌ها</button>
             </form>}
 
-            {activeTool === 'register' && partnerEntryType && <section className="document-form partner-document-entry" data-partner-document-entry>
+            {partnerEntry && <section className="document-form partner-document-entry" data-partner-document-entry data-document-scope="partner">
               {documentTypeSelector}
               <PartnerCRM key={partnerEntryType} embedded username={username} partners={partners} documents={documents} prices={savedPrices} onAction={performPartnerAction}
                 readOnly={!has('partners.write')} canPurchase={has('partners.write') && has('documents.write')}
                 invoiceDirection={partnerEntryType.endsWith('-sale') ? 'sale' : 'purchase'} initialAction={partnerEntryType === 'partner-remittance' ? 'remittance' : 'invoice'} initialCategory={partnerDocumentTypes.find(type => type.value === partnerEntryType)?.category || 'crafted'}/>
             </section>}
-            {activeTool === 'register' && !partnerEntryType && <form className="document-form" onSubmit={submitDocument} noValidate aria-busy={documentSaving}>
+            {['register', 'expense'].includes(activeTool) && <form className="document-form" data-document-scope={expenseMode ? 'store' : 'customer'} onSubmit={submitDocument} noValidate aria-busy={documentSaving}>
               {formMessage && <div className={`form-message ${formMessage.type}`} role={formMessage.type === 'error' ? 'alert' : 'status'}>{formMessage.text}</div>}
               {draftError && <p className="form-message error" role="alert">{draftError}</p>}
-              {vaultSaleRequest && <div className="invoice-draft-list" data-vault-sale-request role="status">
+              {!expenseMode && vaultSaleRequest && <div className="invoice-draft-list" data-vault-sale-request role="status">
                 <strong>ادامهٔ فروش «{vaultSaleRequest.name}»</strong>
                 <p>ورودی فعلی محفوظ است. پس از تکمیل، ثبت یا پاک کردن آن، فروش جنس انتخاب‌شده از صندوق را ادامه دهید.</p>
                 <div className="invoice-row-actions">
                   <button type="button" data-vault-sale-continue disabled={documentSaving || documentLocked} onClick={() => continueVaultSale(vaultSaleRequest)}>ادامه فروش این جنس</button>
-                  {expenseMode && <button type="button" data-vault-sale-clear disabled={documentSaving || documentLocked} onClick={clearInvoiceEditor}>پاک کردن ورودی فعلی هزینه</button>}
                   <button type="button" data-vault-sale-cancel onClick={() => setVaultSaleRequest(null)}>لغو انتخاب جنس</button>
                 </div>
               </div>}
@@ -1550,11 +1570,11 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
           </div>
         </div>
 
-      {activeTool === 'register' && <details className="account-table-panel recent-documents-details"><summary>آخرین سندهای ثبت‌شده</summary>
+      {['register', 'expense'].includes(activeTool) && <details className="account-table-panel recent-documents-details"><summary>{expenseMode ? 'آخرین هزینه‌های فروشگاه' : 'آخرین سندهای مشتری'}</summary>
         <div className="panel-heading">
           <div>
             <span>آخرین سندها</span>
-            <p>خلاصه خرید، فروش، هزینه‌ها و بدهی مرتبط با هر مشتری.</p>
+            <p>{expenseMode ? 'خلاصه هزینه‌های ثبت‌شده فروشگاه.' : 'خلاصه خرید، فروش و بدهی مرتبط با هر مشتری.'}</p>
           </div>
         </div>
         <div className="activity-table">

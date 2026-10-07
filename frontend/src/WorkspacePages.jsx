@@ -22,7 +22,7 @@ const entryGroups = [
     ['gold-entry', 'خرید برای تراز طلا', 'ثبت وزن طلای خریداری‌شده', Gem],
   ] },
   { key: 'customer', title: 'اسناد مشتری', tools: [
-    ['register', 'ثبت سند', 'خرید و فروش مشتری', ReceiptText],
+    ['register', 'ثبت سند مشتری', 'خرید و فروش مشتری', ReceiptText],
     ['customer-entry', 'ثبت مشتری', 'مشخصات، تولد و یادداشت', Users],
     ['settlement-entry', 'دریافت و پرداخت', 'تسویه حساب مشتری', Wallet],
   ] },

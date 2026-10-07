@@ -23,7 +23,6 @@ export function canOpenTool(user, tool) {
   if (user?.role !== 'staff') return false;
   if (tool === 'home' || tool === 'settings') return true;
   if (tool === 'crm') return can(user, 'customers.read') || can(user, 'partners.read');
-  if (tool === 'register') return can(user, 'documents.write') && (can(user, 'customers.write') || can(user, 'partners.write'));
   if (tool === 'entries') return entryKeys.some(key => canOpenTool(user, key));
   if (tool === 'reports') return reportKeys.some(key => canOpenTool(user, key));
   return !!toolPermissions[tool]?.every(permission => can(user, permission));
