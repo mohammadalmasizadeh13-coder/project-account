@@ -1,8 +1,10 @@
 import React, { useId } from 'react';
+import NumberInput from './NumberInput.jsx';
 import { Plus, Trash2 } from 'lucide-react';
 import { documentBreakdown, number } from './assets.js';
 import { craftedKinds } from './crmAnalytics.js';
 import { createSetPart } from './jewelrySets.js';
+import { profitPercentInput } from './profitDefaults.js';
 import './jewelrySets.css';
 
 const partKinds = craftedKinds.filter(kind => !['نیم‌ست', 'ست', 'سرویس'].includes(kind));
@@ -39,10 +41,10 @@ function PartField({ id, part, field, label, error, required = false, children }
   </label>;
 }
 
-export default function JewelrySetEditor({ parts = [], onChange, errors = {}, sale = false, prices }) {
+export default function JewelrySetEditor({ parts = [], onChange, errors = {}, sale = false, prices, documents = [] }) {
   const id = useId();
   const activeParts = sale ? parts.filter(part => part.selected !== false) : parts;
-  const breakdown = part => documentBreakdown({ ...part, gramPrice: String(part.gramPrice ?? '').trim() ? part.gramPrice : prices?.goldGramPrice || '', category: 'crafted', type: sale ? 'crafted-sale' : 'crafted-purchase' });
+  const breakdown = part => documentBreakdown({ ...part, profitPercent: profitPercentInput(part.profitPercent, 'crafted'), gramPrice: String(part.gramPrice ?? '').trim() ? part.gramPrice : prices?.goldGramPrice || '', category: 'crafted', type: sale ? 'crafted-sale' : 'crafted-purchase' });
   const total = activeParts.reduce((sum, part) => sum + breakdown(part).total, 0);
   const changePart = (partId, field, value) => onChange(parts.map(part => part.id === partId ? { ...part, [field]: value } : part));
   const addPart = () => onChange([...parts, createSetPart({ gramPrice: prices?.goldGramPrice || parts[0]?.gramPrice || '' })]);
@@ -68,11 +70,12 @@ export default function JewelrySetEditor({ parts = [], onChange, errors = {}, sa
     <div className="jewelry-set-parts">
       {parts.map((part, index) => {
         const selected = !sale || part.selected !== false;
+        const source = sale ? documents.find(document => document.id === part.inventorySourceId) : null;
         const amount = breakdown(part);
         const title = part.itemName || part.craftedKind || `قطعه ${formatNumber(index + 1)}`;
         const errorFor = field => errors[`setParts.${part.id}.${field}`];
         const field = (name, label, options = {}) => <PartField key={name} id={id} part={part} field={name} label={label} error={errorFor(name)} required={options.required}>
-          <input inputMode={options.inputMode || 'decimal'} value={part[name] ?? ''} placeholder={options.placeholder ?? '۰'} readOnly={sale && Boolean(options.identity)} disabled={!selected} onChange={event => changePart(part.id, name, event.target.value)}/>
+          <NumberInput inputMode={options.inputMode || 'decimal'} value={part[name] ?? ''} placeholder={options.placeholder ?? '۰'} readOnly={sale && Boolean(options.identity)} disabled={!selected} onChange={event => changePart(part.id, name, event.target.value)}/>
         </PartField>;
 
         return <fieldset key={part.id} data-set-part={part.id} className={`jewelry-set-part${selected ? '' : ' jewelry-set-part-unselected'}`}>
@@ -89,13 +92,13 @@ export default function JewelrySetEditor({ parts = [], onChange, errors = {}, sa
 
           <div className="jewelry-set-fields">
             <PartField id={id} part={part} field="craftedKind" label="نوع قطعه" error={errorFor('craftedKind')} required>
-              <select value={part.craftedKind || ''} disabled={sale} onChange={event => changePart(part.id, 'craftedKind', event.target.value)}>
+              <select value={part.craftedKind || ''} disabled={!selected || (sale && partKinds.includes(source?.craftedKind))} onChange={event => changePart(part.id, 'craftedKind', event.target.value)}>
                 <option value="">انتخاب نوع قطعه</option>
                 {partKinds.map(kind => <option key={kind} value={kind}>{kind}</option>)}
               </select>
             </PartField>
-            <PartField id={id} part={part} field="itemName" label={part.craftedKind === 'سایر' ? 'نام قطعه' : 'نام یا مدل قطعه (اختیاری)'} error={errorFor('itemName')} required={part.craftedKind === 'سایر'}>
-              <input value={part.itemName || ''} readOnly={sale} placeholder={part.craftedKind === 'سایر' ? 'نام قطعه را وارد کنید' : 'مثلاً مدل قطعه'} onChange={event => changePart(part.id, 'itemName', event.target.value)}/>
+            <PartField id={id} part={part} field="itemName" label="نام یا مدل قطعه" error={errorFor('itemName')} required>
+              <input value={part.itemName || ''} readOnly={sale && Boolean(String(source?.itemName || '').trim())} disabled={!selected} placeholder="نام یا مدل قطعه را وارد کنید" onChange={event => changePart(part.id, 'itemName', event.target.value)}/>
             </PartField>
             {field('itemCount', sale ? 'تعداد فروش' : 'تعداد این قطعه', { required: true, inputMode: 'numeric', placeholder: '۱' })}
             {field('weight', 'وزن هر عدد (گرم)', { required: true, identity: true, placeholder: 'مثلاً ۵٫۲' })}
@@ -104,7 +107,7 @@ export default function JewelrySetEditor({ parts = [], onChange, errors = {}, sa
             {field('wagePercent', 'اجرت درصدی', { required: true })}
             {field('wageFixed', 'اجرت ثابت هر عدد (تومان)', { inputMode: 'numeric' })}
             {field('otherCosts', 'هزینه‌های دیگر هر عدد (تومان)', { inputMode: 'numeric' })}
-            {field('profitPercent', sale ? 'درصد سود فروشنده' : 'سود درصدی')}
+            {field('profitPercent', sale ? 'درصد سود فروشنده' : 'سود درصدی', { placeholder: 'خالی = ۷٪' })}
             {sale && field('discountRial', 'تخفیف این ردیف (تومان)', { inputMode: 'numeric' })}
           </div>
 

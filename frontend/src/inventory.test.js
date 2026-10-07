@@ -53,6 +53,14 @@ test('new sales default to seven percent profit without changing recorded stock'
     assert.equal(draft.profitPercent, '11');
   }
 });
+
+test('selling legacy stock without a name leaves it for explicit entry', () => {
+  for (const itemName of [undefined, '', '   ']) {
+    const source = Object.freeze({ ...entry, itemName, description: 'شرح خصوصی', craftedKind: 'النگو' });
+    assert.equal(stockSaleForm(source, {}).itemName, '');
+  }
+  assert.equal(stockSaleForm({ ...entry, itemName: ' النگو طرح گل ' }, {}).itemName, 'النگو طرح گل');
+});
 test('legacy sales require explicit linking; linking affects stock once and preserves accounting', () => {
   const oldSale = { ...sale, inventorySourceId: '', amount: 500, gramDebt: 1, itemSummary: 'old summary' };
   const docs = assignProductCodes([oldSale, entry]);

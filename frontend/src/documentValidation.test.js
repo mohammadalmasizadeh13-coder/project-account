@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateDocument } from './documentValidation.js';
 import { normalizeDigits } from './persianDate.js';
+import { miscGoldDefaults } from './miscGold.js';
 
 const parse = value => Number(normalizeDigits(value).replace(/[٬,\s]/g, '').replace(/٫/g, '.')) || 0;
-const melted = { customerName: 'مشتری', date: '2026-09-24', type: 'melted-purchase', gold18Price: '۱۰٬۰۰۰٬۰۰۰', itemCount: '۱', meltedWeight: '۲٫۵', meltedAyar: '۷۵۰', meltedGramPrice: '۱۰۰', assayCode: '۱۲۳', laboratoryName: 'تهران' };
+const melted = { customerName: 'مشتری', itemName: 'آب‌شده تهران', date: '2026-09-24', type: 'melted-purchase', gold18Price: '۱۰٬۰۰۰٬۰۰۰', itemCount: '۱', meltedWeight: '۲٫۵', meltedAyar: '۷۵۰', meltedGramPrice: '۱۰۰', assayCode: '۱۲۳', laboratoryName: 'تهران' };
 
 test('every purchase and sale requires a positive finite gold-18 snapshot independent of trade price', () => {
   for (const category of ['crafted', 'coin', 'melted', 'currency']) {
@@ -78,8 +79,44 @@ test('sale discounts may cover the full invoice but cannot exceed value, labor, 
 });
 
 test('discount limit also applies to fractional currency sales and leaves malformed discounts invalid', () => {
-  const sale = { customerName: 'مشتری', date: '2026-09-24', type: 'currency-sale', gold18Price: '۱۰٬۰۰۰٬۰۰۰', currencyType: 'USD', currencyAmount: '۱٫۵', currencyRate: '۱۰۰', profitPercent: '۷' };
+  const sale = { customerName: 'مشتری', itemName: 'دلار آمریکا', date: '2026-09-24', type: 'currency-sale', gold18Price: '۱۰٬۰۰۰٬۰۰۰', currencyType: 'USD', currencyAmount: '۱٫۵', currencyRate: '۱۰۰', profitPercent: '۷' };
   assert.deepEqual(validateDocument({ ...sale, discountRial: '۱۶۰٫۵' }, 'currency', parse), {});
   assert.ok(validateDocument({ ...sale, discountRial: '۱۶۱' }, 'currency', parse).discountRial);
   for (const discountRial of ['-1', 'abc', 'Infinity']) assert.ok(validateDocument({ ...sale, discountRial }, 'currency', parse).discountRial);
+});
+
+test('every new goods document requires a name even when a description or type exists', () => {
+  for (const category of ['crafted', 'coin', 'melted', 'currency']) {
+    for (const type of [`${category}-purchase`, `${category}-sale`, `opening-${category}`]) {
+      for (const itemName of [undefined, '', '   ', '\t\n']) {
+        const errors = validateDocument({ ...melted, type, itemName, description: 'شرح داخلی', craftedKind: 'انگشتر' }, category, parse);
+        assert.match(errors.itemName, /نام جنس/, `${type} rejects blank names`);
+      }
+      assert.equal(validateDocument({ ...melted, type, itemName: ' نام کالا ' }, category, parse).itemName, undefined);
+    }
+  }
+});
+
+test('crafted documents require an explicit valid kind independently of their name', () => {
+  const form = { ...melted, type: 'crafted-purchase', itemName: 'انگشتر طرح گل', itemCount: '۱', weight: '۲', gramPrice: '۱۰۰', ayar: '۷۵۰', wagePercent: '۰' };
+  for (const craftedKind of [undefined, '', ' ', 'نوع نامعتبر']) {
+    assert.match(validateDocument({ ...form, craftedKind }, 'crafted', parse).craftedKind, /نوع کار ساخته/);
+  }
+  assert.deepEqual(validateDocument({ ...form, craftedKind: 'انگشتر' }, 'crafted', parse), {});
+  assert.deepEqual(validateDocument({ date: form.date, type: 'expense', description: 'اجاره', expenseAmount: '۱۰۰' }, 'expense', parse), {});
+});
+
+test('misc purchase requires actual weight, explicit purity within 1 to 1000 and a historic gold price', () => {
+  const misc = { ...miscGoldDefaults(), customerName: 'فروشنده', itemName: 'طلای دست دوم', date: '2026-10-05',
+    type: 'misc-purchase', weight: '۱۰', ayar: '۷۴۰', gramPrice: '6000000', gold18Price: '6000000',
+  };
+  assert.deepEqual(validateDocument(misc, 'crafted', parse), {});
+  for (const ayar of [undefined, '', '۰', -1, '۰٫۵', '۱۰۰۱', 'abc', Infinity]) {
+    assert.ok(validateDocument({ ...misc, ayar }, 'crafted', parse).ayar, `reject ${ayar}`);
+  }
+  for (const weight of ['', 0, -1, 'abc', Infinity]) {
+    assert.ok(validateDocument({ ...misc, weight }, 'crafted', parse).weight, `reject ${weight}`);
+  }
+  assert.ok(validateDocument({ ...misc, gold18Price: '' }, 'crafted', parse).gold18Price);
+  assert.deepEqual(validateDocument({ ...misc, ayar: '۱۰۰۰' }, 'crafted', parse), {});
 });

@@ -1,8 +1,12 @@
 import { coinCatalog, currencyCatalog, documentBreakdown } from './assets.js';
 import { validateExpense } from './expenses.js';
 import { isTradeDocument } from './tradeGoldPrice.js';
+import { craftedKinds } from './crmAnalytics.js';
+import { profitPercentInput } from './profitDefaults.js';
+import { isMiscPurchase } from './miscGold.js';
 
 export function validateDocument(form, category, parseNumber) {
+  form = { ...form, profitPercent: profitPercentInput(form.profitPercent, category, form) };
   const errors = {};
   const required = (name, label) => { if (!String(form[name] || '').trim()) errors[name] = `${label} را وارد کنید.`; };
   const numeric = (name, label, allowZero = false, optional = false) => {
@@ -18,9 +22,12 @@ export function validateDocument(form, category, parseNumber) {
     return { ...errors, ...validateExpense(form) };
   }
   required('customerName', 'نام طرف حساب');
+  required('itemName', 'نام جنس');
   if (isTradeDocument(form)) numeric('gold18Price', 'قیمت طلای ۱۸ عیار هنگام ثبت');
   if (category === 'crafted') {
+    if (!craftedKinds.includes(form.craftedKind)) errors.craftedKind = 'نوع کار ساخته را انتخاب کنید.';
     for (const [name, label] of [['itemCount', 'تعداد'], ['weight', 'وزن'], ['gramPrice', 'قیمت هر گرم'], ['ayar', 'عیار']]) numeric(name, label);
+    if (isMiscPurchase(form) && !errors.ayar && (parseNumber(form.ayar) < 1 || parseNumber(form.ayar) > 1000)) errors.ayar = 'عیار طلای متفرقه باید بین ۱ و ۱۰۰۰ باشد.';
     numeric('wagePercent', 'اجرت درصدی', true);
   }
   if (category === 'coin') {

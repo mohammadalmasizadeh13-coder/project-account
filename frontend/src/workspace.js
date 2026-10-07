@@ -2,11 +2,11 @@ import { documentBreakdown, number, quantity } from './assets.js';
 import { dateBefore, iranDate } from './sales.js';
 import { isoToPersian, normalizeDigits, persianToIso } from './persianDate.js';
 
-export const workspaceSections = { home: 'صفحه اصلی', entries: 'ثبت‌ها', reports: 'گزارشات فروشگاه', crm: 'CRM و مشتریان' };
+export const workspaceSections = { home: 'صفحه اصلی', entries: 'ثبت‌ها', reports: 'گزارش‌های حسابداری', crm: 'CRM و طرف حساب‌ها', settings: 'تنظیمات حسابداری' };
 export const toolSections = {
   home: 'home', entries: 'entries', register: 'entries', expense: 'entries', opening: 'entries', cheques: 'entries', pricing: 'entries', 'gold-entry': 'entries', 'customer-entry': 'entries', 'settlement-entry': 'entries',
   reports: 'reports', dashboard: 'reports', products: 'reports', profit: 'reports', balance: 'reports', rates: 'reports', 'customer-reports': 'reports', vault: 'reports', search: 'reports', 'cheque-reports': 'reports',
-  crm: 'crm', 'crm-occasions': 'crm',
+  crm: 'crm', 'crm-occasions': 'crm', partners: 'crm', 'partner-invoice': 'crm', settings: 'settings',
 };
 
 export function birthdayReminders(customers, today = iranDate(), horizon = 7) {

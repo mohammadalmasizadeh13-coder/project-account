@@ -12,6 +12,11 @@ test('gold snapshots apply to both directions of every trade category', () => {
   }
 });
 
+test('misc purchase also retains and shows its historical gold rate', () => {
+  assert.equal(isTradeDocument({ type: 'misc-purchase' }), true);
+  assert.equal(tradeGoldPriceSummary({ type: 'misc-purchase', gold18Price: 6000000 }), 'طلای ۱۸ عیار هنگام ثبت: ۶٬۰۰۰٬۰۰۰ تومان / گرم');
+});
+
 test('opening inventory, cash documents and expenses have no gold snapshot summary', () => {
   for (const doc of [
     { type: 'crafted-purchase', source: 'opening-inventory' },

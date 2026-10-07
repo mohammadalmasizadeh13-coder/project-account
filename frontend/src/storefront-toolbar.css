@@ -1,0 +1,92 @@
+.noor-store .noor-toolbar {
+  justify-content: space-between;
+  gap: 16px 24px;
+}
+
+.noor-store .noor-catalogue-search {
+  flex: 1 1 280px;
+  min-height: 46px;
+  padding: 0 13px;
+  border-color: #dcd1bc;
+  background: #fffcf6;
+}
+
+.noor-store .noor-catalogue-search input {
+  min-height: 44px;
+}
+
+.noor-store .noor-catalogue-search .noor-search-submit {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.noor-store .noor-catalogue-search .noor-icon-button {
+  min-width: 32px;
+  min-height: 44px;
+}
+
+.noor-store .noor-toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-inline-start: auto;
+  min-width: 0;
+}
+
+.noor-store .noor-toolbar-controls .noor-sort {
+  margin: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.noor-store .noor-toolbar-controls .noor-filter-toggle {
+  min-height: 46px;
+  padding: 8px 12px;
+  border: 1px solid #dcd1bc;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.noor-store .noor-toolbar-controls .noor-filter-toggle.is-active {
+  border-color: #ac8a46;
+  background: #f2ecdf;
+}
+
+@media (max-width: 760px) {
+  .noor-store .noor-catalogue-search {
+    flex-basis: 100%;
+    max-width: none;
+    gap: 8px;
+  }
+
+  .noor-store .noor-catalogue-search input {
+    font-size: 16px;
+  }
+
+  .noor-store .noor-catalogue-search input::placeholder {
+    font-size: 11px;
+  }
+
+  .noor-store .noor-toolbar-controls {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .noor-store .noor-toolbar-controls .noor-sort {
+    flex: 1;
+  }
+
+  .noor-store .noor-toolbar-controls .noor-sort select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .noor-store .noor-toolbar-controls .noor-clear-filter {
+    flex-basis: 100%;
+    order: 1;
+    min-height: 32px;
+  }
+}

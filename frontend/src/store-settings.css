@@ -1,0 +1,26 @@
+.noor-settings{padding:32px;min-width:0;color:#34594b;font-family:Vazirmatn,Tahoma,sans-serif}
+.noor-settings-heading{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:24px}
+.noor-settings-heading h1{font-size:26px;line-height:1.7;margin:0 0 8px}
+.noor-settings-heading p{font-size:13px;line-height:1.9;color:#7a8c80;margin:0}
+.noor-settings-action{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:11px 16px;border:1px solid #d7c89d;border-radius:8px;background:#fffdf7;color:#82672f;font:inherit;font-size:12px;font-weight:600;text-decoration:none;cursor:pointer;flex-shrink:0}
+.noor-settings-sections{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+.noor-settings-sections>button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;max-width:100%;padding:11px 15px;border:1px solid #e1e8de;border-radius:8px;background:#fff;color:#667b61;font:inherit;font-size:12px;line-height:1.8;cursor:pointer}
+.noor-settings-sections>button>svg{flex-shrink:0}
+.noor-settings-sections>button:hover{background:#f4f7ef;border-color:#b8c7ad}
+.noor-settings-sections>button[aria-pressed=true]{background:#34594b;border-color:#34594b;color:#fff}
+.noor-settings :is(.noor-settings-action,.noor-settings-sections>button):focus-visible{outline:2px solid #ad8a35;outline-offset:3px}
+.noor-settings-panel{min-width:0}
+.noor-settings-panel[hidden]{display:none}
+.noor-settings .noor-access{border:1px solid #ded8ca;border-radius:14px;overflow:hidden}
+.noor-settings-backup{border:1px solid #ded8ca;border-radius:14px;overflow:hidden;background:#fff}
+.noor-settings-backup-download{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:24px}
+.noor-settings-backup h2{font-size:17px;margin:0 0 8px;line-height:1.8}
+.noor-settings-backup p{font-size:12px;line-height:1.9;margin:0;color:#716343}
+.noor-settings-action{background:#34594b;border-color:#34594b;color:#fff}
+.noor-settings-action:hover{background:#456b5a}
+.noor-settings .noor-migration{border-top:1px solid #e3ded3;border-bottom:0;padding:18px 24px}
+.noor-settings .noor-migration p{margin:12px 0}
+.noor-settings .noor-migration summary{font-weight:600;line-height:1.9;padding:4px 0}
+.noor-settings .noor-migration :is(button,input,summary):focus-visible{outline:2px solid #ad8a35;outline-offset:3px}
+@media(max-width:760px){.noor-settings{padding:22px 16px}.noor-settings-heading{align-items:flex-start;flex-direction:column;gap:16px}.noor-settings-heading h1{font-size:22px}.noor-settings-sections{gap:7px}.noor-settings-sections>button{flex:1 1 150px;padding:10px 12px}.noor-settings-backup-download{align-items:stretch;flex-direction:column;padding:20px 16px;gap:18px}.noor-settings .noor-migration{padding:16px}.noor-settings .noor-access-password-grid{grid-template-columns:1fr}}
+@media(max-width:520px){.noor-settings-sections>button{font-size:11px;gap:6px;flex-basis:130px}}

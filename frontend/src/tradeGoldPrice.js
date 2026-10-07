@@ -1,7 +1,7 @@
 const goldPriceFormat = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 });
 
 export function isTradeDocument(document) {
-  return document?.source !== 'opening-inventory' && /^(crafted|coin|melted|currency)-(purchase|sale)$/.test(document?.type || '');
+  return document?.source !== 'opening-inventory' && (/^(crafted|coin|melted|currency)-(purchase|sale)$/.test(document?.type || '') || document?.type === 'misc-purchase');
 }
 
 export function tradeGoldPriceSummary(document) {

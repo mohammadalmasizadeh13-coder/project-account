@@ -70,7 +70,7 @@ export const stockIdentityFields = ['itemName', 'craftedKind', 'weight', 'ayar',
 export function stockSaleForm(item, form, prices = {}) {
   const fields = Object.fromEntries(stockIdentityFields.map(key => [key, item[key] ?? '']));
   const coinRates = Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price]));
-  return { ...form, ...fields, itemName: item.itemName || item.description || stockCategories[item.category],
+  return { ...form, ...fields, itemName: String(item.itemName || '').trim(),
     type: `${item.category}-sale`, inventorySourceId: item.id, productCode: item.productCode,
     itemCount: '1', coinCount: '1', description: '', setParts: [],
     currencyAmount: '1', currencyRate: String(currencyRate(item.currencyType, prices) || item.currencyRate || ''),

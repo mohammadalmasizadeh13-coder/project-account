@@ -1,0 +1,18 @@
+html { direction: rtl; } body { margin: 0; } button, input, select, textarea { font: inherit; }
+.noor-login,.noor-owner-gate,.noor-save-state,.noor-migration { font-family: Vazirmatn, Tahoma, sans-serif; }
+.noor-login { min-height: 100vh; background: #f6f3ed; color: #20201d; padding: 32px 20px; box-sizing: border-box; }
+.noor-login *,.noor-owner-gate * { box-sizing: border-box; }
+.noor-login-back { color: #5e5034; display: block; text-decoration: none; max-width: 440px; margin: 0 auto 32px; }
+.noor-login form { max-width: 440px; margin: auto; background: white; padding: 36px; border: 1px solid #e7ddcb; border-radius: 6px; box-shadow: 0 20px 70px #3e32190b; }
+.noor-login-mark { display: grid; place-items: center; border: 1px solid #b29457; border-radius: 50%; width: 52px; height: 52px; color: #9d7936; font-size: 28px; }
+.noor-login h1 { font-size: 25px; font-weight: 600; }.noor-login-note { font-size: 13px; color: #70695e; line-height: 1.9; }
+.noor-login label { display: block; font-size: 13px; margin: 23px 0 8px; }.noor-login input { width: 100%; padding: 13px; border: 1px solid #cfc8ba; background: white; color: #20201d; border-radius: 4px; }
+.noor-login button,.noor-owner-gate button { width: 100%; background: #22241f; color: #fff; padding: 15px; border: 0; border-radius: 4px; margin-top: 26px; cursor: pointer; }
+.noor-login button:disabled { opacity: .65; cursor: wait; }.noor-login :focus-visible,.noor-owner-shell :focus-visible { outline: 2px solid #9a7736; outline-offset: 3px; }
+.noor-owner-gate { max-width: 480px; margin: 15vh auto; padding: 24px; text-align: center; }.noor-owner-gate a { display: block; margin-top: 22px; color: #71561f; }
+.noor-save-state button,.noor-migration button { border: 1px solid #b29a65; padding: 8px 12px; border-radius: 4px; background: #fffcf6; color: #343329; cursor: pointer; }
+.noor-save-state { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; background: #edf3eb; color: #34502f; padding: 8px 24px; line-height: 1.8; }
+.noor-save-state.has-error,.noor-shell-error { background: #fff0ed; color: #8b3022; padding: 14px; line-height: 1.9; }
+.noor-migration { background: #fcfaf5; color: #565044; padding: 10px 24px; border-bottom: 1px solid #e3ded3; font-size: 12px; line-height: 1.9; }.noor-migration summary { cursor: pointer; }.noor-migration form { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }.noor-migration input { border: 1px solid #b9b2a3; padding: 8px; max-width: 100%; border-radius: 4px; }
+.noor-loading { padding: 40px; text-align: center; }.noor-owner-shell .workspace-brand strong { font-size: 16px; }
+@media(max-width:480px) { .noor-login form { padding: 26px 22px; }.noor-save-state,.noor-migration { padding-right: 14px; padding-left: 14px; } }

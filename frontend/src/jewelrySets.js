@@ -2,6 +2,8 @@ import { number } from './assets.js';
 import { craftedKinds } from './crmAnalytics.js';
 import { validateDocument } from './documentValidation.js';
 import { validateStockSales } from './inventory.js';
+import { profitPercentInput } from './profitDefaults.js';
+import { isMiscPurchase } from './miscGold.js';
 
 const uniqueId = prefix => `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
 const normalizedKind = kind => String(kind || '').replace(/[\s\u200c]/g, '');
@@ -12,7 +14,8 @@ export function createSetPart(values = {}) {
   return {
     id: uniqueId('set-part'), craftedKind: '', itemName: '', itemCount: '1',
     weight: '', ayar: '750', gramPrice: '', wagePercent: '0', wageFixed: '0',
-    otherCosts: '0', profitPercent: '0', discountRial: '', ...values,
+    otherCosts: '0', discountRial: '', ...values,
+    profitPercent: profitPercentInput(values.profitPercent, 'crafted'),
   };
 }
 
@@ -28,6 +31,8 @@ const cleanForm = form => {
 // and accounting entries. Shared debt belongs to the invoice and is counted once.
 export function expandSetForm(form, { setId, transactionId } = {}) {
   const parent = cleanForm(form);
+  const category = isMiscPurchase(form) ? 'crafted' : form.category || String(form.type || '').replace(/^opening-/, '').split('-')[0] || 'crafted';
+  if (category === 'crafted') parent.profitPercent = profitPercentInput(form.profitPercent, category, form);
   if (!isSeparateSetForm(form)) {
     const crafted = !form.category || form.category === 'crafted';
     if (isJewelrySetKind(form.craftedKind) && crafted) {
@@ -49,6 +54,7 @@ export function expandSetForm(form, { setId, transactionId } = {}) {
     const fields = Object.fromEntries(partFields.map(key => [key, part[key] ?? '']));
     return {
       ...parent, ...fields, category: 'crafted',
+      profitPercent: profitPercentInput(part.profitPercent, 'crafted'),
       gramPrice: String(part.gramPrice ?? '').trim() ? part.gramPrice : form.gramPrice,
       itemName: String(part.itemName || '').trim() || part.craftedKind || '',
       setId: groupId, setName: form.setName || form.itemName || form.description || form.craftedKind,
@@ -61,15 +67,16 @@ export function expandSetForm(form, { setId, transactionId } = {}) {
 }
 
 export function validateSetForm(form, documents) {
-  const category = form.category || String(form.type || '').replace(/^opening-/, '').split('-')[0] || 'crafted';
+  const category = isMiscPurchase(form) ? 'crafted' : form.category || String(form.type || '').replace(/^opening-/, '').split('-')[0] || 'crafted';
   const validationForm = form.source === 'opening-inventory' || String(form.type).startsWith('opening-')
     ? { ...form, customerName: form.customerName || 'موجودی اولیه' } : form;
-  if (!isSeparateSetForm(form)) return validateDocument(validationForm, category, number);
+  if (!isSeparateSetForm(form)) return validateDocument({ ...validationForm, profitPercent: profitPercentInput(form.profitPercent, category, form) }, category, number);
 
   const errors = {};
   const allParts = Array.isArray(form.setParts) ? form.setParts : [];
   const selected = allParts.filter(part => part.selected !== false);
   const sale = String(form.type).endsWith('-sale');
+  if (!String(form.itemName || '').trim()) errors.itemName = 'نام مجموعه را وارد کنید.';
   if (selected.length < (sale ? 1 : 2)) errors.setParts = sale ? 'حداقل یک قطعه را برای فروش انتخاب کنید.' : 'برای ثبت ست یا نیم‌ست جدا، حداقل دو قطعه اضافه کنید.';
   const expanded = expandSetForm(validationForm);
   // Parent errors must stay visible even if the set has no selected rows.
@@ -78,13 +85,15 @@ export function validateSetForm(form, documents) {
   }
   selected.forEach((part, index) => {
     const prefix = `setParts.${part.id}.`;
-    const itemErrors = validateDocument(expanded[index], 'crafted', number);
+    // Expansion retains display fallbacks for old records; new documents must
+    // have an explicitly entered piece name before those fallbacks apply.
+    const itemErrors = validateDocument({ ...expanded[index], itemName: part.itemName }, 'crafted', number);
     for (const [key, message] of Object.entries(itemErrors)) {
       if (parentFields.has(key)) errors[key] = message;
       else errors[`${prefix}${key}`] = message;
     }
     if (!craftedKinds.includes(part.craftedKind) || isJewelrySetKind(part.craftedKind)) errors[`${prefix}craftedKind`] = 'نوع قطعه را انتخاب کنید.';
-    if (part.craftedKind === 'سایر' && !String(part.itemName || '').trim()) errors[`${prefix}itemName`] = 'نام قطعه را وارد کنید.';
+    if (!String(part.itemName || '').trim()) errors[`${prefix}itemName`] = 'نام قطعه را وارد کنید.';
     const count = number(part.itemCount);
     if (!Number.isSafeInteger(count) || count <= 0) errors[`${prefix}itemCount`] = 'تعداد قطعه باید عدد صحیح بیشتر از صفر باشد.';
   });

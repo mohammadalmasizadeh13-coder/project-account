@@ -111,7 +111,7 @@ test('all four bank 86 coins use distinct rates, retaining older types and Parsi
 });
 
 test('currency forms reject unknown types and invalid rates, quantities and costs', () => {
-  const form = { ...usd, customerName: 'مشتری', type: 'currency-purchase', gold18Price: '10000000' };
+  const form = { ...usd, customerName: 'مشتری', itemName: 'دلار آمریکا', type: 'currency-purchase', gold18Price: '10000000' };
   assert.deepEqual(validateDocument(form, 'currency', number), {});
   for (const field of ['currencyRate', 'currencyAmount']) {
     for (const value of ['', '0', '-1', 'abc', 'Infinity']) assert.ok(validateDocument({ ...form, [field]: value }, 'currency', number)[field]);

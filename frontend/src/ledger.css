@@ -732,3 +732,6 @@
     justify-content: center;
   }
 }
+
+.document-save-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 18px; width: 100%; }
+.document-save-fields:disabled { opacity: .8; }

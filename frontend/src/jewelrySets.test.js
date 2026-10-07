@@ -4,7 +4,7 @@ import { documentBreakdown } from './assets.js';
 import { assignProductCodes, inventoryReport, stockSaleForm } from './inventory.js';
 import { createSetPart, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm } from './jewelrySets.js';
 
-const part = values => createSetPart({ craftedKind: 'گردنبند', weight: '3', gramPrice: '100', ...values });
+const part = values => createSetPart({ craftedKind: 'گردنبند', itemName: 'طرح برگ', weight: '3', gramPrice: '100', ...values });
 const setForm = values => ({
   type: 'crafted-purchase', category: 'crafted', customerName: 'طرف حساب', date: '2026-09-25',
   gold18Price: '100', itemName: 'نیم‌ست طرح برگ', craftedKind: 'نیم‌ست', setMode: 'separate',
@@ -40,10 +40,57 @@ test('arbitrary sets expand into any number of independent pieces, without a par
 
 test('piece weights and wages produce their own amounts, and aggregate debt is recorded only once', () => {
   const documents = expandSetForm(setForm());
-  assert.deepEqual(documents.map(doc => documentBreakdown(doc).total), [300, 220]);
+  assert.deepEqual(documents.map(doc => documentBreakdown(doc).total), [321, 235.4]);
   assert.deepEqual(documents.map(doc => doc.gramDebt), ['2', 0]);
   assert.deepEqual(documents.map(doc => doc.rialDebt), ['500', 0]);
   assert.equal(new Set(documents.map(doc => doc.setId)).size, 1);
+});
+
+test('new set pieces default to seven percent and preserve an explicit zero or custom profit', () => {
+  assert.equal(createSetPart().profitPercent, '7');
+  for (const value of [undefined, null, '', '   ']) assert.equal(createSetPart({ profitPercent: value }).profitPercent, '7');
+  for (const value of [0, '0', '۰', '12.5']) assert.equal(createSetPart({ profitPercent: value }).profitPercent, String(value));
+});
+
+test('expanded set drafts resolve blank piece profit without mutating the form or overriding zero', () => {
+  const form = setForm({ setParts: [
+    { ...part(), profitPercent: ' ' },
+    { ...part(), profitPercent: 0 },
+    { ...part(), profitPercent: '12.5' },
+    { ...part(), profitPercent: undefined },
+  ] });
+  const snapshot = structuredClone(form);
+  const rows = expandSetForm(form);
+  assert.deepEqual(rows.map(row => row.profitPercent), ['7', '0', '12.5', '7']);
+  assert.deepEqual(rows.map(row => documentBreakdown(row).profit), [21, 0, 37.5, 21]);
+  assert.deepEqual(validateSetForm(form), {});
+  assert.deepEqual(form, snapshot);
+});
+
+test('whole-set purchase, sale, and opening drafts use seven percent when profit is missing or blank', () => {
+  for (const type of ['crafted-purchase', 'crafted-sale', 'opening-crafted']) {
+    for (const profitPercent of [undefined, ' ', '0', '10']) {
+      const form = setForm({ type, setMode: 'together', itemCount: '1', weight: '5', gramPrice: '100', ayar: '750', wagePercent: '0', profitPercent });
+      const [row] = expandSetForm(form);
+      const expected = profitPercent === undefined || profitPercent === ' ' ? '7' : profitPercent;
+      assert.equal(row.profitPercent, expected);
+      assert.equal(documentBreakdown(row).total, 500 * (1 + Number(expected) / 100));
+      assert.equal(form.profitPercent, profitPercent);
+    }
+  }
+});
+
+test('set sale discounts are checked against the default profit while explicit zero still removes profit', () => {
+  const piece = { ...part(), profitPercent: '', discountRial: '320' };
+  const separate = setForm({ type: 'crafted-sale', setParts: [piece] });
+  assert.deepEqual(validateSetForm(separate), {});
+  assert.equal(documentBreakdown(expandSetForm(separate)[0]).total, 1);
+  assert.ok(validateSetForm({ ...separate, setParts: [{ ...piece, profitPercent: '0' }] })[`setParts.${piece.id}.discountRial`]);
+
+  const together = setForm({ type: 'crafted-sale', setMode: 'together', itemCount: '1', weight: '5', gramPrice: '100', ayar: '750', wagePercent: '0', profitPercent: '', discountRial: '525' });
+  assert.deepEqual(validateSetForm(together), {});
+  assert.equal(documentBreakdown(expandSetForm(together)[0]).total, 10);
+  assert.ok(validateSetForm({ ...together, profitPercent: '0' }).discountRial);
 });
 
 test('piece data cannot override shared customer, date, type, rate snapshot, or debt', () => {
@@ -133,4 +180,31 @@ test('opening inventory inherits a later parent gram price and does not require 
   assert.deepEqual(validateSetForm(form), {});
   const rows = expandSetForm(form);
   assert.deepEqual(rows.map(row => row.gramPrice), ['250', '200']);
+});
+
+test('a separate set requires an explicit parent name and a name for every selected piece', () => {
+  const unnamed = part({ itemName: '   ' });
+  const form = setForm({ itemName: ' ', setName: 'نام قدیمی مجموعه', setParts: [unnamed, part()] });
+  const errors = validateSetForm(form);
+  assert.ok(errors.itemName);
+  assert.ok(errors[`setParts.${unnamed.id}.itemName`]);
+  assert.equal(expandSetForm(form)[0].itemName, unnamed.craftedKind);
+  assert.ok(validateSetForm({ ...form, setParts: [] }).itemName);
+
+  const opening = { ...form, type: 'opening-crafted', source: 'opening-inventory', customerName: '' };
+  assert.ok(validateSetForm(opening).itemName);
+  assert.ok(validateSetForm(opening)[`setParts.${unnamed.id}.itemName`]);
+});
+
+test('sale validation ignores unselected missing identities and validates them once selected', () => {
+  const legacy = part({ itemName: '', craftedKind: '', selected: false });
+  const sale = setForm({ type: 'crafted-sale', setParts: [legacy, part()] });
+  assert.deepEqual(validateSetForm(sale), {});
+  legacy.selected = true;
+  const errors = validateSetForm(sale);
+  assert.ok(errors[`setParts.${legacy.id}.itemName`]);
+  assert.ok(errors[`setParts.${legacy.id}.craftedKind`]);
+  legacy.itemName = 'مدل تکمیل‌شده';
+  legacy.craftedKind = 'گوشواره';
+  assert.deepEqual(validateSetForm(sale), {});
 });

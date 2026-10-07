@@ -1,0 +1,64 @@
+.noor-manager{margin:24px 30px 0;border:1px solid #ded8ca;border-radius:14px;background:#fff;color:#292720;overflow:hidden;font-size:13px}
+.noor-manager *, .noor-manager *::before, .noor-manager *::after{box-sizing:border-box}
+.noor-manager-heading{width:100%;border:0;padding:21px 24px;display:flex;align-items:center;gap:14px;color:#322d21;background:#f7f3e9;font:inherit;text-align:right;cursor:pointer}
+.noor-manager-heading>span{display:grid;gap:6px;flex:1;min-width:0}
+.noor-manager-heading strong{font-size:17px}
+.noor-manager-heading small{font-size:12px;color:#71684f;line-height:1.8}
+.noor-manager-heading>svg{flex-shrink:0;color:#977132}
+.noor-manager-heading>svg:last-child{transition:transform .2s}
+.noor-manager-heading .is-open{transform:rotate(180deg)}
+.noor-manager-panel{padding:24px}
+.noor-manager-panel[hidden]{display:none}
+.noor-manager h3{margin:0 0 12px;font-size:15px}
+.noor-manager p{line-height:1.9;margin:0;color:#696353}
+.noor-manager small{font-size:11px;line-height:1.9;color:#756d5d;display:block}
+.noor-manager-toolbar{display:flex;gap:18px;align-items:center;justify-content:space-between;margin-bottom:22px}
+.noor-manager-toolbar p{flex:1}
+.noor-manager-button{min-height:44px;border:1px solid #332a1b;border-radius:8px;padding:11px 16px;background:#332a1b;color:#fff;font:inherit;font-weight:600;display:inline-flex;justify-content:center;align-items:center;gap:8px;cursor:pointer}
+.noor-manager-button.secondary{background:#fff;color:#625030;border-color:#d9ccaf}
+.noor-manager-button:hover:not(:disabled){background:#645031;color:#fff}
+.noor-manager button:disabled,.noor-manager input:disabled,.noor-manager select:disabled{cursor:not-allowed;opacity:.6}
+.noor-manager :is(button,input,select,textarea):focus-visible{outline:2px solid #9f792a;outline-offset:3px}
+.noor-manager-notice{border-radius:8px;padding:12px 15px;margin:0 0 18px!important}
+.noor-manager-notice.error{color:#932f25;background:#fff0ed;border:1px solid #f1c4bc}
+.noor-manager-notice.success{color:#286246;background:#edf7ef;border:1px solid #c8e2cd}
+.noor-manager-rate{border:1px solid #e7e0d1;background:#fbfaf7;display:grid;grid-template-columns:1fr 1.3fr;gap:24px;border-radius:10px;padding:20px;margin-bottom:24px}
+.noor-manager-rate strong{font-size:21px;line-height:1.8}
+.noor-manager-rate form{display:grid;gap:9px;align-content:start}
+.noor-manager-rate form>div{display:flex;gap:8px}
+.noor-manager-rate form input{flex:1;width:0}
+.noor-manager .noor-manager-stale{font-size:12px;color:#95631a;margin-top:5px}
+.noor-manager label{font-weight:600;display:grid;gap:8px;min-width:0;font-size:12px}
+.noor-manager :is(input:not([type=checkbox]),select,textarea){font:inherit;min-width:0;max-width:100%;border:1px solid #dcd6c8;padding:11px 12px;border-radius:8px;min-height:45px;background:white;color:#302a20}
+.noor-manager textarea{resize:vertical;line-height:1.9}
+.noor-manager-picker{max-width:640px;margin-bottom:24px}
+.noor-manager-editor{display:grid;grid-template-columns:1.15fr 1fr;gap:30px;border-top:1px solid #ece7dc;padding-top:24px}
+.noor-manager-metadata,.noor-manager-media{min-width:0}
+.noor-manager-metadata fieldset{border:0;padding:0;margin:0;display:grid;gap:17px;min-width:0}
+.noor-manager-section-title{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.noor-manager-section-title h3{margin:0}
+.noor-manager-section-title>span{font-size:11px;border-radius:6px;padding:4px 8px}
+.noor-manager-section-title .published{background:#e9f2e9;color:#396342}
+.noor-manager-section-title .draft{background:#f1ede5;color:#756347}
+.noor-manager-percentages{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.noor-manager .noor-manager-publish{display:flex;align-items:flex-start;gap:9px;padding:13px;border:1px solid #e6dcc6;border-radius:8px;background:#faf7f0;cursor:pointer;line-height:1.9}
+.noor-manager-publish input{accent-color:#967137;width:18px;height:18px;flex-shrink:0;margin:2px 0 0}
+.noor-manager-media>p{font-size:12px;margin-bottom:14px}
+.noor-manager-images{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:15px 0}
+.noor-manager-images figure{margin:0;overflow:hidden;border:1px solid #e7e0d4;border-radius:8px;min-width:0}
+.noor-manager-images img{width:100%;aspect-ratio:1;display:block;object-fit:cover;background:#f7f5ef}
+.noor-manager-images figcaption{font-size:10px;display:flex;justify-content:space-between;align-items:center;padding-right:8px;gap:4px;color:#6a624f}
+.noor-manager-images figcaption button{width:38px;min-height:40px;display:grid;place-items:center;flex-shrink:0;border:0;background:#fff;color:#a64132;cursor:pointer}
+.noor-manager-image-empty{grid-column:1 / -1;min-height:170px;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;border:1px dashed #d7cbb2;border-radius:10px;background:#faf8f2;color:#99825a;font-size:12px}
+.noor-manager .noor-manager-file{display:none}
+.noor-manager-media>.noor-manager-button{margin-bottom:8px}
+.noor-manager-media>h3:not(:first-child){margin-top:26px}
+.noor-manager-specs{display:grid;grid-template-columns:1fr 1fr;gap:16px;background:#f7f5ef;padding:15px;border-radius:8px;margin:0 0 12px}
+.noor-manager-specs dt{font-size:11px;color:#746b58}
+.noor-manager-specs dd{font-size:13px;margin:5px 0 0;overflow-wrap:anywhere;font-weight:600}
+.noor-manager .noor-manager-price{margin:18px 0 0;padding-top:15px;border-top:1px solid #e7e0d4;font-size:12px}
+.noor-manager-price strong{display:block;margin-top:8px;font-size:19px;color:#554020}
+.noor-manager-empty{text-align:center;padding:28px 15px;border:1px dashed #ddd3c0;border-radius:10px}
+@media(max-width:1000px){.noor-manager-toolbar{align-items:stretch;flex-direction:column}.noor-manager-rate{grid-template-columns:1fr}.noor-manager-editor{gap:22px}}
+@media(max-width:760px){.noor-manager{margin:20px 14px 0}.noor-manager-heading{padding:17px 15px;gap:10px}.noor-manager-heading strong{font-size:15px}.noor-manager-heading small{font-size:10px}.noor-manager-panel{padding:16px}.noor-manager-editor{grid-template-columns:1fr}.noor-manager-rate{padding:15px}.noor-manager :is(input:not([type=checkbox]),select,textarea){font-size:16px}.noor-manager-percentages{grid-template-columns:1fr}.noor-manager-rate form>div{flex-direction:column}.noor-manager-rate form input{width:100%;flex:auto}.noor-manager-button{width:100%}.noor-manager-media{border-top:1px solid #ece7dc;padding-top:22px}}
+@media(prefers-reduced-motion:reduce){.noor-manager *{transition:none!important}}

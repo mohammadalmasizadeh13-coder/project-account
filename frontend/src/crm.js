@@ -1,7 +1,12 @@
 import { newRecordTimestamp } from './recordTime.js';
 
+export function customerItemName(document, inventorySource) {
+  return [document.itemName, inventorySource?.itemName, document.description, inventorySource?.description, document.typeLabel]
+    .map(value => String(value || '').trim()).find(Boolean) || 'نام جنس ثبت نشده';
+}
+
 export function customerTransactions(customer, documents) {
-  return documents.filter(doc => doc.source !== 'opening-inventory' && (doc.customerId ? doc.customerId === customer.id : doc.customerName?.trim() === customer.name.trim()))
+  return documents.filter(doc => doc.source !== 'opening-inventory' && doc.counterpartyType !== 'partner' && (doc.customerId ? doc.customerId === customer.id : doc.customerName?.trim() === customer.name.trim()))
     .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 }
 

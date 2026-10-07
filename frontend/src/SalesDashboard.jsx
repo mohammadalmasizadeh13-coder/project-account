@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import NumberInput from './NumberInput.jsx';
 import { Coins, Gem, Package, ReceiptText, Search, ShoppingBag, TrendingUp } from 'lucide-react';
 import { goldBalance, goldPurchasesReport, iranDate, salesReport } from './sales';
 import './dashboard.css';
@@ -27,6 +28,7 @@ export default function SalesDashboard({ documents, prices, helpers, username, g
   };
   const savePurchase = event => {
     event.preventDefault();
+    if (!onSaveGoldPurchases) return;
     const grams = helpers.number(purchaseForm.grams);
     if (grams <= 0) {
       setPurchaseMessage({ type: 'error', text: 'وزن خرید را بیشتر از صفر وارد کنید.' });
@@ -44,10 +46,11 @@ export default function SalesDashboard({ documents, prices, helpers, username, g
       setPurchaseForm(current => ({ ...current, grams: '', note: '' }));
       setPurchaseMessage({ type: 'success', text: 'خرید ثبت شد؛ از تراز بازه‌ای که این تاریخ را شامل شود کم می‌شود.' });
     } catch {
-      setPurchaseMessage({ type: 'error', text: 'خرید ذخیره نشد. فضای ذخیره‌سازی مرورگر را بررسی کنید و دوباره تلاش کنید.' });
+      setPurchaseMessage({ type: 'error', text: 'خرید ذخیره نشد. وضعیت ذخیره‌سازی سرور را بررسی کنید و دوباره تلاش کنید.' });
     }
   };
   const removePurchase = id => {
+    if (!onSaveGoldPurchases) return;
     try {
       onSaveGoldPurchases(goldPurchases.filter(item => item.id !== id));
       setPurchaseMessage({ type: 'success', text: 'خرید حذف و تراز اصلاح شد.' });
@@ -94,20 +97,20 @@ export default function SalesDashboard({ documents, prices, helpers, username, g
       <div className="sd-gold-total"><span>تراز طلا · {periodLabel}</span><strong data-testid="gold-balance">{balanceGrams === null ? '—' : number(balanceGrams)} <small>گرم طلای ۷۵۰</small></strong><p>{balanceGrams === null ? 'نرخ طلا را ثبت کنید.' : balanceGrams < 0 ? 'خرید بیشتر از نیاز این بازه' : 'طلای باقی‌مانده برای خرید'}</p></div>
       <div><span>فروش ثبت‌شده</span><strong>{money(report.total)} <small>تومان</small></strong></div><div><span>طلای خریداری‌شده برای تراز</span><strong data-testid="gold-purchased">{number(purchases.total)} <small>گرم</small></strong></div>
       <p className="sd-gold-formula">فروش نقد و نسیه ÷ نرخ فعلی هر گرم طلا − خریدهای ثبت‌شده برای تراز در همین بازه. این عدد معادل ارزش است؛ موجودی واقعی در صندوق نمایش داده می‌شود.</p>
-      <button className="button button-primary" onClick={() => onOpen('gold-entry')}>ثبت خرید برای تراز</button>
+      {onSaveGoldPurchases && onOpen && <button className="button button-primary" onClick={() => onOpen('gold-entry')}>ثبت خرید برای تراز</button>}
     </section>}
     {view === 'gold-entry' && <section className="sd-gold-balance gold-entry-only">      <div className="sd-gold-purchases">
         <div className="sd-purchase-heading"><h2>ثبت طلای خریداری‌شده</h2><span>جمع خرید · {periodLabel}: <b data-testid="gold-purchased">{number(purchases.total)}</b> گرم</span></div>
         <p>وزن را به گرم معادل طلای ۱۸ عیار وارد کنید. هر خرید را یک بار در این بخش ثبت کنید؛ سند خرید به‌تنهایی از این تراز کم نمی‌شود.</p>
-        <form className="sd-purchase-form" onSubmit={savePurchase}>
+        {onSaveGoldPurchases && <form className="sd-purchase-form" onSubmit={savePurchase}>
           <label>تاریخ خرید (شمسی)<PersianDateInput name="date" value={purchaseForm.date} max={iranDate()} onChange={updatePurchase} required/></label>
-          <label>وزن خرید (گرم ۱۸ عیار)<input name="grams" inputMode="decimal" value={purchaseForm.grams} onChange={updatePurchase} placeholder="مثلاً ۱۵" required/></label>
+          <label>وزن خرید (گرم ۱۸ عیار)<NumberInput name="grams" inputMode="decimal" value={purchaseForm.grams} onChange={updatePurchase} placeholder="مثلاً ۱۵" required/></label>
           <label>توضیح خرید<input name="note" value={purchaseForm.note} onChange={updatePurchase} placeholder="اختیاری"/></label>
           <button className="button button-primary" type="submit">ثبت خرید و کسر از تراز</button>
-        </form>
+        </form>}
         {purchaseMessage && <div role="status" className={`form-message ${purchaseMessage.type}`}>{purchaseMessage.text}</div>}
         <details className="sd-purchase-history"><summary>همه خریدهای ثبت‌شده ({number(purchaseHistory.length)})</summary>
-          {purchaseHistory.length ? <ul>{purchaseHistory.map(item => <li key={item.id}><time dateTime={item.date}>{formatRecordTimestamp(item) ? formatRecordDate(item) : dateLabel(item.date)}</time><b>{number(item.grams)} گرم</b><p>{item.note || 'بدون توضیح'}</p><button type="button" onClick={() => removePurchase(item.id)} aria-label={`حذف خرید ${number(item.grams)} گرم در ${dateLabel(item.date)}`}>حذف</button></li>)}</ul> : <p>هنوز خریدی ثبت نشده است.</p>}
+          {purchaseHistory.length ? <ul>{purchaseHistory.map(item => <li key={item.id}><time dateTime={item.date}>{formatRecordTimestamp(item) ? formatRecordDate(item) : dateLabel(item.date)}</time><b>{number(item.grams)} گرم</b><p>{item.note || 'بدون توضیح'}</p>{onSaveGoldPurchases && <button type="button" onClick={() => removePurchase(item.id)} aria-label={`حذف خرید ${number(item.grams)} گرم در ${dateLabel(item.date)}`}>حذف</button>}</li>)}</ul> : <p>هنوز خریدی ثبت نشده است.</p>}
         </details>
       </div>
 </section>}

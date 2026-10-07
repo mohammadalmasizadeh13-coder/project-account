@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { birthdayReminders, profitReport, toolSections, workspaceSections } from './workspace.js';
 import { persianToIso } from './persianDate.js';
 
-test('navigation has exactly four primary sections and every tool belongs to one', () => {
-  assert.deepEqual(Object.keys(workspaceSections), ['home', 'entries', 'reports', 'crm']);
+test('navigation includes accounting settings and every tool belongs to one primary section', () => {
+  assert.deepEqual(Object.keys(workspaceSections), ['home', 'entries', 'reports', 'crm', 'settings']);
+  assert.equal(workspaceSections.settings, 'تنظیمات حسابداری');
+  assert.equal(toolSections.settings, 'settings');
   for (const section of Object.values(toolSections)) assert.ok(workspaceSections[section]);
   for (const tool of ['opening','register','expense','cheques','pricing','customer-entry','settlement-entry','gold-entry']) assert.equal(toolSections[tool], 'entries');
 });

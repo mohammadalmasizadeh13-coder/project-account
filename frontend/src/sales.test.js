@@ -4,12 +4,14 @@ import { readFileSync } from 'node:fs';
 import { goldBalance, goldPurchasesReport, invoiceCount, iranDate, salesReport } from './sales.js';
 import { quantity, documentBreakdown, currencyName, currencyRate, coinCatalog } from './assets.js';
 import { validateDocument } from './documentValidation.js';
+import { profitPercentInput } from './profitDefaults.js';
+import { isMiscPurchase, miscGoldWeight750, miscGoldDefaults } from './miscGold.js';
 import { expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm } from './jewelrySets.js';
-const dependencies = { quantity, documentBreakdown, currencyName, currencyRate, validateDocument, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity: quantity, coinPriceFields: Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price])), CircleDollarSign: null };
-const dependencySource = 'const { quantity, documentBreakdown, currencyName, currencyRate, validateDocument, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity, coinPriceFields, CircleDollarSign } = dependencies;';
+const dependencies = { isMiscPurchase, miscGoldWeight750, miscGoldDefaults, quantity, documentBreakdown, currencyName, currencyRate, validateDocument, profitPercentInput, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity: quantity, coinPriceFields: Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price])), CircleDollarSign: null };
+const dependencySource = 'const { isMiscPurchase, miscGoldWeight750, miscGoldDefaults, quantity, documentBreakdown, currencyName, currencyRate, validateDocument, profitPercentInput, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity, coinPriceFields, CircleDollarSign } = dependencies;';
 
 // Exercise the existing ledger's financial calculations, not copies of them.
-const source = readFileSync(new URL('./main.jsx', import.meta.url), 'utf8');
+const source = readFileSync(new URL('./AccountingApp.jsx', import.meta.url), 'utf8');
 const digitMap = source.slice(source.indexOf('const digitMap'), source.indexOf('function createEmptyDocumentForm'));
 const calculations = source.slice(source.indexOf('function normalizeNumberInput'), source.indexOf('function isOpeningItemBlank'));
 const helpers = new Function('dependencies', `${dependencySource}\n${digitMap}\n${calculations}\nreturn { quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount };`)(dependencies);
@@ -111,16 +113,29 @@ test('gold purchases use the same inclusive date windows as sales', () => {
 });
 
 test('melted documents preserve the laboratory in opening stock and summaries', () => {
-  const openingFunctions = source.slice(source.indexOf('function isOpeningItemBlank'), source.indexOf('function App('));
+  const openingFunctions = source.slice(source.indexOf('function isOpeningItemBlank'), source.indexOf('function OpeningInventoryPage('));
   const constants = source.slice(source.indexOf('const openingCategoryMeta'), source.indexOf('const digitMap'));
   const functions = new Function('dependencies', 'iranDate', 'Gem', 'Coins', 'FileText', 'newRecordTimestamp', `${dependencySource}\n${constants}\n${digitMap}\n${calculations}\n${openingFunctions}\nreturn { describeDocumentItem, isOpeningItemBlank, validateOpeningItem, createOpeningDocumentFromItem };`)(dependencies, () => today, null, null, null, () => '2026-09-24T10:15:00.000Z');
-  const item = { category: 'melted', itemCount: '1', meltedWeight: '10', meltedAyar: '750', assayCode: '123', laboratoryName: '  آزمایشگاه تهران  ' };
+  const item = { category: 'melted', itemName: ' آب‌شده تهران ', itemCount: '1', meltedWeight: '10', meltedAyar: '750', assayCode: '123', laboratoryName: '  آزمایشگاه تهران  ' };
   assert.equal(functions.validateOpeningItem(item, { goldGramPrice: '100' }), '');
   assert.match(functions.validateOpeningItem({ ...item, laboratoryName: ' ' }, { goldGramPrice: '100' }), /آزمایشگاه/);
   assert.equal(functions.isOpeningItemBlank({ category: 'melted', laboratoryName: 'تهران' }), false);
+  assert.equal(functions.isOpeningItemBlank({ category: 'coin', itemName: 'سکه نمونه' }), false);
+  assert.equal(functions.isOpeningItemBlank({ category: 'crafted', craftedKind: 'انگشتر' }), false);
+  assert.equal(functions.isOpeningItemBlank({ category: 'crafted', profitPercent: '7' }), true, 'default profit alone does not fill an empty opening row');
+  assert.equal(functions.isOpeningItemBlank({ category: 'crafted', profitPercent: '' }), true);
+  assert.equal(functions.isOpeningItemBlank({ category: 'crafted', profitPercent: '0' }), false, 'an explicit change remains part of the draft');
+  assert.match(functions.validateOpeningItem({ ...item, itemName: ' ' }, { goldGramPrice: '100' }), /نام جنس/);
   const document = functions.createOpeningDocumentFromItem(item, { goldGramPrice: '100' }, 0);
+  assert.equal(document.itemName, 'آب‌شده تهران');
   assert.equal(document.laboratoryName, 'آزمایشگاه تهران');
   assert.equal(document.recordedAt, '2026-09-24T10:15:00.000Z');
   assert.match(document.itemSummary, /آزمایشگاه تهران/);
   assert.doesNotThrow(() => functions.describeDocumentItem({ ...item, laboratoryName: undefined }));
+  const craftedItem = { category: 'crafted', itemName: 'انگشتر', craftedKind: 'انگشتر', itemCount: '1', weight: '2', ayar: '750', wagePercent: '0', profitPercent: '' };
+  const craftedDocument = functions.createOpeningDocumentFromItem(craftedItem, { goldGramPrice: '100' });
+  assert.equal(craftedDocument.profitPercent, '7');
+  assert.equal(craftedDocument.amount, 214);
+  assert.equal(craftedDocument.currentAmount, 214);
+  assert.equal(functions.createOpeningDocumentFromItem({ ...craftedItem, profitPercent: '۰' }, { goldGramPrice: '100' }).amount, 200);
 });

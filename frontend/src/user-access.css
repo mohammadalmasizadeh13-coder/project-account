@@ -1,0 +1,49 @@
+.noor-access{font-family:Vazirmatn,Tahoma,sans-serif;font-size:13px;border-bottom:1px solid #ded7c8;background:#fffdfa;color:#302c22}
+.noor-access *{box-sizing:border-box}
+.noor-access-toggle{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:12px 24px;text-align:right;font:inherit;border:0;background:#f5f0e5;color:#514325;cursor:pointer}
+.noor-access-toggle span{flex:1}.noor-access-toggle .is-open{transform:rotate(180deg)}
+.noor-access-body{padding:24px;max-width:1440px;margin:auto}.noor-access-body[hidden]{display:none}
+.noor-access h2,.noor-access h3{display:flex;align-items:center;gap:9px;margin:0 0 18px;font-size:16px;line-height:1.8;flex-wrap:wrap}
+.noor-access h3{font-size:14px}.noor-access h2 bdi{font-size:12px;font-weight:400;color:#716343}
+.noor-access fieldset{border:0;padding:0;margin:0;min-width:0;display:grid;gap:15px}
+.noor-access label{font-size:12px;font-weight:600;display:grid;gap:8px;min-width:0}
+.noor-access :is(input:not([type=checkbox]),select){font:inherit;color:inherit;min-height:43px;min-width:0;width:100%;padding:10px;border:1px solid #ccc4b3;border-radius:6px;background:white}
+.noor-access input[type=password]{direction:ltr;text-align:right}
+.noor-access input[type=checkbox]{width:18px;height:18px;margin:0;accent-color:#846324;cursor:pointer}
+.noor-access :is(input,select,button):disabled,.noor-access fieldset:disabled{opacity:.65;cursor:not-allowed}
+.noor-access fieldset:disabled fieldset{opacity:1}
+.noor-access :is(button,input,select,summary):focus-visible{outline:2px solid #9c772f;outline-offset:3px}
+.noor-access-password-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.noor-access-password-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.noor-access-help{font-size:11px;line-height:1.9;color:#6f6758;margin:0}
+.noor-access-button{display:inline-flex;justify-content:center;align-items:center;gap:8px;justify-self:start;min-height:42px;padding:10px 16px;border:1px solid #332b1a;border-radius:6px;background:#332b1a;color:white;font:inherit;font-weight:600;cursor:pointer}
+.noor-access-button.secondary{background:#fff;color:#604e2b;border-color:#cdbd9b}
+.noor-access-button:hover:not(:disabled){background:#6c5530;color:white}
+.noor-access-notice{font-size:13px;line-height:1.9;border-radius:6px;padding:12px 15px;margin:0 0 20px}
+.noor-access-notice.error{background:#fff0ec;color:#922f20;border:1px solid #edc2b7}
+.noor-access-notice.success{background:#edf7ef;color:#2a5b39;border:1px solid #c1dac4}
+.noor-access-staff{border-top:1px solid #e5ddcc;margin-top:26px;padding-top:24px}
+.noor-access-staff-heading{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:12px}
+.noor-access-staff-heading h2{margin:0}
+.noor-access-columns{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:22px}
+.noor-access-create,.noor-access-existing{border:1px solid #e0d7c4;border-radius:9px;padding:20px;min-width:0;background:white}
+.noor-access-edit-form{margin-top:18px}
+.noor-access .noor-access-permissions{display:grid;gap:14px;margin-top:3px}
+.noor-access-permissions legend{padding:0 0 12px;font-size:13px;font-weight:600}
+.noor-access-presets{display:flex;flex-wrap:wrap;gap:6px}
+.noor-access-presets button{font:inherit;font-size:11px;padding:8px;border:1px solid #d9cfbc;border-radius:5px;color:#6c5731;background:#f9f6ef;min-height:38px;cursor:pointer}
+.noor-access-table-wrap{overflow-x:auto;border:1px solid #e4dccd;border-radius:6px}
+.noor-access table{width:100%;border-collapse:collapse;font-size:12px}
+.noor-access th,.noor-access td{padding:11px 9px;border-bottom:1px solid #eee6d8;text-align:center;vertical-align:middle}
+.noor-access th:first-child{text-align:right;font-weight:500}
+.noor-access thead{background:#f5f1e8;color:#75623f}.noor-access tr:last-child :is(td,th){border-bottom:0}
+.noor-access td label{display:flex;align-items:center;justify-content:center;min-height:25px}
+.noor-access .noor-access-check{display:flex;align-items:flex-start;gap:9px;line-height:1.8;font-weight:500;cursor:pointer}
+.noor-access-check input{flex-shrink:0;margin-top:2px}
+.noor-access-empty{background:#f8f5ee;border:1px dashed #dcd0b9;border-radius:6px;text-align:center;padding:25px 15px;line-height:1.9;color:#766647}
+.noor-access-reset{border-top:1px solid #e3dbc9;margin-top:22px;padding-top:17px}
+.noor-access-reset summary{cursor:pointer;font-size:12px;min-height:30px;line-height:1.8;color:#735628}
+.noor-access-reset form{margin-top:12px}
+.noor-access-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:900px){.noor-access-columns{grid-template-columns:1fr;gap:18px}}
+@media(max-width:600px){.noor-access-toggle{padding:12px 14px}.noor-access-body{padding:18px 14px}.noor-access-password-grid,.noor-access-password-pair{grid-template-columns:1fr;gap:12px}.noor-access-staff-heading{align-items:stretch;flex-direction:column}.noor-access-create,.noor-access-existing{padding:15px}.noor-access-button{width:100%;justify-self:stretch}.noor-access input:not([type=checkbox]),.noor-access select{font-size:16px}.noor-access th,.noor-access td{font-size:11px;padding:10px 7px}}

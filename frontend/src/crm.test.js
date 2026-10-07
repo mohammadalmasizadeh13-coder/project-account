@@ -1,6 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { customerSummary, settleCustomer } from './crm.js';
+import { customerItemName, customerSummary, settleCustomer } from './crm.js';
+
+test('customer item names recover linked inventory names without replacing saved invoice names', () => {
+  const source = { itemName: '  انگشتر نور  ', description: 'شرح خرید عمده' };
+  assert.equal(customerItemName({ description: 'فروش طلا' }, source), 'انگشتر نور');
+  assert.equal(customerItemName({ itemName: '  نام زمان فروش  ' }, source), 'نام زمان فروش');
+  assert.equal(customerItemName({ itemName: '  ', description: 'فروش طلا' }, source), 'انگشتر نور');
+  assert.equal(customerItemName({ description: '  النگوی قدیمی  ' }), 'النگوی قدیمی');
+  assert.equal(customerItemName({ itemName: ' ', description: ' ', typeLabel: 'سکه' }), 'سکه');
+  assert.equal(customerItemName({}), 'نام جنس ثبت نشده');
+});
+
+test('supplier invoices do not enter customer history even when names or imported IDs overlap', () => {
+  const customer = { id: 'same-id', name: 'هم‌نام' };
+  const result = customerSummary(customer, [
+    { id: 'supplier', counterpartyType: 'partner', customerId: 'same-id', customerName: 'هم‌نام', type: 'crafted-purchase', amount: 100, date: '2026-10-07' },
+    { id: 'supplier-legacy-name', counterpartyType: 'partner', customerName: 'هم‌نام', type: 'crafted-purchase', amount: 200, date: '2026-10-07' },
+    { id: 'customer', customerId: 'same-id', type: 'crafted-purchase', amount: 30, date: '2026-10-07' },
+  ]);
+  assert.equal(result.sold, 30);
+  assert.deepEqual(result.transactions.map(row => row.id), ['customer']);
+});
 
 test('customer history follows IDs after renames, supports legacy records and separates both trade directions', () => {
   const customer = { id: 'a', name: 'Renamed' };

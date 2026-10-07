@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import NumberInput from './NumberInput.jsx';
 import { ArrowDownLeft, ArrowUpRight, BellRing, CalendarClock, CheckCheck, CircleAlert, Landmark, Pencil, Plus, Search, Wallet, X } from 'lucide-react';
 import PersianDateInput from './PersianDateInput';
 import { formatPersianDate } from './persianDate';
@@ -97,7 +98,7 @@ export default function ChequeManager({ cheques = [], customers = [], onSave, pa
       <fieldset disabled={saving}><legend>مشخصات چک و طرف حساب</legend><div className="cheque-form-grid">
         <label>نوع چک<select {...fieldProps('direction')}><option value="received">دریافتی · از طرف حساب</option><option value="issued">پرداختی · به طرف حساب</option></select>{fieldError('direction')}</label>
         <label>نام طرف حساب<input {...fieldProps('counterparty')} list="cheque-customers" required maxLength={120} placeholder="انتخاب مشتری یا نوشتن نام" autoComplete="off"/>{fieldError('counterparty')}<datalist id="cheque-customers">{customers.map(customer => <option key={customer.id} value={customer.name}/>)}</datalist></label>
-        <label>مبلغ (تومان)<input {...fieldProps('amount')} required inputMode="numeric" dir="ltr" placeholder="مثلاً ۲۵٬۰۰۰٬۰۰۰"/>{fieldError('amount')}</label>
+        <label>مبلغ (تومان)<NumberInput {...fieldProps('amount')} required inputMode="numeric" dir="ltr" placeholder="مثلاً ۲۵٬۰۰۰٬۰۰۰"/>{fieldError('amount')}</label>
         <label>نام بانک<input {...fieldProps('bank')} required maxLength={80} placeholder="مثلاً ملت"/>{fieldError('bank')}</label>
         <label>شماره چک / شناسه صیادی<input {...fieldProps('number')} required inputMode="numeric" dir="ltr" maxLength={40} placeholder="شماره درج‌شده روی چک"/>{fieldError('number')}</label>
         <label>وضعیت<select {...fieldProps('status')}>{Object.entries(chequeStatuses).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select>{fieldError('status')}</label>
