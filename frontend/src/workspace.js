@@ -2,7 +2,7 @@ import { documentBreakdown, number, quantity } from './assets.js';
 import { dateBefore, iranDate } from './sales.js';
 import { isoToPersian, normalizeDigits, persianToIso } from './persianDate.js';
 
-export const workspaceSections = { home: 'صفحه اصلی', entries: 'ثبت‌ها', reports: 'گزارش‌های حسابداری', crm: 'CRM و طرف حساب‌ها', settings: 'تنظیمات حسابداری' };
+export const workspaceSections = { home: 'صفحه اصلی', entries: 'اسناد', reports: 'گزارش‌های حسابداری', crm: 'CRM و طرف حساب‌ها', settings: 'تنظیمات حسابداری' };
 export const toolSections = {
   home: 'home', entries: 'entries', register: 'entries', expense: 'entries', opening: 'entries', cheques: 'entries', pricing: 'entries', 'gold-entry': 'entries', 'customer-entry': 'entries', 'settlement-entry': 'entries',
   reports: 'reports', dashboard: 'reports', products: 'reports', profit: 'reports', balance: 'reports', rates: 'reports', 'customer-reports': 'reports', vault: 'reports', search: 'reports', 'cheque-reports': 'reports',

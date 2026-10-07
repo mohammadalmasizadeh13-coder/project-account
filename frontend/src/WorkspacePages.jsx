@@ -13,13 +13,25 @@ import './workspace.css';
 
 const money = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value || 0);
 const decimal = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(value || 0);
-export const entryTools = [
-  ['partner-invoice', 'خرید از همکار', 'ثبت سند خرید ساخته، آب‌شده و سکه', ReceiptText],
-  ['partner-remittance', 'حواله همکار', 'بخش حواله؛ در انتظار تکمیل روش ثبت', ArrowLeft],
-  ['register', 'ثبت سند', 'خرید، فروش و هزینه فروشگاه', ReceiptText], ['expense', 'ثبت هزینه', 'هزینه‌های فروشگاه و پرداخت‌ها', Wallet], ['opening', 'موجودی اولیه', 'دارایی‌های شروع کار', PackageOpen],
-  ['cheques', 'ثبت و مدیریت چک', 'چک دریافتی و پرداختی', Wallet], ['pricing', 'ثبت نرخ‌ها', 'قیمت روز طلا، سکه و ارز', Coins],
-  ['customer-entry', 'ثبت مشتری', 'مشخصات، تولد و یادداشت', Users], ['settlement-entry', 'دریافت و پرداخت', 'تسویه حساب مشتری', Wallet], ['gold-entry', 'خرید برای تراز طلا', 'ثبت وزن طلای خریداری‌شده', Gem],
+const entryGroups = [
+  { key: 'store', title: 'اسناد فروشگاه', tools: [
+    ['cheques', 'چک‌ها', 'ثبت و مدیریت چک دریافتی و پرداختی', Wallet],
+    ['opening', 'موجودی اولیه', 'دارایی‌های شروع کار', PackageOpen],
+    ['expense', 'هزینه‌های فروشگاه', 'ثبت هزینه‌ها و پرداخت‌های فروشگاه', Wallet],
+    ['pricing', 'ثبت نرخ', 'قیمت روز طلا، سکه و ارز', Coins],
+    ['gold-entry', 'خرید برای تراز طلا', 'ثبت وزن طلای خریداری‌شده', Gem],
+  ] },
+  { key: 'customer', title: 'اسناد مشتری', tools: [
+    ['register', 'ثبت سند', 'خرید و فروش مشتری', ReceiptText],
+    ['customer-entry', 'ثبت مشتری', 'مشخصات، تولد و یادداشت', Users],
+    ['settlement-entry', 'دریافت و پرداخت', 'تسویه حساب مشتری', Wallet],
+  ] },
+  { key: 'partner', title: 'اسناد همکار', tools: [
+    ['partner-invoice', 'خرید از همکار', 'ثبت سند خرید ساخته، آب‌شده و سکه', ReceiptText],
+    ['partner-remittance', 'حواله همکار', 'بخش حواله؛ در انتظار تکمیل روش ثبت', ArrowLeft],
+  ] },
 ];
+export const entryTools = entryGroups.flatMap(group => group.tools);
 export const reportTools = [
   ['dashboard', 'فروش فروشگاه', 'روند فروش و سهم گروه‌ها', BarChart3], ['profit', 'سود و هزینه‌ها', 'سود درصدی و خالص روز، هفته و ماه', TrendingUp],
   ['products', 'کالاهای پرفروش', 'رتبه‌بندی بر اساس تعداد و مبلغ', PackageOpen], ['balance', 'تراز طلا', 'فروش و خریدهای تراز', Gem],
@@ -27,8 +39,22 @@ export const reportTools = [
   ['vault', 'صندوق و دارایی‌ها', 'موجودی و ارزش کل فروشگاه', PackageOpen], ['search', 'دفتر اسناد', 'جستجو در خرید و فروش‌ها', Search], ['cheque-reports', 'وضعیت چک‌ها', 'سررسیدها و مبالغ باز', Wallet],
 ];
 export function ToolHub({ kind, onOpen, canOpen = () => true }) {
-  const entries = kind === 'entries';
-  return <div className="workspace-hub"><header className="simple-heading"><div><span>{entries ? 'همه ثبت‌ها در یک جا' : 'دید روشن از فروشگاه'}</span><h1>{entries ? 'چه چیزی ثبت می‌کنید؟' : 'کدام گزارش را می‌خواهید؟'}</h1><p>{entries ? 'نوع ثبت را انتخاب کنید تا فرم مربوط باز شود.' : 'هر گزارش در صفحه خودش باز می‌شود.'}</p></div></header><div className="tool-cards">{(entries ? entryTools : reportTools).filter(([key]) => canOpen(key)).map(([key, title, description, Icon]) => <button key={key} data-tool={key} onClick={() => onOpen(key)}><span className="tool-card-icon"><Icon size={23}/></span><strong>{title}</strong><small>{description}</small><ArrowLeft size={17}/></button>)}</div></div>;
+  if (kind === 'entries') {
+    const groups = entryGroups.map(group => ({ ...group, tools: group.tools.filter(([key]) => canOpen(key)) })).filter(group => group.tools.length);
+    return <div className="workspace-hub document-hub"><div className="document-groups">
+      {groups.map(group => <section key={group.key} className="document-group" data-document-group={group.key} aria-labelledby={`document-group-${group.key}`}>
+        <h2 id={`document-group-${group.key}`}>{group.title}</h2>
+        <ul className="document-group-options">{group.tools.map(([key, title, description, Icon]) => <li key={key}>
+          <button type="button" data-tool={key} onClick={() => onOpen(key)}>
+            <Icon size={20} aria-hidden="true"/>
+            <span><strong>{title}</strong><small>{description}</small></span>
+            <ArrowLeft size={16} aria-hidden="true"/>
+          </button>
+        </li>)}</ul>
+      </section>)}
+    </div></div>;
+  }
+  return <div className="workspace-hub"><header className="simple-heading"><div><span>دید روشن از فروشگاه</span><h1>کدام گزارش را می‌خواهید؟</h1><p>هر گزارش در صفحه خودش باز می‌شود.</p></div></header><div className="tool-cards">{reportTools.filter(([key]) => canOpen(key)).map(([key, title, description, Icon]) => <button key={key} data-tool={key} onClick={() => onOpen(key)}><span className="tool-card-icon"><Icon size={23}/></span><strong>{title}</strong><small>{description}</small><ArrowLeft size={17}/></button>)}</div></div>;
 }
 
 export function HomePage({ username, documents, prices, assets, customers, cheques, today, helpers, onOpen }) {
