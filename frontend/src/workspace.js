@@ -6,7 +6,7 @@ export const workspaceSections = { home: 'صفحه اصلی', entries: 'ثبت�
 export const toolSections = {
   home: 'home', entries: 'entries', register: 'entries', expense: 'entries', opening: 'entries', cheques: 'entries', pricing: 'entries', 'gold-entry': 'entries', 'customer-entry': 'entries', 'settlement-entry': 'entries',
   reports: 'reports', dashboard: 'reports', products: 'reports', profit: 'reports', balance: 'reports', rates: 'reports', 'customer-reports': 'reports', vault: 'reports', search: 'reports', 'cheque-reports': 'reports',
-  crm: 'crm', 'crm-occasions': 'crm', partners: 'crm', 'partner-invoice': 'crm', settings: 'settings',
+  crm: 'crm', 'crm-occasions': 'crm', partners: 'crm', 'partner-invoice': 'entries', 'partner-remittance': 'entries', settings: 'settings',
 };
 
 export function birthdayReminders(customers, today = iranDate(), horizon = 7) {

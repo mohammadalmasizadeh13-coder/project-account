@@ -59,6 +59,13 @@ const documentTypes = [
   { value: 'expense', label: 'هزینه فروشگاه', category: 'expense', direction: 'هزینه' },
 ];
 
+const partnerDocumentTypes = [
+  { value: 'partner-crafted-purchase', label: 'خرید کار ساخته از همکار', category: 'crafted' },
+  { value: 'partner-melted-purchase', label: 'خرید آب‌شده از همکار', category: 'melted' },
+  { value: 'partner-coin-purchase', label: 'خرید سکه از همکار', category: 'coin' },
+  { value: 'partner-remittance', label: 'حواله همکار', category: null },
+];
+
 const coinTypes = coinCatalog.map(coin => coin.name);
 const coinPriceFields = Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price]));
 
@@ -626,6 +633,11 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const [documentLocked, setDocumentLocked] = useState(Boolean(documentRequestId.current && ownerStorage.status().recovery?.requestId === documentRequestId.current));
   const [draftError, setDraftError] = useState('');
   const [documentForm, setDocumentForm] = useState(() => ({ ...createEmptyDocumentForm(), gramPrice: priceForm.goldGramPrice, ...initialDocumentDraft.current?.form }));
+  const [partnerEntryType, setPartnerEntryType] = useState(() => {
+    const saved = readAccountingDraft(username, 'document-entry-mode')?.form?.type;
+    if (partnerDocumentTypes.some(type => type.value === saved) && canOpen(saved === 'partner-remittance' ? 'partner-remittance' : 'partner-invoice')) return saved;
+    return !has('customers.write') && canOpen('partner-invoice') ? 'partner-crafted-purchase' : '';
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [formMessage, setFormMessage] = useState(null);
   const [documentErrors, setDocumentErrors] = useState({});
@@ -638,6 +650,10 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     try { writeAccountingDraft(username, 'document', documentForm, documentRequestId.current); setDraftError(''); }
     catch { setDraftError('پیش‌نویس در مرورگر ذخیره نشد؛ تا تأیید ثبت در سرور، این صفحه را نبندید.'); }
   }, [username, documentForm]);
+  useEffect(() => {
+    try { writeAccountingDraft(username, 'document-entry-mode', { type: partnerEntryType }); }
+    catch { setDraftError('نوع سند انتخاب‌شده در مرورگر ذخیره نشد.'); }
+  }, [username, partnerEntryType]);
 
   const applyStockWorkspace = saved => {
     if (!saved) throw new Error('نشست تغییر کرده است؛ دوباره وارد حساب شوید.');
@@ -740,6 +756,11 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
   const openTool = tool => {
     if (!canOpen(tool)) { setStorageMessage('دسترسی این بخش برای حساب شما فعال نشده است.'); return; }
+    if (tool === 'partner-invoice' || tool === 'partner-remittance') {
+      if (documentSaving || documentLocked || documentOperation.current) { setStorageMessage('ابتدا وضعیت ثبت سند جاری را مشخص کنید.'); return; }
+      setPartnerEntryType(tool === 'partner-remittance' ? tool : 'partner-crafted-purchase');
+      tool = 'register';
+    }
     if (tool === 'crm' && !has('customers.read')) tool = 'partners';
     if (tool === 'settings') setSettingsVisited(true);
     setStorageMessage('');
@@ -747,6 +768,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       if (documentSaving || documentLocked || documentOperation.current) { setStorageMessage('ثبت سند در حال تأیید است؛ ابتدا وضعیت ذخیره را مشخص کنید.'); return; }
       if (documentForm.invoiceRows?.length) { setStorageMessage('سند چندردیفی در حال تکمیل است؛ ابتدا آن را ثبت کنید یا ردیف‌هایش را حذف کنید.'); return; }
       setDocumentForm(createEmptyDocumentForm('expense'));
+      setPartnerEntryType('');
       setStockQuery(''); setDocumentErrors({}); setFormMessage(null);
     }
     setActiveTool(tool === 'expense' ? 'register' : tool); setMenuOpen(false); setSelectedChequeId('');
@@ -911,6 +933,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   };
   const continueVaultSale = request => {
     openTool('register');
+    setPartnerEntryType('');
     setVaultSaleRequest(request);
     if (documentSaving || documentLocked || documentOperation.current) {
       setStorageMessage('ثبت سند در حال تأیید است؛ پس از مشخص شدن وضعیت ذخیره، فروش جنس انتخاب‌شده را ادامه دهید.');
@@ -1077,6 +1100,24 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     setDocumentForm(currentForm => updateFormWithMarketPrice(currentForm, name, value));
     setFormMessage(null);
   };
+
+  const chooseDocumentEntryType = event => {
+    const value = event.target.value;
+    if (documentSaving || documentLocked || documentOperation.current) return;
+    const partnerType = partnerDocumentTypes.find(type => type.value === value);
+    if (partnerType) {
+      if (!canOpen(value === 'partner-remittance' ? 'partner-remittance' : 'partner-invoice')) return;
+      setPartnerEntryType(value); setFormMessage(null); setStorageMessage('');
+      return;
+    }
+    if (!has('customers.write') && value !== 'expense') return;
+    setPartnerEntryType('');
+    if (value !== documentForm.type) updateDocumentField(event);
+  };
+  const documentTypeSelector = <label className="document-type-select">نوع سند<select data-document-type name="type" value={partnerEntryType || documentForm.type} disabled={documentSaving || documentLocked} onChange={chooseDocumentEntryType}>
+    <optgroup label="اسناد مشتری و فروشگاه">{documentTypes.filter(type => has('customers.write') || type.value === 'expense').map(type => <option key={type.value} value={type.value}>{type.label}</option>)}</optgroup>
+    {(canOpen('partner-invoice') || canOpen('partner-remittance')) && <optgroup label="اسناد همکاران">{partnerDocumentTypes.filter(type => canOpen(type.value === 'partner-remittance' ? 'partner-remittance' : 'partner-invoice')).map(type => <option key={type.value} value={type.value}>{type.label}</option>)}</optgroup>}
+  </select></label>;
 
   const updatePriceField = event => {
     const { name, value } = event.target;
@@ -1320,7 +1361,13 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
               <button className="button button-primary full" type="submit"><TrendingUp size={17}/> ثبت قیمت و بروزرسانی جنس‌ها</button>
             </form>}
 
-            {activeTool === 'register' && <form className="document-form" onSubmit={submitDocument} noValidate aria-busy={documentSaving}>
+            {activeTool === 'register' && partnerEntryType && <section className="document-form partner-document-entry" data-partner-document-entry>
+              {documentTypeSelector}
+              <PartnerCRM key={partnerEntryType} embedded username={username} partners={partners} documents={documents} prices={savedPrices} onAction={performPartnerAction}
+                readOnly={!has('partners.write')} canPurchase={has('partners.write') && has('documents.write')}
+                initialAction={partnerEntryType === 'partner-remittance' ? 'remittance' : 'invoice'} initialCategory={partnerDocumentTypes.find(type => type.value === partnerEntryType)?.category || 'crafted'}/>
+            </section>}
+            {activeTool === 'register' && !partnerEntryType && <form className="document-form" onSubmit={submitDocument} noValidate aria-busy={documentSaving}>
               {formMessage && <div className={`form-message ${formMessage.type}`} role={formMessage.type === 'error' ? 'alert' : 'status'}>{formMessage.text}</div>}
               {draftError && <p className="form-message error" role="alert">{draftError}</p>}
               {vaultSaleRequest && <div className="invoice-draft-list" data-vault-sale-request role="status">
@@ -1333,8 +1380,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                 </div>
               </div>}
               <fieldset className="document-save-fields" hidden={paymentStep} disabled={documentSaving || documentLocked || paymentStep}>
-              <label className="document-type-select">نوع سند<select name="type" value={documentForm.type} onChange={updateDocumentField}>{documentTypes.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
-              {canOpen('partner-invoice') && <p className="document-required-note">برای خرید از بنکدار یا آب‌شده‌فروش، <button type="button" className="button button-ghost" data-open-partner-invoice onClick={() => openTool('partner-invoice')}>فاکتور همکار تجاری</button> را ثبت کنید تا بدهی و حواله‌ها در حساب همکار قرار بگیرد.</p>}
+              {documentTypeSelector}
 
               <p className="document-required-note">ساعت و دقیقهٔ ثبت، هنگام ذخیره به‌صورت خودکار به وقت ایران ثبت می‌شود.</p>
 

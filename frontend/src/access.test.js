@@ -50,5 +50,7 @@ test('business partner access is separate from customers and purchasing requires
   assert.equal(canOpenTool(staff, 'partner-invoice'), false);
   staff.permissions.push('documents.read', 'documents.write');
   assert.equal(canOpenTool(staff, 'partner-invoice'), true);
-  assert.equal(canOpenTool(staff, 'register'), false);
+  assert.equal(canOpenTool(staff, 'register'), true);
+  assert.equal(canOpenTool(staff, 'partner-remittance'), true);
+  assert.equal(can(staff, 'customers.write'), false, 'Supplier entry does not grant customer writes');
 });

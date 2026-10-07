@@ -14,7 +14,8 @@ import './workspace.css';
 const money = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value || 0);
 const decimal = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(value || 0);
 export const entryTools = [
-  ['partner-invoice', 'خرید از همکار', 'فاکتور بنکدار، آب‌شده‌فروش و حواله‌ها', ReceiptText],
+  ['partner-invoice', 'خرید از همکار', 'ثبت سند خرید ساخته، آب‌شده و سکه', ReceiptText],
+  ['partner-remittance', 'حواله همکار', 'بخش حواله؛ در انتظار تکمیل روش ثبت', ArrowLeft],
   ['register', 'ثبت سند', 'خرید، فروش و هزینه فروشگاه', ReceiptText], ['expense', 'ثبت هزینه', 'هزینه‌های فروشگاه و پرداخت‌ها', Wallet], ['opening', 'موجودی اولیه', 'دارایی‌های شروع کار', PackageOpen],
   ['cheques', 'ثبت و مدیریت چک', 'چک دریافتی و پرداختی', Wallet], ['pricing', 'ثبت نرخ‌ها', 'قیمت روز طلا، سکه و ارز', Coins],
   ['customer-entry', 'ثبت مشتری', 'مشخصات، تولد و یادداشت', Users], ['settlement-entry', 'دریافت و پرداخت', 'تسویه حساب مشتری', Wallet], ['gold-entry', 'خرید برای تراز طلا', 'ثبت وزن طلای خریداری‌شده', Gem],

@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { readAccountingDraft, writeAccountingDraft } from './accountingDrafts.js';
 import { newPartnerInvoice, newPartnerLine, newPartnerProfile, newPartnerSettlement, parsePartnerNumber,
   partnerInvoiceTotals, partnerLineTotals, savedPartnerLineTotals, partnerStatement, preparePartnerInvoice, preparePartnerProfile,
-  preparePartnerSettlement } from './partnerLedger.js';
+  preparePartnerSettlement, upgradePartnerInvoiceDraft } from './partnerLedger.js';
 
 const line = { ...newPartnerLine({ goldGramPrice: 10000000 }), itemName: 'النگو', craftedKind: 'النگو', itemCount: '۳', weight: '۴٫۷۴۰', ayar: '۷۵۰', wagePercent: '۷' };
-test('supplier photo example counts total row weight once and adds seven percent labor as gold', () => {
-  const invoice = { ...newPartnerInvoice({ goldGramPrice: 10000000 }), date: '2026-10-07', lines: [line] };
+test('legacy supplier photo example retains total row weight and seven percent labor without new profit', () => {
+  const invoice = { ...newPartnerInvoice({ goldGramPrice: 10000000 }), calculationVersion: 1, date: '2026-10-07', lines: [line] };
   const before = structuredClone(invoice);
   const payload = preparePartnerInvoice(invoice);
   const totals = partnerInvoiceTotals(payload);
@@ -27,8 +27,8 @@ test('explicit unit weights multiply by count and lower purity converts principa
   assert.ok(Math.abs(totals.weight750 - 4.74 * 740 / 750) < 1e-12);
   assert.ok(Math.abs(totals.goldDebit - 4.74 * 740 / 750 * 1.07) < 1e-12);
 });
-test('mixed invoices keep coin currency and extra costs in fiat independently from gold principal and labor', () => {
-  const invoice = { ...newPartnerInvoice({ goldGramPrice: 10000000 }), lines: [
+test('legacy mixed invoices keep fiat debt and gold debt without reinterpretation', () => {
+  const invoice = { ...newPartnerInvoice({ goldGramPrice: 10000000 }), calculationVersion: 1, lines: [
     { ...line, otherCosts: '۱۰' },
     { ...newPartnerLine({}, 'coin'), itemName: 'سکه', coinCount: '۲', coinPrice: '۵۰۰' },
     { ...newPartnerLine({}, 'currency'), itemName: 'دلار', currencyAmount: '۱٫۵', currencyRate: '۱۰۰' },
@@ -44,8 +44,8 @@ test('full precision line weights are summed before six-decimal ledger rounding'
   const totals = partnerInvoiceTotals({ lines: Array.from({ length: 100 }, () => ({ ...item })) });
   assert.equal(totals.goldDebit, 0.000099);
 });
-test('a gold remittance credits only supplier ledger and returns the sample gold balance to zero', () => {
-  const payment = preparePartnerSettlement({ ...newPartnerSettlement(), date: '2026-10-07', goldAmount: '۵٫۰۷۱۸', paymentMethod: 'remittance', counterpartyName: 'همکار دوم', reference: 'حواله ۱۲۳' });
+test('a gold payment credits only supplier ledger and returns the sample gold balance to zero', () => {
+  const payment = preparePartnerSettlement({ ...newPartnerSettlement(), date: '2026-10-07', goldAmount: '۵٫۰۷۱۸', paymentMethod: 'gold', counterpartyName: 'همکار دوم', reference: 'پرداخت ۱۲۳' });
   assert.equal(payment.direction, 'credit');
   assert.equal(payment.goldAmount, 5.0718);
   assert.equal(payment.tomanAmount, 0);
@@ -93,8 +93,8 @@ test('malformed grouped numbers nonfinite values and invalid supplier goods cann
   assert.throws(() => preparePartnerSettlement(newPartnerSettlement()));
 });
 
-test('blank per-line gold rates inherit the invoice snapshot without affecting gold labor debt', () => {
-  const form = { ...newPartnerInvoice({ goldGramPrice: 1000 }), lines: [{ ...line, gramPrice: '' }] };
+test('legacy blank per-line gold rates inherit the invoice snapshot without affecting gold labor debt', () => {
+  const form = { ...newPartnerInvoice({ goldGramPrice: 1000 }), calculationVersion: 1, lines: [{ ...line, gramPrice: '' }] };
   assert.equal(preparePartnerInvoice(form).lines[0].gramPrice, 1000);
   assert.equal(partnerInvoiceTotals(form).lines[0].rate, 1000);
   assert.equal(partnerInvoiceTotals(form).goldDebit, 5.0718);
@@ -148,4 +148,91 @@ test('linked stock fallback multiplies its per-unit physical weight and preserve
   const legacyTotals = savedPartnerLineTotals({ documentId: 'stock' }, legacy, { settlementUnit: 'gold' });
   assert.equal(legacyTotals.actualWeight, 4.74);
   assert.equal(legacyTotals.goldDebit, 5.0718);
+});
+
+test('new crafted purchase adds editable profit and converts monetary labor costs and payment to gold', () => {
+  const form = { ...newPartnerInvoice({ goldGramPrice: 100000 }), lines: [{ ...line, gramPrice: 999999, wageFixed: '2000', otherCosts: '1000', profitPercent: '7' }], paidGold: '1', paidToman: '100000' };
+  const payload = preparePartnerInvoice(form);
+  const totals = partnerInvoiceTotals(payload);
+  assert.equal(payload.calculationVersion, 2);
+  assert.equal(payload.lines[0].gramPrice, 100000);
+  assert.equal(totals.actualWeight, 4.74);
+  assert.equal(totals.fixedLaborGold, 0.06);
+  assert.equal(totals.otherCostsGold, 0.03);
+  assert.equal(totals.profitGold, 0.361326);
+  assert.equal(totals.goldDebit, 5.523126);
+  assert.equal(totals.tomanDebit, 0);
+  assert.equal(totals.goldCredit, 2);
+  assert.equal(totals.cashGoldCredit, 1);
+  assert.equal(totals.tomanCredit, 0);
+  assert.deepEqual(partnerInvoiceTotals(form), totals);
+});
+
+test('profit accepts a smaller percentage or explicit zero and defaults only crafted rows to seven', () => {
+  assert.equal(newPartnerLine({}, 'crafted').profitPercent, '7');
+  assert.equal(newPartnerLine({}, 'melted').profitPercent, '0');
+  assert.equal(newPartnerLine({}, 'coin').profitPercent, '0');
+  const invoice = { ...newPartnerInvoice({ goldGramPrice: 100000 }), lines: [{ ...line, weight: 10, wagePercent: 10, profitPercent: 5 }] };
+  assert.equal(partnerInvoiceTotals(preparePartnerInvoice(invoice)).goldDebit, 11.55);
+  invoice.lines[0].profitPercent = 0;
+  assert.equal(partnerInvoiceTotals(preparePartnerInvoice(invoice)).goldDebit, 11);
+  invoice.lines[0].profitPercent = -1;
+  assert.throws(() => preparePartnerInvoice(invoice));
+  invoice.lines[0].profitPercent = 101;
+  assert.throws(() => preparePartnerInvoice(invoice));
+});
+
+test('rial labor is normalized once to toman before the gold conversion', () => {
+  const form = { ...newPartnerInvoice({ goldGramPrice: 5000000 }), lines: [{ ...line, itemCount: 1, weight: 10, wagePercent: 0, profitPercent: 0, wageFixed: '۱۰۰۰۰۰۰۰', wageFixedUnit: 'rial' }] };
+  const payload = preparePartnerInvoice(form);
+  assert.equal(payload.lines[0].wageFixed, 1000000);
+  assert.equal(Object.hasOwn(payload.lines[0], 'wageFixedUnit'), false);
+  assert.equal(partnerInvoiceTotals(form).fixedLaborGold, 0.2);
+  assert.equal(partnerInvoiceTotals(payload).fixedLaborGold, 0.2);
+  assert.equal(partnerInvoiceTotals(payload).goldDebit, 10.2);
+});
+
+test('coin and melted purchases use the invoice conversion rate and keep stock quantities intact', () => {
+  const form = { ...newPartnerInvoice({ goldGramPrice: 100000 }, 'coin'), lines: [
+    { ...newPartnerLine({}, 'coin'), itemName: 'سکه', coinCount: 2, coinPrice: 500000, otherCosts: 10000, profitPercent: 1 },
+    { ...newPartnerLine({}, 'melted'), itemName: 'آبشده', itemCount: 3, meltedWeight: 10, meltedAyar: 740, assayCode: '123', laboratoryName: 'آزمایشگاه', profitPercent: 0 },
+  ] };
+  const payload = preparePartnerInvoice(form);
+  const totals = partnerInvoiceTotals(payload);
+  assert.equal(payload.lines[0].coinCount, 2);
+  assert.equal(payload.lines[1].meltedWeight, 10);
+  assert.equal(totals.lines[0].goldDebit, 10.302);
+  assert.equal(totals.actualWeight, 10);
+  assert.equal(totals.goldDebit, 20.168667);
+  assert.equal(totals.tomanDebit, 0);
+});
+
+test('unsigned legacy draft upgrade preserves entered values while version one pending payload stays replayable', () => {
+  const legacy = { ...newPartnerInvoice({ goldGramPrice: 100000 }), calculationVersion: undefined, lines: [{ ...line, profitPercent: undefined, wageFixed: 2000 }] };
+  const before = structuredClone(legacy);
+  const upgraded = upgradePartnerInvoiceDraft(legacy);
+  assert.equal(upgraded.calculationVersion, 2);
+  assert.equal(upgraded.lines[0].wageFixed, 2000);
+  assert.equal(upgraded.lines[0].weight, line.weight);
+  assert.equal(upgraded.lines[0].profitPercent, '7');
+  assert.deepEqual(legacy, before);
+  assert.equal(Object.hasOwn(preparePartnerInvoice(legacy), 'calculationVersion'), false);
+  assert.equal(partnerInvoiceTotals(preparePartnerInvoice(legacy)).goldDebit, 5.0718);
+});
+
+test('saved version two details preserve audited gold values without recomputing historical rates', () => {
+  const saved = savedPartnerLineTotals({ ...line, profitPercent: 3, goldDebit: 5.260854, tomanDebit: 0,
+    fixedLaborGold: 0.03, otherCostsGold: 0.006, profitGold: 0.153054, conversionGoldPrice: 100000 },
+  { gramPrice: 999999 }, { calculationVersion: 2, gold18Price: 100000 });
+  assert.equal(saved.goldDebit, 5.260854);
+  assert.equal(saved.fixedLaborGold, 0.03);
+  assert.equal(saved.profitGold, 0.153054);
+  assert.equal(saved.conversionGoldPrice, 100000);
+});
+
+test('new remittance submission remains unavailable while historical remittance credits remain visible', () => {
+  assert.throws(() => preparePartnerSettlement({ ...newPartnerSettlement(), goldAmount: 1, paymentMethod: 'remittance' }), /حواله/);
+  const statement = partnerStatement({ openingGoldBalance: 5, entries: [{ id: 'historical-remittance', date: '2026-10-07', paymentMethod: 'remittance', goldCredit: 2 }] });
+  assert.equal(statement.goldBalance, 3);
+  assert.equal(statement.rows[0].paymentMethod, 'remittance');
 });

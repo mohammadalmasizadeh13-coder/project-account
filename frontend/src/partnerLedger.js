@@ -53,7 +53,7 @@ export function preparePartnerProfile(form, allowOpening = true) {
 
 export function newPartnerLine(prices = {}, category = 'crafted') {
   return { category, itemName: '', craftedKind: 'سایر', weightMode: 'total', itemCount: '1', weight: '', ayar: '750',
-    gramPrice: String(prices.goldGramPrice || ''), wagePercent: '0', wageFixed: '', otherCosts: '', profitPercent: category === 'crafted' ? '7' : '0',
+    gramPrice: String(prices.goldGramPrice || ''), wagePercent: '0', wageFixed: '', wageFixedUnit: 'toman', otherCosts: '', profitPercent: category === 'crafted' ? '7' : '0',
     meltedWeight: '', meltedAyar: '750', meltedGramPrice: String(prices.goldGramPrice || ''), assayCode: '', laboratoryName: '',
     coinType: 'امامی بانکی ۸۶', coinCount: '1', coinPrice: String(prices.bankEmami86Price || ''), parsianWeight: '', parsianPrice: '',
     currencyType: 'USD', currencyAmount: '', currencyRate: String(prices.usdPrice || ''),
@@ -70,7 +70,7 @@ export const newPartnerSettlement = () => ({ date: iranDate(), direction: 'credi
 export function upgradePartnerInvoiceDraft(invoice) {
   if (!invoice || invoice.calculationVersion === 2) return invoice;
   return { ...invoice, calculationVersion: 2, settlementUnit: 'gold',
-    lines: (invoice.lines || []).map(line => ({ ...line, wageFixed: line.wageFixed ?? '',
+    lines: (invoice.lines || []).map(line => ({ ...line, wageFixed: line.wageFixed ?? '', wageFixedUnit: line.wageFixedUnit || 'toman',
       profitPercent: line.profitPercent ?? (line.category === 'crafted' ? '7' : '0') })) };
 }
 
@@ -92,7 +92,8 @@ export function preparePartnerLine(form, rate, calculationVersion = 2) {
     if (line[purityKey] < 1) throw new Error('عیار باید بین ۱ و ۱۰۰۰ باشد.');
     line[priceKey] = calculationVersion === 2 ? rate : text(form[priceKey]) ? numeric(form[priceKey], 'نرخ هر گرم ۷۵۰', { positive: true }) : rate;
     line.wagePercent = numeric(form.wagePercent, 'اجرت درصدی', { optional: true, max: 100 });
-    line.wageFixed = calculationVersion === 2 ? numeric(form.wageFixed, 'اجرت پولی هر عدد (تومان)', { optional: true }) : 0;
+    if (calculationVersion === 2 && form.wageFixedUnit && !['rial', 'toman'].includes(form.wageFixedUnit)) throw new Error('واحد اجرت ریالی را انتخاب کنید.');
+    line.wageFixed = calculationVersion === 2 ? numeric(form.wageFixed, 'اجرت پولی هر عدد', { optional: true }) / (form.wageFixedUnit === 'rial' ? 10 : 1) : 0;
     if (category === 'crafted') line.craftedKind = form.craftedKind || 'سایر';
     else {
       if (!text(form.assayCode) || !text(form.laboratoryName)) throw new Error('شماره انگ و آزمایشگاه طلای آبشده را وارد کنید.');
@@ -130,7 +131,7 @@ export function partnerLineTotals(line, goldPrice = 0, calculationVersion = 1) {
     const actualWeight = weight * (line.weightMode === 'unit' ? count : 1);
     const weight750 = actualWeight * purity / 750;
     const laborGold = weight750 * savedNumber(line.wagePercent) / 100;
-    const fixedLaborGold = calculationVersion === 2 ? convert(count * savedNumber(line.wageFixed)) : 0;
+    const fixedLaborGold = calculationVersion === 2 ? convert(count * savedNumber(line.wageFixed) / (line.wageFixedUnit === 'rial' ? 10 : 1)) : 0;
     const baseGold = weight750 + laborGold + fixedLaborGold + otherCostsGold;
     const profitGold = baseGold * profitPercent / 100;
     return { actualWeight, purity, weight750, laborGold, fixedLaborGold, otherCostsGold, profitGold, profitPercent, conversionGoldPrice,
