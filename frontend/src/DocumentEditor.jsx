@@ -7,6 +7,7 @@ import { expenseUnits, expenseValue } from './expenses';
 import { invoiceItemName } from './invoices';
 import { invoiceSettlement } from './invoiceSettlement';
 import { isMiscPurchase } from './miscGold';
+import { validateDocument } from './documentValidation';
 import './document-editor.css';
 
 const money = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value);
@@ -20,7 +21,7 @@ function rowFields(row) {
       : row.category === 'currency'
         ? [['currencyAmount', 'مقدار ارز'], ['currencyRate', 'نرخ هر واحد ارز (تومان)']]
         : [['coinCount', 'تعداد سکه'], [row.coinType === 'پارسیان' ? 'parsianPrice' : 'coinPrice', 'قیمت هر سکه (تومان)'], ...(row.coinType === 'پارسیان' ? [['parsianWeight', 'وزن هر سکه (گرم)']] : [])];
-  return [...fields, ...(row.category !== 'currency' && !isMiscPurchase(row) ? [['wagePercent', 'اجرت (%)'], ['wageFixed', 'اجرت ثابت هر واحد (تومان)']] : []), ...(!isMiscPurchase(row) ? commonNumbers : [])];
+  return [...fields, ...(row.category !== 'currency' && !isMiscPurchase(row) ? [['wagePercent', 'اجرت (%)'], ['wageFixed', 'اجرت ثابت هر واحد (تومان)']] : []), ...(!isMiscPurchase(row) ? commonNumbers : []), ...(row.type?.endsWith('-sale') ? [['discountPercent', 'تخفیف درصدی (%)']] : [])];
 }
 
 export const canManageInvoice = invoice => invoice?.rows?.length > 0 && invoice.rows.every(row => row.source !== 'opening-inventory' && row.counterpartyType !== 'partner' && !row.partnerId);
@@ -51,7 +52,7 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
   function updateHeader(name, value) { setHeader(previous => ({ ...previous, [name]: value })); setError(''); }
   function updateRow(index, name, value) { setRows(previous => previous.map((row, position) => position === index ? { ...row, [name]: value, ...(name === 'expenseUnit' && value === 'currency' && !row.expenseCurrency ? { expenseCurrency: 'USD' } : {}) } : row)); setError(''); }
   function numericField(index, name, label) {
-    return <label key={name}>{label}<NumberInput name={name} value={rows[index][name] ?? (['ayar', 'meltedAyar', 'expenseGoldPurity'].includes(name) ? '750' : ['itemCount', 'coinCount'].includes(name) ? '1' : name === 'expenseAmount' ? rows[index].amount ?? '' : '')} onChange={event => updateRow(index, name, event.target.value)}/></label>;
+    return <label key={name}>{label}<NumberInput name={name} placeholder={name === 'discountPercent' ? '۰ تا ۱۰۰' : undefined} value={rows[index][name] ?? (['ayar', 'meltedAyar', 'expenseGoldPurity'].includes(name) ? '750' : ['itemCount', 'coinCount'].includes(name) ? '1' : name === 'expenseAmount' ? rows[index].amount ?? '' : '')} onChange={event => updateRow(index, name, event.target.value)}/></label>;
   }
   const total = rows.reduce((sum, row, index) => {
     if (row.type === 'expense') return sum + expenseValue({ ...row, expenseUnit: row.expenseUnit ?? 'toman', expenseAmount: row.expenseAmount ?? row.amount });
@@ -82,6 +83,16 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
     event.preventDefault();
     if (running.current) return;
     if (!pending.current) {
+      if (!deleting) {
+        for (const [index, row] of rows.entries()) {
+          if (!row.type?.endsWith('-sale')) continue;
+          const economicChange = rowFields(row).some(([key]) => String(row[key] ?? '') !== String(original[index][key] ?? ''));
+          if (!economicChange) continue;
+          const validation = validateDocument(row, row.category, number);
+          const discountError = validation.discountPercent || validation.discountRial;
+          if (discountError) { setError(`ردیف ${(index + 1).toLocaleString('fa-IR')}: ${discountError}`); return; }
+        }
+      }
       const payload = deleting ? null : changes();
       if (!deleting && !payload.some(row => Object.keys(row.changes).length)) { setError('تغییری در سند ایجاد نشده است.'); return; }
       pending.current = { rows: payload, requestId: crypto.randomUUID() };
@@ -119,6 +130,7 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
             <label>شرح<textarea name="description" value={row.description || ''} required={expense} onChange={event => updateRow(index, 'description', event.target.value)}/></label>
             <label>یادداشت<textarea name="note" value={row.note || ''} onChange={event => updateRow(index, 'note', event.target.value)}/></label>
           </div>
+          {row.type?.endsWith('-sale') && <p>تخفیف درصدی از کل مبلغ ردیف، شامل اجرت، هزینه‌ها و سود محاسبه می‌شود و تخفیف ریالی هم علاوه بر آن کسر می‌شود.</p>}
         </fieldset>)}
         {!expense && <div className="document-edit-grid">{(settled ? [['cashPaid', 'پرداخت نقدی (تومان)'], ['settlementGoldPrice', 'نرخ تبدیل مانده به طلای ۱۸ عیار (تومان)']] : [['gramDebt', 'بدهی گرمی سند'], ['rialDebt', 'بدهی نقدی سند (تومان)']]).map(([key, label]) => <label key={key}>{label}<NumberInput name={key} value={header[key]} onChange={event => updateHeader(key, event.target.value)}/></label>)}</div>}
         <div className="document-edit-preview" aria-live="polite"><strong>مبلغ اصلاح‌شده: {Number.isFinite(total) ? money(total) : '—'} تومان</strong>{settlement && <span>بدهی گرمی: {settlement.gramDebt === null ? '—' : settlement.gramDebt.toLocaleString('fa-IR', { maximumFractionDigits: 6 })} گرم</span>}</div>

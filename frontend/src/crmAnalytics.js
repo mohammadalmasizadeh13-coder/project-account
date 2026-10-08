@@ -52,7 +52,7 @@ export function customerAnalytics(customer, documents, { today = iranDate(), day
     const count = quantity({ ...doc, category });
     const grams = category === 'crafted' ? count * number(doc.weight) * number(doc.ayar || 750) / 750
       : category === 'melted' ? count * number(doc.meltedWeight) * number(doc.meltedAyar || 750) / 750 : 0;
-    purchased += amount; goldGrams += grams; discounts += number(doc.discountRial);
+    purchased += amount; goldGrams += grams; discounts += documentBreakdown({ ...doc, category }).discount;
     if (['crafted', 'coin', 'melted'].includes(category)) itemCount += count;
     if (category === 'crafted') craftedQuantity += count;
     const group = purchaseGroups[category] ? category : 'other';

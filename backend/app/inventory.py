@@ -35,7 +35,7 @@ STRING_FIELDS = TEXT_FIELDS | {"craftedKind", "coinType", "currencyType", "assay
 LINKED_PROTECTED_FIELDS = set().union(*ECONOMIC_FIELDS.values()) | {
     "category", "source", "type", "direction", "productCode", "date", "customerId",
     "gramPrice", "meltedGramPrice", "coinPrice", "parsianPrice", "currencyRate", "profitPercent", "otherCosts",
-    "gramDebt", "rialDebt", "gold18Price", "amount", "currentAmount", "itemWeight", "discountRial",
+    "gramDebt", "rialDebt", "gold18Price", "amount", "currentAmount", "itemWeight", "discountRial", "discountPercent",
     "setId", "setName", "setKind", "setMode", "setPieceCount", "transactionId",
     "weight750",
 }
@@ -48,7 +48,7 @@ CURRENCY_RATE_FIELDS = {"USD": "usdPrice", "EUR": "eurPrice", "AED": "aedPrice",
 KINDS = {"النگو", "دستبند", "گردنبند", "زنجیر", "انگشتر", "گوشواره", "آویز و پلاک", "نیم‌ست", "ست", "سرویس", "پابند", "سایر"}
 NUMERIC_FIELDS = (set().union(*ECONOMIC_FIELDS.values()) - STRING_FIELDS) | {
     "gramPrice", "meltedGramPrice", "coinPrice", "parsianPrice", "currencyRate", "profitPercent", "otherCosts",
-    "gramDebt", "rialDebt", "gold18Price", "amount", "currentAmount", "itemWeight", "discountRial", "setPieceCount",
+    "gramDebt", "rialDebt", "gold18Price", "amount", "currentAmount", "itemWeight", "discountRial", "discountPercent", "setPieceCount",
     "weight750",
 }
 
@@ -161,6 +161,7 @@ def validate_item(document):
         raise HTTPException(422, "نوع ارز معتبر نیست.")
     numeric(document.get("wagePercent"), "اجرت درصدی", maximum=Decimal(100), default=0)
     numeric(document.get("wageFixed"), "اجرت ثابت", default=0)
+    numeric(document.get("discountPercent"), "تخفیف درصدی", maximum=Decimal(100), default=0)
     if document.get("type") == "misc-purchase":
         if category != "crafted":
             raise HTTPException(422, "خرید طلای متفرقه فقط برای طلای ساخته ثبت می‌شود.")
@@ -168,6 +169,17 @@ def validate_item(document):
         numeric(document.get("gramPrice"), "نرخ خرید طلای متفرقه", minimum=Decimal("0.00000001"))
         if any(numeric(document.get(field), "اجرت یا سود", default=0) != 0 for field in ("wagePercent", "wageFixed", "profitPercent")):
             raise HTTPException(422, "خرید طلای متفرقه بدون اجرت و سود ثبت می‌شود.")
+
+
+def discounted_amount(document, gross, *, validate_total=True):
+    """Apply a sale's percentage before its fixed discount, on the whole row."""
+    percent = numeric(document.get("discountPercent"), "تخفیف درصدی", maximum=Decimal(100), default=0)
+    discount = numeric(document.get("discountRial"), "تخفیف", maximum=Decimal("9007199254740991"), default=0)
+    if is_sale(document):
+        discount += gross * percent / 100
+    if validate_total and discount > gross and discount - gross > max(Decimal("1e-12"), gross * Decimal("2e-15")):
+        raise HTTPException(422, "تخفیف نمی‌تواند بیشتر از مبلغ ردیف پیش از تخفیف باشد.")
+    return max(Decimal(0), gross - discount)
 
 
 def amount(document, prices=None):

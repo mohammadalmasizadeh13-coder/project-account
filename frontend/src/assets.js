@@ -45,8 +45,10 @@ export function documentBreakdown(doc, prices = null) {
   const wage = doc.category === 'currency' ? 0 : base * number(doc.wagePercent) / 100 + count * number(doc.wageFixed);
   const costs = count * number(doc.otherCosts);
   const profit = (base + wage + costs) * number(doc.profitPercent) / 100;
-  const discount = String(doc.type).endsWith('-sale') || doc.direction === 'فروش' ? number(doc.discountRial) : 0;
-  return { base, wage, costs, profit, discount, total: Math.max(0, base + wage + costs + profit - discount) };
+  const gross = base + wage + costs + profit;
+  const discount = String(doc.type).endsWith('-sale') || doc.direction === 'فروش'
+    ? number(doc.discountRial) + gross * number(doc.discountPercent) / 100 : 0;
+  return { base, wage, costs, profit, discount, total: Math.max(0, gross - discount) };
 }
 
 export function assetReport(stock, prices = {}) {

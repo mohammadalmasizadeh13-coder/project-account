@@ -76,7 +76,7 @@ export function stockSaleForm(item, form, prices = {}) {
     currencyAmount: '1', currencyRate: String(currencyRate(item.currencyType, prices) || item.currencyRate || ''),
     gramPrice: prices.goldGramPrice || item.gramPrice || '', meltedGramPrice: prices.goldGramPrice || item.meltedGramPrice || '',
     coinPrice: prices[coinRates[item.coinType]] || item.coinPrice || '', parsianPrice: item.parsianPrice || '',
-    wagePercent: item.wagePercent || '0', wageFixed: item.wageFixed || '0', otherCosts: item.otherCosts || '0', profitPercent: '7', discountRial: '',
+    wagePercent: item.wagePercent || '0', wageFixed: item.wageFixed || '0', otherCosts: item.otherCosts || '0', profitPercent: '7', discountRial: '', discountPercent: '',
   };
 }
 

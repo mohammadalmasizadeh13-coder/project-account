@@ -51,8 +51,16 @@ export function validateDocument(form, category, parseNumber) {
   if (category !== 'crafted') numeric('wagePercent', 'اجرت درصدی', true, true);
   if (String(form.type).endsWith('-sale')) {
     numeric('discountRial', 'تخفیف', true, true);
-    const beforeDiscount = documentBreakdown({ ...form, category, discountRial: 0 }).total;
-    if (!errors.discountRial && parseNumber(form.discountRial) > beforeDiscount) errors.discountRial = 'تخفیف نمی‌تواند بیشتر از مبلغ سند پیش از تخفیف باشد.';
+    numeric('discountPercent', 'تخفیف درصدی', true, true);
+    if (!errors.discountPercent && parseNumber(form.discountPercent) > 100) errors.discountPercent = 'تخفیف درصدی باید بین صفر و ۱۰۰ باشد.';
+    const beforeDiscount = documentBreakdown({ ...form, category, discountRial: 0, discountPercent: 0 }).total;
+    const discount = documentBreakdown({ ...form, category }).discount;
+    const tolerance = Math.max(1e-12, beforeDiscount * 2e-15);
+    if (!errors.discountRial && !errors.discountPercent && discount - beforeDiscount > tolerance) {
+      const message = 'جمع تخفیف‌ها نمی‌تواند بیشتر از مبلغ سند پیش از تخفیف باشد.';
+      errors.discountRial = message;
+      if (parseNumber(form.discountPercent) > 0) errors.discountPercent = message;
+    }
   }
   return errors;
 }

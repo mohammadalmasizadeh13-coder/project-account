@@ -54,6 +54,7 @@ export default function JewelrySetEditor({ parts = [], onChange, errors = {}, sa
       <div>
         <h3 id={`${id}-heading`}>{sale ? 'انتخاب قطعه‌های مجموعه برای فروش' : 'قطعه‌های این مجموعه'}</h3>
         <p>{sale ? 'قطعه‌های موردنظر را انتخاب کنید و قیمت و اجرت فروش هر کدام را وارد کنید.' : 'نوع و تعداد قطعه‌ها را خودتان انتخاب کنید؛ وزن و اجرت هر قطعه جدا ثبت می‌شود.'}</p>
+        {sale && <p>تخفیف درصدی از کل مبلغ هر ردیف، شامل اجرت، هزینه‌ها و سود محاسبه می‌شود و تخفیف ریالی هم علاوه بر آن کسر می‌شود.</p>}
         {number(prices?.goldGramPrice) > 0 && <p>قیمت خالی هر گرم با نرخ {formatMoney(prices.goldGramPrice)} تومان محاسبه می‌شود.</p>}
       </div>
       <span className="jewelry-set-count">{formatNumber(sale ? activeParts.length : parts.length)} {sale ? 'قطعه انتخاب‌شده' : 'ردیف قطعه'}</span>
@@ -109,11 +110,13 @@ export default function JewelrySetEditor({ parts = [], onChange, errors = {}, sa
             {field('otherCosts', 'هزینه‌های دیگر هر عدد (تومان)', { inputMode: 'numeric' })}
             {field('profitPercent', sale ? 'درصد سود فروشنده' : 'سود درصدی', { placeholder: 'خالی = ۷٪' })}
             {sale && field('discountRial', 'تخفیف این ردیف (تومان)', { inputMode: 'numeric' })}
+            {sale && field('discountPercent', 'تخفیف درصدی (%)', { placeholder: '۰ تا ۱۰۰' })}
           </div>
 
           <div className="jewelry-set-part-total">
             <span>مبلغ {sale ? 'فروش' : 'ثبت'} این ردیف <strong>{formatMoney(amount.total)} <small>تومان</small></strong></span>
             <span>اجرت این ردیف: {formatMoney(amount.wage)} تومان{!selected && ' · انتخاب نشده'}</span>
+            {sale && amount.discount > 0 && <span>تخفیف این ردیف: {formatMoney(amount.discount)} تومان</span>}
           </div>
         </fieldset>;
       })}

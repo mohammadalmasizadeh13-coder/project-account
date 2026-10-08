@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import Column, Index, Integer, Table, case, literal, select, update
 
 from .database import LEGACY_ACCOUNT_ID, account_column, metadata
-from .inventory import ECONOMIC_FIELDS, STOCK_TYPES, TEXT_FIELDS, is_sale, is_stock_entry, normalize_misc_purchase, numeric, quantity, validate_item, values_differ
+from .inventory import ECONOMIC_FIELDS, STOCK_TYPES, TEXT_FIELDS, discounted_amount, is_sale, is_stock_entry, normalize_misc_purchase, numeric, quantity, validate_item, values_differ
 from .pricing import number
 
 
@@ -70,10 +70,7 @@ def settlement_row_total(row):
     costs = count * numeric(row.get("otherCosts"), "هزینه‌های دیگر", default=0)
     profit = (base + wage + costs) * numeric(row.get("profitPercent"), "سود درصدی", default=0) / 100
     gross = base + wage + costs + profit
-    discount = numeric(row.get("discountRial"), "تخفیف", maximum=Decimal(MAX_SAFE_INTEGER), default=0)
-    if discount > gross and discount - gross > max(Decimal("1e-12"), gross * Decimal("2e-15")):
-        invoice_error("تخفیف نمی‌تواند بیشتر از مبلغ ردیف پیش از تخفیف باشد.")
-    return max(Decimal(0), gross - discount)
+    return discounted_amount(row, gross)
 
 
 def validate_settlement(rows, total):
@@ -154,7 +151,15 @@ def validate_group(rows):
         group_direction = ("partner-v3", row["partnerId"]) if row.get("calculationVersion") == 3 and row.get("counterpartyType") == "partner" and row.get("partnerId") == customer else direction
         headers.append((customer, name.strip(), recorded_date, created_at, row.get("recordedAt"), group_direction))
         validate_item(row)
-        total += numeric(row.get("amount"), "مبلغ ردیف", maximum=Decimal(MAX_SAFE_INTEGER))
+        saved_amount = numeric(row.get("amount"), "مبلغ ردیف", maximum=Decimal(MAX_SAFE_INTEGER))
+        if is_sale(row) and number(row.get("discountPercent")) > 0:
+            with localcontext() as context:
+                context.prec = 80
+                exact = settlement_row_total(row)
+                tolerance = max(Decimal("1e-12"), abs(exact) * Decimal("2e-15"))
+                if abs(saved_amount - exact) > tolerance and not rounded_matches(saved_amount, exact, Decimal(1)):
+                    invoice_error("مبلغ ردیف با وزن، نرخ، اجرت و تخفیف ثبت‌شده مطابقت ندارد.")
+        total += saved_amount
         for field in ("gramDebt", "rialDebt"):
             debt = numeric(row.get(field), "ماندهٔ فاکتور", default=0)
             if line != 1 and debt != 0:

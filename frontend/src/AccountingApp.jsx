@@ -104,6 +104,7 @@ function createEmptyDocumentForm(type = 'crafted-sale') {
     wagePercent: '',
     profitPercent: type.startsWith('crafted-') || type.endsWith('-sale') ? '7' : '0',
     discountRial: '',
+    discountPercent: '',
     coinType: 'امامی بانکی ۸۶',
     currencyType: 'USD',
     currencyRate: '',
@@ -156,6 +157,7 @@ function createOpeningInventoryItem(category) {
     wagePercent: '',
     profitPercent: profitPercentInput('', category),
     discountRial: '',
+    discountPercent: '',
     coinType: 'امامی بانکی ۸۶',
     currencyType: 'USD',
     currencyRate: '',
@@ -1515,13 +1517,17 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                 </>}
                 <DocumentField name="otherCosts" label="هزینه‌های دیگر هر واحد (تومان)" error={documentErrors.otherCosts}><NumberInput name="otherCosts" inputMode="decimal" value={documentForm.otherCosts} onChange={updateDocumentField} placeholder="اختیاری"/></DocumentField>
                 {!miscMode && <DocumentField name="profitPercent" label={saleMode ? 'درصد سود فروشنده' : 'سود درصدی'} error={documentErrors.profitPercent}><NumberInput name="profitPercent" inputMode="decimal" value={documentForm.profitPercent} onChange={updateDocumentField} placeholder={selectedDocumentType.category === 'crafted' ? 'خالی = ۷٪' : 'مثلاً ۷'}/></DocumentField>}
-                {selectedDocumentType.value.endsWith('-sale') && <DocumentField name="discountRial" label="تخفیف ریالی" error={documentErrors.discountRial}><NumberInput name="discountRial" inputMode="numeric" value={documentForm.discountRial} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>}
+                {selectedDocumentType.value.endsWith('-sale') && <>
+                  <DocumentField name="discountRial" label="تخفیف ریالی" error={documentErrors.discountRial}><NumberInput name="discountRial" inputMode="numeric" value={documentForm.discountRial} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
+                  <DocumentField name="discountPercent" label="تخفیف درصدی (%)" error={documentErrors.discountPercent}><NumberInput name="discountPercent" inputMode="decimal" value={documentForm.discountPercent ?? ''} onChange={updateDocumentField} placeholder="۰ تا ۱۰۰"/></DocumentField>
+                </>}
                 </>}
 
 
               </fieldset>
               {selectedDocumentType.category === 'crafted' && !separateSetMode && !miscMode && <p className="document-required-note">سود پیش‌فرض کار ساخته ۷٪ است؛ خالی‌گذاشتن فیلد هم ۷٪ محاسبه می‌شود. برای سود متفاوت، درصد دلخواه یا صفر را وارد کنید.</p>}
               {saleMode && <p className="document-required-note">سود فروشنده از مجموع ارزش طلا، اجرت و هزینه‌های این سند محاسبه می‌شود. هزینه‌های عمومی فروشگاه را با نوع سند «هزینه فروشگاه» ثبت کنید.</p>}
+              {saleMode && !separateSetMode && <p className="document-required-note">تخفیف درصدی از کل مبلغ ردیف، شامل اجرت، هزینه‌ها و سود محاسبه می‌شود و تخفیف ریالی هم علاوه بر آن کسر می‌شود.</p>}
               <div className="invoice-draft-actions"><button type="button" className="button button-ghost" data-invoice-add onClick={addInvoiceRow}><Plus size={17}/>{documentForm.invoiceEditingIndex >= 0 ? 'اعمال تغییر ردیف' : 'افزودن جنس به سند'}</button><button type="button" className="button button-ghost" data-invoice-clear onClick={clearInvoiceEditor}>{documentForm.invoiceEditingIndex >= 0 ? 'انصراف از ویرایش ردیف' : 'پاک کردن ورودی فعلی'}</button></div>
               </>}
 
@@ -1530,7 +1536,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                 <strong>{Number.isFinite(previewAmount) ? formatNumber(previewAmount) : '—'} <small>تومان</small></strong>
                 <small>{expenseMode ? describeDocumentItem(documentPreview) : `${formatNumber(previewRows.length)} ردیف · ${previewRows.map(row => row.itemName).filter(Boolean).join('، ') || 'مشخصات جنس را وارد کنید'}`}</small>
                 {expenseMode && <small>{expenseSummary(documentForm)}{!Number.isFinite(previewAmount) && ' · مقدار و نرخ معتبر را وارد کنید.'}</small>}
-                {saleMode && <small>سود فروشنده: {formatNumber(previewRows.reduce((sum, row) => sum + documentBreakdown(row).profit, 0))} تومان · تخفیف: {formatNumber(previewRows.reduce((sum, row) => sum + toNumber(row.discountRial), 0))} تومان</small>}
+                {saleMode && <small>سود فروشنده: {formatNumber(previewRows.reduce((sum, row) => sum + documentBreakdown(row).profit, 0))} تومان · تخفیف: {formatNumber(previewRows.reduce((sum, row) => sum + documentBreakdown(row).discount, 0))} تومان</small>}
               </div>
 
               </fieldset>

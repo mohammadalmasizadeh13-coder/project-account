@@ -13,7 +13,7 @@ from sqlalchemy import select, update
 
 from .database import read_workspace, workspace_requests, workspaces
 from .inventory import (CURRENCIES, ECONOMIC_FIELDS, STRING_FIELDS, STOCK_TYPES, TEXT_FIELDS,
-    amount as inventory_amount, decimal_output, guard_linked_inventory_changes, is_sale, item_summary, item_weight,
+    amount as inventory_amount, decimal_output, discounted_amount, guard_linked_inventory_changes, is_sale, item_summary, item_weight,
     normalize_misc_purchase, numeric, validate_item, values_differ)
 from .invoices import (MAX_SAFE_INTEGER, SETTLEMENT_FIELDS, guard_invoice_stock,
     reserve_invoice_numbers, settlement_row_total, validate_group)
@@ -24,7 +24,7 @@ from .security import account_request_id, digest, has_permission, require_mutati
 RATE_FIELDS = {"crafted": {"gramPrice"}, "melted": {"meltedGramPrice"},
     "coin": {"coinPrice", "parsianPrice"}, "currency": {"currencyRate"}}
 TRADE_FIELDS = {"date", "customerId", "customerName", "gramDebt", "rialDebt", "gold18Price",
-    "profitPercent", "otherCosts", "discountRial", "cashPaid", "settlementGoldPrice"}
+    "profitPercent", "otherCosts", "discountRial", "discountPercent", "cashPaid", "settlementGoldPrice"}
 EXPENSE_FIELDS = {"date", "description", "note", "expensePayee", "expenseUnit", "expenseCurrency",
     "expenseGoldPurity", "expenseRate", "expenseAmount"}
 EDIT_TEXT_FIELDS = STRING_FIELDS | {"expensePayee", "expenseUnit", "expenseCurrency", "customerName"}
@@ -96,8 +96,8 @@ def normalize_changes(row, changes):
         elif expense and field in {"expenseGoldPurity", "expenseRate"} and value in (None, ""):
             normalized[field] = None
         else:
-            default = 0 if field in {"wagePercent", "wageFixed", "profitPercent", "otherCosts", "discountRial", "gramDebt", "rialDebt", "cashPaid"} else None
-            maximum = Decimal(MAX_SAFE_INTEGER) if field in {"cashPaid", "discountRial", "expenseAmount"} else Decimal("1e12")
+            default = 0 if field in {"wagePercent", "wageFixed", "profitPercent", "otherCosts", "discountRial", "discountPercent", "gramDebt", "rialDebt", "cashPaid"} else None
+            maximum = Decimal(100) if field == "discountPercent" else Decimal(MAX_SAFE_INTEGER) if field in {"cashPaid", "discountRial", "expenseAmount"} else Decimal("1e12")
             normalized[field] = format(numeric(value, "مقدار واردشده", maximum=maximum, default=default), "f")
     if any(key in normalized for key in ("cashPaid", "settlementGoldPrice")) and row.get("settlementVersion") != 1:
         raise HTTPException(422, "اطلاعات پرداخت فقط در ردیف اول سند فروش ثبت می‌شود.")
@@ -220,14 +220,14 @@ def correct_documents(data, identifier, requested_rows, identity):
                     raise HTTPException(422, "نام طرف حساب را از بخش مشتریان اصلاح کنید.")
                 validate_item(updated)
                 numeric(updated.get("profitPercent"), "سود درصدی", maximum=Decimal(100), default=0)
-                economic_fields = ECONOMIC_FIELDS[old["category"]] | RATE_FIELDS[old["category"]] | {"otherCosts", "profitPercent", "discountRial"}
+                economic_fields = ECONOMIC_FIELDS[old["category"]] | RATE_FIELDS[old["category"]] | {"otherCosts", "profitPercent", "discountRial", "discountPercent"}
                 economic = any(field in economic_fields and values_differ(field, old.get(field), value) for field, value in changes.items())
                 if economic:
                     repriced.add(str(old["id"]))
                     if updated.get("type") == "misc-purchase":
                         updated.update(normalize_misc_purchase(updated, result.get("prices", {})))
                     updated["amount"] = decimal_output(settlement_row_total(updated))
-                    updated["currentAmount"] = decimal_output(max(Decimal(0), number(inventory_amount(updated, result.get("prices", {}))) - number(updated.get("discountRial"))))
+                    updated["currentAmount"] = decimal_output(discounted_amount(updated, number(inventory_amount(updated, result.get("prices", {}))), validate_total=False))
                     updated["itemWeight"] = item_weight(updated)
                 updated["itemSummary"] = item_summary(updated)
             updated_rows.append(updated)

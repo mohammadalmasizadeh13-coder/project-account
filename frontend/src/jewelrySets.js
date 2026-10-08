@@ -14,12 +14,12 @@ export function createSetPart(values = {}) {
   return {
     id: uniqueId('set-part'), craftedKind: '', itemName: '', itemCount: '1',
     weight: '', ayar: '750', gramPrice: '', wagePercent: '0', wageFixed: '0',
-    otherCosts: '0', discountRial: '', ...values,
+    otherCosts: '0', discountRial: '', discountPercent: '', ...values,
     profitPercent: profitPercentInput(values.profitPercent, 'crafted'),
   };
 }
 
-const partFields = ['craftedKind', 'itemName', 'itemCount', 'weight', 'ayar', 'gramPrice', 'wagePercent', 'wageFixed', 'otherCosts', 'profitPercent', 'discountRial', 'inventorySourceId', 'productCode'];
+const partFields = ['craftedKind', 'itemName', 'itemCount', 'weight', 'ayar', 'gramPrice', 'wagePercent', 'wageFixed', 'otherCosts', 'profitPercent', 'discountRial', 'discountPercent', 'inventorySourceId', 'productCode'];
 const parentFields = new Set(['customerName', 'date', 'gold18Price', 'gramDebt', 'rialDebt']);
 const cleanForm = form => {
   const result = { ...form };
