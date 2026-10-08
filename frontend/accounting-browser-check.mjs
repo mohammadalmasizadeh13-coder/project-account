@@ -138,14 +138,14 @@ try {
     await click(genericEntry ? '[data-tool="partner-invoice"]' : '[data-tool="partner-crafted-purchase"]');
   };
   const entryTypes = {
-    customer: ['crafted-sale', 'crafted-purchase', 'misc-purchase', 'coin-sale', 'coin-purchase', 'melted-sale', 'melted-purchase', 'currency-sale', 'currency-purchase'],
+    customer: ['crafted-sale', 'misc-purchase', 'coin-sale', 'coin-purchase', 'melted-sale', 'melted-purchase', 'currency-sale', 'currency-purchase'],
     store: ['expense'],
     partner: ['partner-crafted-purchase', 'partner-melted-purchase', 'partner-coin-purchase', 'partner-remittance'],
   };
   const assertEntryScope = async scope => {
     await ready(`[data-document-scope="${scope}"]`);
     assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-document-scope]'), element => element.dataset.documentScope)`), [scope], 'Only the selected group has an open document form');
-    const options = await evaluate(`Array.from(document.querySelectorAll('[data-document-type] option'), option => option.value)`);
+    const options = await evaluate(`Array.from(document.querySelectorAll('[data-document-type] option'), option => option.value).filter(Boolean)`);
     if (scope === 'partner') {
       assert.ok(entryTypes.partner.every(type => options.includes(type)), 'Partner entry retains purchase and remittance choices');
       assert.ok(options.every(type => type.startsWith('partner-')), 'Partner document choices stay inside their group');
@@ -175,6 +175,37 @@ try {
   assert.equal(alphaEmpty.data.customers.length, 0);
   await resize(1440); await tool('register');
   await assertEntryScope('customer');
+  const initialCustomerDraft = await evaluate(`JSON.parse(localStorage.getItem('noor-accounting-draft:v1:alpha-account:document'))`);
+  const retiredPurchase = {
+    ...initialCustomerDraft.form, type: 'crafted-purchase', customerName: 'فروشنده پیش‌نویس قدیمی',
+    itemName: 'انگشتر پیش‌نویس قدیمی', craftedKind: 'انگشتر', itemCount: '1', weight: '2', ayar: '750',
+    gramPrice: '7500000', gold18Price: '7500000', wagePercent: '0', wageFixed: '0', profitPercent: '0',
+    invoiceRows: [], invoiceCurrentEmpty: false, invoiceEditingIndex: -1,
+  };
+  for (const nested of [false, true]) {
+    const form = nested
+      ? { ...retiredPurchase, type: 'misc-purchase', itemName: '', weight: '', invoiceRows: [{ ...retiredPurchase }], invoiceCurrentEmpty: true }
+      : retiredPurchase;
+    const draft = { version: 1, requestId: null, form };
+    await evaluate(`localStorage.setItem('noor-accounting-draft:v1:alpha-account:document', ${JSON.stringify(JSON.stringify(draft))})`);
+    await go('/account'); await ready('.workspace-page'); await tool('register');
+    await assertEntryScope('customer');
+    if (!nested) assert.equal(await evaluate(`document.querySelector('[data-document-type]').value`), '', 'Retired purchase is not silently changed into a sale');
+    await click('.document-form button[type="submit"]');
+    await until(`document.querySelector('.document-form .form-message.error')?.textContent.includes('قابل ثبت نیست')`);
+    assert.equal(await evaluate(`document.querySelector('[data-document-type]').getAttribute('aria-invalid')`), 'true', 'The retired type is identified as the invalid field');
+    assert.deepEqual(await workspace(), alphaEmpty, 'A restored customer crafted purchase cannot change the ledger');
+    await click('[data-invoice-add]');
+    await until(`document.querySelector('.document-form .form-message.error')?.textContent.includes('قابل ثبت نیست')`);
+    assert.deepEqual(await workspace(), alphaEmpty, 'A retired purchase cannot be added as a new invoice row');
+    const preserved = await evaluate(`JSON.parse(localStorage.getItem('noor-accounting-draft:v1:alpha-account:document'))`);
+    for (const key of ['type', 'customerName', 'itemName', 'weight', 'gramPrice']) assert.equal(preserved.form[key], retiredPurchase[key], `Blocked legacy draft retains ${key}`);
+    assert.equal(preserved.form.invoiceRows.length, nested ? 1 : 0, 'Blocking does not discard a saved invoice row or add another');
+    if (nested) assert.equal(preserved.form.invoiceRows[0].type, 'crafted-purchase', 'The retired saved row remains available for explicit removal');
+  }
+  await evaluate(`localStorage.setItem('noor-accounting-draft:v1:alpha-account:document', ${JSON.stringify(JSON.stringify(initialCustomerDraft))})`);
+  await go('/account'); await ready('.workspace-page'); await tool('register');
+  await assertEntryScope('customer');
   await fill('.document-form select[name="type"]', 'misc-purchase');
   await fill('.document-form input[name="customerName"]', 'فروشنده طلای دست‌دوم');
   await fill('.document-form input[name="gold18Price"]', '7500000');
@@ -203,6 +234,10 @@ try {
   assert.equal(alphaSaved.data.customers.length, 1);
   await tool('vault'); await ready('.vault-heading'); await screenshot('accounting-misc-vault');
   assert.ok(await evaluate(`document.body.innerText.includes('متفرقه') && document.body.innerText.includes('۷۵۰')`));
+  await click('.vault-heading-actions .button-ghost');
+  await assertEntryScope('partner');
+  assert.equal(await evaluate(`document.querySelector('[data-document-type]').value`), 'partner-crafted-purchase', 'New purchases from the vault open the partner form');
+  assert.deepEqual(await workspace(), alphaSaved, 'Opening partner registration does not change saved customer purchases');
   await tool('settings');
   assert.equal(await evaluate(`document.querySelector('[data-settings-tab="storefront"]')!==null`), false);
   await click('[aria-label="خروج از حساب"]'); await ready('.accounting-hero');
@@ -339,6 +374,7 @@ try {
   await fill('[data-partner-line="0"] [name="itemName"]', 'آب‌شده همکار');
   await fill('[data-partner-line="0"] [name="meltedWeight"]', '۱۰');
   await fill('[data-partner-line="0"] [name="meltedAyar"]', '۷۴۰');
+  await fill('[data-partner-line="0"] [name="meltedFee"]', '21659000');
   await fill('[data-partner-line="0"] [name="assayCode"]', '12345');
   await fill('[data-partner-line="0"] [name="laboratoryName"]', 'آزمایشگاه تست');
   await fill('[data-partner-line="0"] [name="profitPercent"]', '۰');
@@ -418,7 +454,7 @@ try {
   for (const path of ['/api/public/products', '/api/public/gallery', '/api/public/contact']) assert.equal((await fetch(`${backendOrigin}${path}`)).status, 404);
   assert.equal(requests.some(item => item.path.startsWith('/api/public/')), false, 'Accounting pages never request a public catalog');
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
-  console.log('Accounting browser checks passed: scoped customer/store/partner forms, independent drafts and legacy expense migration, isolated accounts, misc750, supplier crafted/melted/coin purchase, editable profit and rial labor in gold, durable replay, payments, remittance navigation, mobile/print, retired storefront.');
+  console.log('Accounting browser checks passed: scoped customer/store/partner forms, retired customer crafted purchases blocked with drafts preserved, vault purchases routed to partners, independent drafts and legacy expense migration, isolated accounts, misc750, supplier crafted/melted/coin purchase, editable profit and rial labor in gold, durable replay, payments, remittance navigation, mobile/print, retired storefront.');
 } catch (error) {
   if (evaluate) { try { console.error('Browser state:', await evaluate(`JSON.stringify({path:location.pathname,text:document.body.innerText.slice(-4500)})`)); } catch {} }
   if (exceptions.length) console.error('Browser exceptions:', JSON.stringify(exceptions));
