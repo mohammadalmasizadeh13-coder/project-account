@@ -496,3 +496,19 @@ test('standalone remittance edit drafts restore historical debit or credit witho
   assert.throws(() => partnerSettlementDraftFromEntry({ type: 'settlement', paymentMethod: 'cash' }), /مستقل/);
   assert.throws(() => partnerSettlementDraftFromEntry({ type: 'settlement', paymentMethod: 'remittance', goldDebit: 10, tomanCredit: 100 }), /هم‌زمان/);
 });
+
+test('balance purchase marker survives draft storage and invoice edit reconstruction', () => {
+  const form = { ...newPartnerInvoice({ goldGramPrice: 1000 }, 'melted'), goldBalancePurchase: true,
+    date: '2026-10-08', lines: [{ ...newPartnerLine({ goldGramPrice: 1000 }, 'melted'),
+      itemName: 'آب‌شده تراز', itemCount: '2', meltedWeight: '12', meltedAyar: '900', assayCode: '1234', laboratoryName: 'آزمایشگاه' }] };
+  const values = new Map();
+  const storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+  writeAccountingDraft('test-owner', 'partner-gold-balance', form, null, storage);
+  const payload = preparePartnerInvoice(readAccountingDraft('test-owner', 'partner-gold-balance', storage).form);
+  assert.equal(payload.goldBalancePurchase, true);
+  assert.equal(partnerInvoiceTotals(payload).weight750, 14.4);
+  const restored = partnerInvoiceDraftFromEntry({ ...payload, type: 'purchase' });
+  assert.equal(preparePartnerInvoice(restored).goldBalancePurchase, true);
+  const { goldBalancePurchase, ...ordinary } = form;
+  assert.equal(Object.hasOwn(preparePartnerInvoice(ordinary), 'goldBalancePurchase'), false);
+});

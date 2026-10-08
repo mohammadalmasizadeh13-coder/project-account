@@ -121,6 +121,7 @@ export function partnerInvoiceDraftFromEntry(entry, documents = [], payment = {}
   });
   return { ...newPartnerInvoice(prices, 'crafted', direction), date: entry.date,
     externalInvoiceNumber: entry.externalInvoiceNumber || '', note: entry.note || '', lines,
+    ...(entry.goldBalancePurchase === true ? { goldBalancePurchase: true } : {}),
     paidGold: entry.paidGold ?? payment.paidGold ?? '', paidToman: entry.paidToman ?? payment.paidToman ?? '',
     referenceName: entry.counterpartyName || payment.counterpartyName || '', refNumber: entry.reference || payment.reference || '' };
 }
@@ -326,6 +327,7 @@ export function preparePartnerInvoice(form) {
   if (!Array.isArray(form.lines) || form.lines.length < 1 || form.lines.length > 100) throw new Error('فاکتور باید بین یک تا صد ردیف داشته باشد.');
   if (form.direction && !['purchase', 'sale'].includes(form.direction)) throw new Error('نوع فاکتور همکار معتبر نیست.');
   return { date: validDate(form.date), externalInvoiceNumber: text(form.externalInvoiceNumber), note: text(form.note), gold18Price,
+    ...(form.goldBalancePurchase === true ? { goldBalancePurchase: true } : {}),
     ...(form.direction === 'sale' ? { direction: 'sale' } : {}),
     ...(calculationVersion >= 2 ? { calculationVersion } : {}),
     settlementUnit: 'gold', lines: form.lines.map(line => {

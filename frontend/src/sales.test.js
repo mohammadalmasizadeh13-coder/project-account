@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { goldBalance, goldPurchasesReport, invoiceCount, iranDate, salesReport } from './sales.js';
+import { goldBalance, goldBalancePurchases, goldPurchasesReport, invoiceCount, iranDate, salesReport } from './sales.js';
 import { quantity, documentBreakdown, currencyName, currencyRate, coinCatalog } from './assets.js';
 import { validateDocument } from './documentValidation.js';
 import { profitPercentInput } from './profitDefaults.js';
@@ -110,6 +110,62 @@ test('gold purchases use the same inclusive date windows as sales', () => {
   assert.equal(goldPurchasesReport(purchases, 'week', today).total, 7.5);
   assert.equal(goldPurchasesReport(purchases, 'month', today).total, 12.5);
   assert.equal(goldPurchasesReport([], 'today', today).total, 0);
+});
+
+test('balance purchases combine legacy entries with only marked partner melted purchases at physical weight', () => {
+  const legacy = { id: 'legacy', date: today, grams: 1.25, note: 'Earlier purchase' };
+  const document = {
+    id: 'melted-a', date: today, source: 'partner-invoice', type: 'melted-purchase',
+    goldBalancePurchase: true, transactionId: 'purchase', totalWeight750: '3.8',
+    partnerGoldDebit: 8, principalGold: 7, laborGold: 1, amount: 800,
+    invoiceNumber: 4, externalInvoiceNumber: 'P-17', customerName: 'Supplier',
+    description: 'Assayed gold', recordedAt: '2026-09-23T09:00:00.000Z',
+  };
+  const records = goldBalancePurchases([legacy], [
+    document,
+    { ...document, id: 'melted-b', totalWeight750: 2 },
+    { ...document, id: 'ordinary', goldBalancePurchase: undefined },
+    { ...document, id: 'disabled', goldBalancePurchase: false },
+    { ...document, id: 'opening', source: 'opening-inventory' },
+    { ...document, id: 'sale', type: 'melted-sale' },
+    { ...document, id: 'crafted', type: 'crafted-purchase' },
+    { ...document, id: 'missing-weight', totalWeight750: undefined },
+    { ...document, id: 'invalid-weight', totalWeight750: 'invalid' },
+    { ...document, id: 'zero-weight', totalWeight750: 0 },
+  ]);
+  assert.equal(records.length, 3);
+  assert.equal(goldPurchasesReport(records, 'today', today).total, 7.05);
+  assert.equal(goldBalance(1000, 100, goldPurchasesReport(records, 'today', today).total), 2.95);
+  assert.equal(records[0].purchaseSource, 'legacy');
+  assert.equal(records[1].purchaseSource, 'invoice');
+  assert.equal(records[1].invoiceNumber, 4);
+  assert.equal(records[1].externalInvoiceNumber, 'P-17');
+  assert.equal(records[1].customerName, 'Supplier');
+  assert.equal(records[1].note, 'Assayed gold');
+  assert.equal(records[1].recordedAt, document.recordedAt);
+  assert.equal(legacy.purchaseSource, undefined, 'normalization leaves stored legacy data unchanged');
+  assert.equal(document.grams, undefined, 'normalization leaves the invoice unchanged');
+});
+
+test('balance purchases follow authoritative invoice edits and deletions without a second purchase record', () => {
+  const legacy = [{ id: 'earlier', date: today, grams: 2 }];
+  const document = { id: 'melted', date: today, source: 'partner-invoice', type: 'melted-purchase', goldBalancePurchase: true, totalWeight750: 5 };
+  const total = documents => goldPurchasesReport(goldBalancePurchases(legacy, documents), 'today', today).total;
+  assert.equal(total([document]), 7);
+  assert.equal(total([{ ...document, totalWeight750: 8 }]), 10);
+  assert.equal(total([{ ...document, date: '2026-09-22' }]), 2);
+  assert.equal(total([]), 2);
+});
+
+test('linked and legacy balance purchases share inclusive daily, weekly and monthly windows', () => {
+  const dates = ['2026-08-24', '2026-08-25', '2026-09-16', '2026-09-17', today, '2026-09-24'];
+  const legacy = dates.map(date => ({ id: `legacy-${date}`, date, grams: 1 }));
+  const documents = dates.map(date => ({ id: `invoice-${date}`, date, source: 'partner-invoice', type: 'melted-purchase', goldBalancePurchase: true, totalWeight750: 2 }));
+  const records = goldBalancePurchases(legacy, documents);
+  assert.equal(goldPurchasesReport(records, 'today', today).total, 3);
+  assert.equal(goldPurchasesReport(records, 'week', today).total, 6);
+  assert.equal(goldPurchasesReport(records, 'month', today).total, 12);
+  assert.deepEqual(goldBalancePurchases(), []);
 });
 
 test('melted documents preserve the laboratory in opening stock and summaries', () => {

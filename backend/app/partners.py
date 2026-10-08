@@ -84,6 +84,7 @@ class LedgerEntry(StrictModel):
     paidGold: float = Field(default=0, ge=0, le=1e12)
     paidToman: float = Field(default=0, ge=0, le=1e12)
     convertedPaidTomanGold: float = Field(default=0, ge=0, le=float(MAX_BALANCE))
+    goldBalancePurchase: bool = Field(default=False, strict=True, exclude_if=lambda value: not value)
 
     @field_validator("date")
     @classmethod
@@ -166,6 +167,8 @@ class PartnerInvoice(PartnerMutation):
     referenceName: str = Field(default="", max_length=200)
     refNumber: str = Field(default="", max_length=200)
     calculationVersion: Literal[1, 2, 3] = 1
+    # Omit the default so pre-upgrade request receipt hashes remain unchanged.
+    goldBalancePurchase: bool = Field(default=False, strict=True, exclude_if=lambda value: not value)
 
     @field_validator("date")
     @classmethod
@@ -239,7 +242,11 @@ def canonical_partner_records(partners, *, validate_balances=False):
 
 
 def guard_partner_documents(previous, incoming, *, allow_stock_text=False):
-    old_rows = {str(row["id"]): row for row in previous if row.get("partnerId") or row.get("counterpartyType") == "partner"}
+    def protected(row):
+        return (row.get("partnerId") or row.get("counterpartyType") == "partner"
+            or row.get("source") == "partner-invoice" or "goldBalancePurchase" in row)
+
+    old_rows = {str(row["id"]): row for row in previous if protected(row)}
     new_rows = {str(row["id"]): row for row in incoming}
     allowed = {"itemName", "description", "note", "itemSummary"} if allow_stock_text else set()
     for identifier, old in old_rows.items():
@@ -247,7 +254,7 @@ def guard_partner_documents(previous, incoming, *, allow_stock_text=False):
         if updated is None or {key: value for key, value in old.items() if key not in allowed} != {key: value for key, value in updated.items() if key not in allowed}:
             raise HTTPException(409, "فاکتور ثبت‌شده در دفتر همکار از این بخش قابل تغییر یا حذف نیست.")
     for row in incoming:
-        if str(row["id"]) not in old_rows and (row.get("partnerId") or row.get("counterpartyType") == "partner"):
+        if str(row["id"]) not in old_rows and protected(row):
             raise HTTPException(409, "خرید همکار باید از بخش فاکتور همکار ثبت شود.")
 
 
@@ -263,6 +270,18 @@ def entry_base(payload, **values):
         "goldDebit": 0, "goldCredit": 0, "tomanDebit": 0, "tomanCredit": 0,
         "goldBalance": 0, "tomanBalance": 0, "note": payload.note, "reference": "", "counterpartyName": "",
         "paymentMethod": "gold", **values}
+
+
+def mark_gold_balance_purchase(payload, documents, existing_entry=None):
+    was_marked = bool(existing_entry and existing_entry.get("goldBalancePurchase"))
+    marked = payload.goldBalancePurchase or was_marked
+    purchases = [row for row in documents if row["category"] == "melted" and row["type"] == "melted-purchase"]
+    if marked and not was_marked and not purchases:
+        raise HTTPException(422, "خرید برای تراز طلا باید حداقل یک ردیف خرید آب‌شده داشته باشد.")
+    if marked:
+        for document in purchases:
+            document["goldBalancePurchase"] = True
+    return {"goldBalancePurchase": True} if marked else {}
 
 
 def make_supplier_invoice(data, partner, payload, identity, connection):
@@ -390,13 +409,14 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
             # A rejected stock choice has not committed. Let the editor correct
             # it, while workspace revision conflicts still use safe replay.
             raise HTTPException(422, error.detail) from error
+    balance_purchase = mark_gold_balance_purchase(payload, documents)
     incoming = prepare_invoices(data["documents"], [*documents, *data["documents"]], connection, account_id=identity["user"]["account_id"])
     data["documents"] = incoming
     entry = entry_base(payload, type="sale" if selling else "purchase", externalInvoiceNumber=payload.externalInvoiceNumber,
         invoiceNumber=incoming[0]["invoiceNumber"], transactionId=transaction, documentIds=[row["id"] for row in documents],
         lines=details, settlementUnit=payload.settlementUnit, gold18Price=decimal_output(rate),
         **{"goldCredit" if selling else "goldDebit": decimal_output(gold_total), "tomanCredit" if selling else "tomanDebit": decimal_output(toman_total)},
-        **({"calculationVersion": 2, "conversionGoldPrice": decimal_output(rate)} if gold_invoice else {}))
+        **({"calculationVersion": 2, "conversionGoldPrice": decimal_output(rate)} if gold_invoice else {}), **balance_purchase)
     partner["entries"].append(entry)
     if paid_gold or paid_toman:
         with localcontext() as context:
@@ -563,6 +583,7 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
             raise HTTPException(422, "مقدار پرداخت کمتر از دقت مجاز دفتر است.")
         totals["goldDebit" if payload.direction == "sale" else "goldCredit"] += payment
         totals = {field: decimal_output(rounded_gold(value)) for field, value in totals.items()}
+    balance_purchase = mark_gold_balance_purchase(payload, documents, existing_entry)
     if documents:
         for document in documents:
             document["invoiceLineCount"] = len(documents)
@@ -604,7 +625,7 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
         documentIds=[row["id"] for row in documents], lines=details, settlementUnit="gold", gold18Price=decimal_output(rate),
         calculationVersion=3, conversionGoldPrice=decimal_output(rate), paidGold=decimal_output(paid_gold),
         paidToman=decimal_output(paid_toman), convertedPaidTomanGold=decimal_output(converted_cash),
-        counterpartyName=payload.referenceName, reference=payload.refNumber, **totals)
+        counterpartyName=payload.referenceName, reference=payload.refNumber, **totals, **balance_purchase)
     if existing_entry:
         entry.update(id=existing_entry["id"], createdAt=created_at)
         position = next(index for index, row in enumerate(partner["entries"]) if row["id"] == existing_entry["id"])
@@ -622,6 +643,8 @@ def register_partner_routes(application, workspace_response, encode_workspace):
             raise HTTPException(403, "اجازهٔ ویرایش دفتر همکاران ندارید.")
         if action in {"invoice", "invoice-update"} and not has_permission(identity, "documents.write"):
             raise HTTPException(403, "ثبت خرید همکار به اجازهٔ افزودن موجودی نیز نیاز دارد.")
+        if action in {"invoice", "invoice-update"} and payload.goldBalancePurchase and not has_permission(identity, "goldPurchases.write"):
+            raise HTTPException(403, "ثبت یا ویرایش خرید تراز طلا به اجازهٔ خرید طلا نیاز دارد.")
         account_id, actor_id = identity["user"]["account_id"], identity["user"]["id"]
         request_id = account_request_id(account_id, str(payload.requestId))
         body = payload.model_dump(mode="json", exclude={"revision", "requestId"}, exclude_unset=action == "update")
@@ -647,11 +670,16 @@ def register_partner_routes(application, workspace_response, encode_workspace):
             return {**workspace_response(read_workspace(connection, account_id), identity, connection), "createdId": receipt["created_id"]}
 
         with engine.begin() as connection:
+            current = read_workspace(connection, account_id)
+            if action == "invoice-update" and not has_permission(identity, "goldPurchases.write"):
+                previous_partner = find_partner(current["data"], identifier)
+                previous_entry = next((row for row in previous_partner["entries"] if row["id"] == entry_id), None)
+                if previous_entry and previous_entry.get("goldBalancePurchase"):
+                    raise HTTPException(403, "ویرایش خرید تراز طلا به اجازهٔ خرید طلا نیاز دارد.")
             previous = replay(connection)
             if previous is not None:
                 response.status_code = 200
                 return previous
-            current = read_workspace(connection, account_id)
             if current["revision"] != payload.revision:
                 raise HTTPException(409, "دفتر همزمان تغییر کرده است؛ ابتدا آخرین نسخه را بارگذاری کنید.")
             data, now = deepcopy(current["data"]), iso_now()

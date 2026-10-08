@@ -1,54 +1,24 @@
 import React, { useState } from 'react';
-import NumberInput from './NumberInput.jsx';
-import { Coins, Gem, Package, ReceiptText, Search, ShoppingBag, TrendingUp } from 'lucide-react';
-import { goldBalance, goldPurchasesReport, iranDate, salesReport } from './sales';
+import { Gem, Package, ReceiptText, Search, ShoppingBag, TrendingUp } from 'lucide-react';
+import { goldBalance, goldBalancePurchases, goldPurchasesReport, salesReport } from './sales';
 import './dashboard.css';
-import PersianDateInput from './PersianDateInput';
 import { PeriodSelect } from './WorkspacePages';
-import { formatRecordDate, formatRecordTimestamp, newRecordTimestamp } from './recordTime';
+import { formatRecordDate, formatRecordTimestamp } from './recordTime';
 
 const number = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(value || 0);
 const money = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value || 0);
 const dateLabel = value => new Intl.DateTimeFormat('fa-IR', { day: 'numeric', month: 'short' }).format(new Date(`${value}T12:00:00Z`));
 
-export default function SalesDashboard({ documents, prices, helpers, username, goldPurchases = [], onSaveGoldPurchases, alerts, view = 'sales', onOpen }) {
+export default function SalesDashboard({ documents, prices, helpers, username, goldPurchases = [], onSaveGoldPurchases, canCreateGoldPurchase = false, alerts, view = 'sales', onOpen }) {
   const [period, setPeriod] = useState('today');
   const [query, setQuery] = useState('');
   const [productOrder, setProductOrder] = useState('amount');
-  const [purchaseForm, setPurchaseForm] = useState(() => ({ date: iranDate(), grams: '', note: '' }));
   const [purchaseMessage, setPurchaseMessage] = useState(null);
   const report = salesReport(documents, period, helpers);
   const gramPrice = helpers.number(prices.goldGramPrice);
-  const purchases = goldPurchasesReport(goldPurchases, period);
+  const purchaseRecords = goldBalancePurchases(goldPurchases, documents);
+  const purchases = goldPurchasesReport(purchaseRecords, period);
   const balanceGrams = goldBalance(report.total, gramPrice, purchases.total);
-  const updatePurchase = event => {
-    const { name, value } = event.target;
-    setPurchaseForm(current => ({ ...current, [name]: value }));
-    setPurchaseMessage(null);
-  };
-  const savePurchase = event => {
-    event.preventDefault();
-    if (!onSaveGoldPurchases) return;
-    const grams = helpers.number(purchaseForm.grams);
-    if (grams <= 0) {
-      setPurchaseMessage({ type: 'error', text: 'وزن خرید را بیشتر از صفر وارد کنید.' });
-      return;
-    }
-    const date = purchaseForm.date;
-    const parsedDate = new Date(`${date}T12:00:00Z`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date || date > iranDate()) {
-      setPurchaseMessage({ type: 'error', text: 'تاریخ معتبر تا امروز را انتخاب کنید.' });
-      return;
-    }
-    try {
-      const recordedAt = newRecordTimestamp();
-      onSaveGoldPurchases([{ id: crypto.randomUUID(), date, grams, note: purchaseForm.note.trim(), createdAt: recordedAt, recordedAt }, ...goldPurchases]);
-      setPurchaseForm(current => ({ ...current, grams: '', note: '' }));
-      setPurchaseMessage({ type: 'success', text: 'خرید ثبت شد؛ از تراز بازه‌ای که این تاریخ را شامل شود کم می‌شود.' });
-    } catch {
-      setPurchaseMessage({ type: 'error', text: 'خرید ذخیره نشد. وضعیت ذخیره‌سازی سرور را بررسی کنید و دوباره تلاش کنید.' });
-    }
-  };
   const removePurchase = id => {
     if (!onSaveGoldPurchases) return;
     try {
@@ -61,7 +31,7 @@ export default function SalesDashboard({ documents, prices, helpers, username, g
   const periodLabel = period === 'today' ? 'امروز' : period === 'week' ? '۷ روز اخیر' : '۳۰ روز اخیر';
   const products = report.products.filter(item => `${item.name} ${item.category}`.includes(query.trim()) && (productOrder !== 'quantity' || item.category !== 'ارز')).sort((a, b) => b[productOrder] - a[productOrder]);
   const max = Math.max(...report.series.map(item => item.amount), 1);
-  const purchaseHistory = [...goldPurchases].sort((a, b) => b.date.localeCompare(a.date));
+  const purchaseHistory = [...purchaseRecords].sort((a, b) => b.date.localeCompare(a.date));
   let cursor = 0;
   const gradient = report.categories.map(item => {
     const from = cursor;
@@ -75,9 +45,9 @@ export default function SalesDashboard({ documents, prices, helpers, username, g
     { label: 'وزن طلای فروخته‌شده', value: number(report.totalWeight), unit: 'گرم', Icon: Gem, tone: 'green' },
   ];
 
-  const titles = { sales: 'گزارش فروش', products: 'کالاهای پرفروش', balance: 'تراز طلا', 'gold-entry': 'ثبت خرید برای تراز طلا' };
+  const titles = { sales: 'گزارش فروش', products: 'کالاهای پرفروش', balance: 'تراز طلا' };
   return <div className="sales-dashboard focused-report" data-report-view={view}>
-    <header className="simple-panel-title"><div><h1>{titles[view]}</h1><p>{view === 'gold-entry' ? 'خریدهای این بخش از تراز طلا کم می‌شوند.' : 'گزارش بر اساس سندهای ثبت‌شده فروشگاه'}</p></div>{view !== 'gold-entry' && <PeriodSelect value={period} onChange={setPeriod}/>}</header>
+    <header className="simple-panel-title"><div><h1>{titles[view]}</h1><p>گزارش بر اساس سندهای ثبت‌شده فروشگاه</p></div><PeriodSelect value={period} onChange={setPeriod}/></header>
     {view === 'sales' && <>
       <div className="home-metrics">{cards.slice(0,3).map(({label,value,unit}) => <article key={label}><span>{label}</span><strong>{value} <small>{unit}</small></strong></article>)}</div>
               <section className="sd-panel sd-trend"><div className="sd-panel-title"><div><h2>روند فروش</h2><p>مبلغ فروش ثبت‌شده · {periodLabel}</p></div><span className="sd-unit">تومان</span></div>
@@ -97,20 +67,13 @@ export default function SalesDashboard({ documents, prices, helpers, username, g
       <div className="sd-gold-total"><span>تراز طلا · {periodLabel}</span><strong data-testid="gold-balance">{balanceGrams === null ? '—' : number(balanceGrams)} <small>گرم طلای ۷۵۰</small></strong><p>{balanceGrams === null ? 'نرخ طلا را ثبت کنید.' : balanceGrams < 0 ? 'خرید بیشتر از نیاز این بازه' : 'طلای باقی‌مانده برای خرید'}</p></div>
       <div><span>فروش ثبت‌شده</span><strong>{money(report.total)} <small>تومان</small></strong></div><div><span>طلای خریداری‌شده برای تراز</span><strong data-testid="gold-purchased">{number(purchases.total)} <small>گرم</small></strong></div>
       <p className="sd-gold-formula">فروش نقد و نسیه ÷ نرخ فعلی هر گرم طلا − خریدهای ثبت‌شده برای تراز در همین بازه. این عدد معادل ارزش است؛ موجودی واقعی در صندوق نمایش داده می‌شود.</p>
-      {onSaveGoldPurchases && onOpen && <button className="button button-primary" onClick={() => onOpen('gold-entry')}>ثبت خرید برای تراز</button>}
-    </section>}
-    {view === 'gold-entry' && <section className="sd-gold-balance gold-entry-only">      <div className="sd-gold-purchases">
-        <div className="sd-purchase-heading"><h2>ثبت طلای خریداری‌شده</h2><span>جمع خرید · {periodLabel}: <b data-testid="gold-purchased">{number(purchases.total)}</b> گرم</span></div>
-        <p>وزن را به گرم معادل طلای ۱۸ عیار وارد کنید. هر خرید را یک بار در این بخش ثبت کنید؛ سند خرید به‌تنهایی از این تراز کم نمی‌شود.</p>
-        {onSaveGoldPurchases && <form className="sd-purchase-form" onSubmit={savePurchase}>
-          <label>تاریخ خرید (شمسی)<PersianDateInput name="date" value={purchaseForm.date} max={iranDate()} onChange={updatePurchase} required/></label>
-          <label>وزن خرید (گرم ۱۸ عیار)<NumberInput name="grams" inputMode="decimal" value={purchaseForm.grams} onChange={updatePurchase} placeholder="مثلاً ۱۵" required/></label>
-          <label>توضیح خرید<input name="note" value={purchaseForm.note} onChange={updatePurchase} placeholder="اختیاری"/></label>
-          <button className="button button-primary" type="submit">ثبت خرید و کسر از تراز</button>
-        </form>}
+      {canCreateGoldPurchase && onOpen && <button className="button button-primary" data-gold-balance-purchase onClick={() => onOpen('gold-entry')}>ثبت خرید برای تراز</button>}
+      <div className="sd-gold-purchases">
+        <div className="sd-purchase-heading"><h2>خریدهای تراز طلا</h2></div>
+        <p>خرید آب‌شده از همکار که از دکمه این بخش ثبت می‌کنید، با وزن معادل ۷۵۰ به‌صورت خودکار از تراز کم می‌شود. برای اصلاح این خریدها، سند همکار را ویرایش کنید. ثبت‌های قبلی نیز در تراز لحاظ می‌شوند.</p>
         {purchaseMessage && <div role="status" className={`form-message ${purchaseMessage.type}`}>{purchaseMessage.text}</div>}
         <details className="sd-purchase-history"><summary>همه خریدهای ثبت‌شده ({number(purchaseHistory.length)})</summary>
-          {purchaseHistory.length ? <ul>{purchaseHistory.map(item => <li key={item.id}><time dateTime={item.date}>{formatRecordTimestamp(item) ? formatRecordDate(item) : dateLabel(item.date)}</time><b>{number(item.grams)} گرم</b><p>{item.note || 'بدون توضیح'}</p>{onSaveGoldPurchases && <button type="button" onClick={() => removePurchase(item.id)} aria-label={`حذف خرید ${number(item.grams)} گرم در ${dateLabel(item.date)}`}>حذف</button>}</li>)}</ul> : <p>هنوز خریدی ثبت نشده است.</p>}
+          {purchaseHistory.length ? <ul>{purchaseHistory.map(item => <li key={`${item.purchaseSource}:${item.id}`}><time dateTime={item.date}>{formatRecordTimestamp(item) ? formatRecordDate(item) : dateLabel(item.date)}</time><b>{number(item.grams)} گرم</b><p>{item.purchaseSource === 'invoice' && <span>{item.invoiceNumber ? `سند ${number(item.invoiceNumber)}` : 'سند خرید همکار'}{item.customerName && ` · ${item.customerName}`}{item.externalInvoiceNumber && ` · فاکتور همکار ${item.externalInvoiceNumber}`}</span>}{item.note || 'بدون توضیح'}</p>{item.purchaseSource === 'legacy' && onSaveGoldPurchases && <button type="button" onClick={() => removePurchase(item.id)} aria-label={`حذف خرید ${number(item.grams)} گرم در ${dateLabel(item.date)}`}>حذف</button>}</li>)}</ul> : <p>هنوز خریدی ثبت نشده است.</p>}
         </details>
       </div>
 </section>}

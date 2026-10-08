@@ -72,3 +72,16 @@ test('business partner access is separate from customers and purchasing requires
   assert.equal(canOpenTool(staff, 'partner-remittance'), true);
   assert.equal(can(staff, 'customers.write'), false, 'Supplier entry does not grant customer writes');
 });
+
+test('gold balance purchase entry needs both supplier invoicing and balance write access', () => {
+  const staff = { role: 'staff', permissions: ['documents.read', 'prices.read', 'goldPurchases.read', 'goldPurchases.write'] };
+  assert.equal(canOpenTool(staff, 'balance'), true);
+  assert.equal(canOpenTool(staff, 'gold-entry'), false);
+  staff.permissions.push('partners.read', 'partners.write');
+  assert.equal(canOpenTool(staff, 'gold-entry'), false);
+  staff.permissions.push('documents.write');
+  assert.equal(canOpenTool(staff, 'gold-entry'), true);
+  staff.permissions = staff.permissions.filter(permission => permission !== 'goldPurchases.write');
+  assert.equal(canOpenTool(staff, 'partner-invoice'), true);
+  assert.equal(canOpenTool(staff, 'gold-entry'), false);
+});

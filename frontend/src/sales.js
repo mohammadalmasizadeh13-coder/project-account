@@ -22,6 +22,26 @@ export function goldBalance(salesAmount, gramPrice, purchasedGrams = 0) {
   return Number.isFinite(price) && price > 0 ? salesAmount / price - purchasedGrams : null;
 }
 
+export function goldBalancePurchases(goldPurchases = [], documents = []) {
+  const legacy = goldPurchases.map(purchase => ({ ...purchase, purchaseSource: 'legacy' }));
+  const invoices = documents.filter(document => document.goldBalancePurchase === true
+    && document.source === 'partner-invoice' && document.type === 'melted-purchase'
+    && Number.isFinite(Number(document.totalWeight750)) && Number(document.totalWeight750) > 0)
+    .map(document => ({
+      id: document.id,
+      date: document.date,
+      grams: Number(document.totalWeight750),
+      note: document.description || document.itemSummary || document.itemName || '',
+      createdAt: document.createdAt,
+      recordedAt: document.recordedAt,
+      purchaseSource: 'invoice',
+      invoiceNumber: document.invoiceNumber,
+      externalInvoiceNumber: document.externalInvoiceNumber,
+      customerName: document.customerName,
+    }));
+  return [...legacy, ...invoices];
+}
+
 export function goldPurchasesReport(purchases, period, today = iranDate()) {
   const days = period === 'week' ? 7 : period === 'month' ? 30 : 1;
   const start = dateBefore(today, days - 1);

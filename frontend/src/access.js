@@ -9,7 +9,7 @@ const toolPermissions = {
   register: ['documents.write', 'customers.write'], expense: ['documents.write'],
   partners: ['partners.read'], 'partner-invoice': ['partners.write', 'documents.write'],
   'partner-remittance': ['partners.write'],
-  cheques: ['cheques.write'], pricing: ['prices.write'], 'gold-entry': ['goldPurchases.read'],
+  cheques: ['cheques.write'], pricing: ['prices.write'], 'gold-entry': ['goldPurchases.write', 'partners.write', 'documents.write'],
   'customer-entry': ['customers.write'], 'settlement-entry': ['customers.write'],
   dashboard: ['documents.read'], profit: ['documents.read'], products: ['documents.read'],
   balance: ['documents.read', 'prices.read', 'goldPurchases.read'], rates: ['prices.read'],
