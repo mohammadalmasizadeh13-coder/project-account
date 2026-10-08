@@ -8,6 +8,7 @@ import './styles.css';
 import './ledger.css';
 import SalesDashboard from './SalesDashboard';
 import CustomerCRM from './CustomerCRM';
+import { customerDocumentDetails, customerProfileDetails, validateCustomerDocumentDetails } from './customerDetails.js';
 import PartnerCRM, { PartnerDocumentDialog } from './PartnerCRM';
 import ChequeManager, { ChequeAlerts } from './ChequeManager';
 import { getChequeReminders } from './checks';
@@ -89,6 +90,8 @@ function createEmptyDocumentForm(type = 'crafted-sale') {
     date: iranDate(),
     customerName: '',
     customerId: '',
+    ...customerDocumentDetails(),
+    paymentMethod: '',
     description: '',
     itemName: '',
     craftedKind: '',
@@ -887,7 +890,9 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     const line = invoiceLinePreview(form, savedPrices.goldGramPrice);
     if (isStockSale(line)) { line.gramDebt = 0; line.rialDebt = 0; }
     const separate = isSeparateSetForm(line);
-    const errors = separate ? validateSetForm(line, ledger) : validateDocument(line, line.category, toNumber);
+    const errors = { ...(separate ? validateSetForm(line, ledger) : validateDocument(line, line.category, toNumber)), ...validateCustomerDocumentDetails(line) };
+    const birthDateInput = document.querySelector('.document-form [name="customerBirthDate"]');
+    if (birthDateInput?.validity.customError) errors.customerBirthDate = birthDateInput.validationMessage;
     const count = stockQuantity(line);
     if (!separate && line.category !== 'currency' && (!Number.isSafeInteger(count) || count <= 0)) errors[line.category === 'coin' ? 'coinCount' : 'itemCount'] = 'تعداد باید عدد صحیح بیشتر از صفر باشد.';
     if (isStockSale(line) && !separate) {
@@ -898,7 +903,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   };
 
   const showInvoiceErrors = errors => {
-    if (Object.keys(errors).some(key => key !== 'cashPaid')) setDocumentForm(current => ({ ...current, invoicePaymentStep: false }));
+    if (Object.keys(errors).some(key => !['cashPaid', 'paymentMethod'].includes(key))) setDocumentForm(current => ({ ...current, invoicePaymentStep: false }));
     setDocumentErrors(errors); setFormMessage({ type: 'error', text: Object.values(errors)[0] });
     requestAnimationFrame(() => document.querySelector('.document-form [aria-invalid="true"]')?.focus());
   };
@@ -1104,7 +1109,8 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     setDocumentErrors(current => name === 'type' ? {} : { ...current, [name]: '', ...(name === 'customerId' ? { customerName: '' } : {}) });
     if (name === 'customerId') {
       const customer = customers.find(item => item.id === value);
-      setDocumentForm(current => ({ ...current, customerId: value, customerName: customer?.name || '' }));
+      setDocumentForm(current => ({ ...current, customerId: value, customerName: customer?.name || '', ...customerDocumentDetails(customer) }));
+      setDocumentErrors({});
       setFormMessage(null);
       return;
     }
@@ -1184,7 +1190,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       return [{
         id: documentRecord.customerId,
         name: cleanName,
-        phone: '',
+        ...customerProfileDetails(documentRecord),
         gramDebt: debtSign * documentRecord.gramDebt,
         rialDebt: debtSign * documentRecord.rialDebt,
         purchases: [purchaseRecord],
@@ -1196,6 +1202,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
     return currentCustomers.map((customer, index) => index === customerIndex ? {
       ...customer,
+      ...customerProfileDetails(documentRecord),
       gramDebt: Number(customer.gramDebt || 0) + debtSign * documentRecord.gramDebt,
       rialDebt: Number(customer.rialDebt || 0) + debtSign * documentRecord.rialDebt,
       purchases: [purchaseRecord, ...(customer.purchases || [])],
@@ -1274,7 +1281,11 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       return;
     }
 
-    const customerId = documentForm.customerId || customers.find(customer => customer.name.trim() === cleanCustomerName)?.id || `customer-${crypto.randomUUID()}`;
+    const enteredProfile = customerProfileDetails(documentForm);
+    const existingCustomer = customers.find(customer => documentForm.customerId ? customer.id === documentForm.customerId :
+      customer.name.trim() === cleanCustomerName && (!enteredProfile.nationalId || !customer.nationalId || customerDocumentDetails(customer).customerNationalId === enteredProfile.nationalId));
+    const customerId = existingCustomer?.id || `customer-${crypto.randomUUID()}`;
+    const customerDetails = customerDocumentDetails({ ...existingCustomer, ...Object.fromEntries(Object.entries(enteredProfile).filter(([, value]) => value !== '')) });
     const transactionId = crypto.randomUUID();
     const rows = expandInvoiceDraft(documentForm, savedPrices.goldGramPrice, transactionId);
     if (forms.length > 50 || rows.length > 100) { showInvoiceErrors({ invoiceRows: 'حداکثر ۵۰ جنس و ۱۰۰ ردیف در هر سند قابل ثبت است.' }); return; }
@@ -1299,7 +1310,8 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
         itemName: String(row.itemName || '').trim(),
         profitPercent: String(toNumber(row.profitPercent)), id: `document-${crypto.randomUUID()}`,
         laboratoryName: rowType.category === 'melted' ? String(row.laboratoryName || '').trim() : '',
-        customerName: cleanCustomerName, customerId,
+        customerName: cleanCustomerName, customerId, ...customerDetails,
+        paymentMethod: String(documentForm.paymentMethod || '').trim(),
         typeLabel: rowType.label, category: rowType.category, direction: rowType.direction,
         amount: payment ? payment.amounts[index] : getDocumentAmount(row), gold18Price: toNumber(row.gold18Price),
         itemWeight: getDocumentWeight(row), itemSummary: describeDocumentItem(row),
@@ -1436,15 +1448,22 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                 </fieldset>
               </> : <>
               <p className="document-required-note">فیلدهای ستاره‌دار الزامی هستند. مبلغ‌ها به تومان و تاریخ‌ها شمسی‌اند.</p>
-              <fieldset className="document-section"><legend>مشخصات مشترک سند</legend>
+              <fieldset className="document-section"><legend>مشخصات مشتری</legend>
                 <DocumentField name="customerId" label="انتخاب مشتری" error={documentErrors.customerId}><select name="customerId" value={documentForm.customerId} onChange={updateDocumentField}><option value="">مشتری جدید / ورود نام</option>{customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` — ${customer.phone}` : ''}</option>)}</select></DocumentField>
                 <DocumentField name="customerName" label="نام مشتری" error={documentErrors.customerName} required><input name="customerName" value={documentForm.customerName} readOnly={Boolean(documentForm.customerId)} onChange={updateDocumentField} placeholder="نام مشتری جدید"/></DocumentField>
+                <DocumentField name="customerPhone" label="شماره تماس" error={documentErrors.customerPhone}><input name="customerPhone" type="tel" maxLength={100} value={documentForm.customerPhone ?? ''} onChange={updateDocumentField} placeholder="۰۹۱۲…"/></DocumentField>
+                <DocumentField name="customerBirthDate" label="تاریخ تولد (شمسی)" error={documentErrors.customerBirthDate}><PersianDateInput name="customerBirthDate" max={today} value={documentForm.customerBirthDate ?? ''} onChange={updateDocumentField}/></DocumentField>
+                <DocumentField name="customerNationalId" label="کد ملی" error={documentErrors.customerNationalId}><input name="customerNationalId" inputMode="numeric" maxLength={10} dir="ltr" value={documentForm.customerNationalId ?? ''} onChange={updateDocumentField} placeholder="کد ملی ۱۰ رقمی"/></DocumentField>
+                <DocumentField className="wide" name="customerAddress" label="آدرس" error={documentErrors.customerAddress}><textarea name="customerAddress" rows={2} maxLength={5000} value={documentForm.customerAddress ?? ''} onChange={updateDocumentField} placeholder="آدرس مشتری"/></DocumentField>
+              </fieldset>
+              <fieldset className="document-section"><legend>مشخصات مشترک سند</legend>
                 <DocumentField name="date" label="تاریخ سند" error={documentErrors.date} required><PersianDateInput name="date" required value={documentForm.date} onChange={updateDocumentField}/></DocumentField>
                 <DocumentField name="gold18Price" label="قیمت هر گرم طلای ۱۸ عیار هنگام ثبت (تومان)" error={documentErrors.gold18Price} required><NumberInput name="gold18Price" inputMode="decimal" value={documentForm.gold18Price ?? savedPrices.goldGramPrice ?? ''} onChange={updateDocumentField} placeholder="نرخ طلای ۱۸ عیار"/></DocumentField>
                 {!saleMode && <>
                 <DocumentField name="gramDebt" label="بدهی گرمی ما به مشتری" error={documentErrors.gramDebt}><NumberInput name="gramDebt" inputMode="decimal" value={documentForm.gramDebt} onChange={updateDocumentField} placeholder="گرم"/></DocumentField>
                 <DocumentField name="rialDebt" label="بدهی ریالی ما به مشتری" error={documentErrors.rialDebt}><NumberInput name="rialDebt" inputMode="numeric" value={documentForm.rialDebt} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
                 </>}
+                {!saleMode && <DocumentField className="wide" name="paymentMethod" label="نحوه پرداخت" error={documentErrors.paymentMethod}><textarea name="paymentMethod" rows={3} maxLength={5000} value={documentForm.paymentMethod ?? ''} onChange={updateDocumentField} placeholder="مثلاً بخشی کارت‌به‌کارت و باقی‌مانده با چک؛ جزئیات را بنویسید"/></DocumentField>}
                 <DocumentField className="wide" name="note" label="یادداشت" error={documentErrors.note}><input name="note" value={documentForm.note} onChange={updateDocumentField} placeholder="توضیح تکمیلی"/></DocumentField>
                 <p className="document-required-note wide">{saleMode ? 'پس از محاسبهٔ مبلغ سند، پرداخت نقدی مشتری را وارد می‌کنید و باقی‌مانده با نرخ همین سند به بدهی گرمی تبدیل می‌شود.' : 'مشتری، تاریخ و ماندهٔ بدهی برای کل سند است؛ بدهی فقط یک‌بار در حساب مشتری اعمال می‌شود.'}</p>
                 <p className="document-required-note wide">نرخ طلا را بررسی کنید؛ همراه با ساعت ثبت در همین سند ذخیره می‌شود و با تغییر نرخ‌های بازار ثابت می‌ماند. مقدار اولیه از آخرین نرخ دستی ثبت‌شده است.</p>
@@ -1545,6 +1564,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                 <p>مبلغ سند با احتساب اجرت، هزینه‌ها و تخفیف محاسبه شد. مشتری چقدر نقد پرداخت کرده است؟</p>
                 <dl className="invoice-payment-summary"><div><dt>مبلغ قابل پرداخت</dt><dd data-invoice-payment-total>{formatNumber(paymentPreview.total)} تومان</dd></div><div><dt>تخفیف این سند</dt><dd>{formatNumber(previewRows.reduce((sum, row) => sum + documentBreakdown(row).discount, 0))} تومان</dd></div><div><dt>نرخ تبدیل هر گرم طلای ۱۸ عیار</dt><dd>{formatNumber(paymentPreview.settlementGoldPrice)} تومان</dd></div></dl>
                 <DocumentField name="cashPaid" label="مبلغ نقدی پرداخت‌شده (تومان)" error={documentErrors.cashPaid} required><NumberInput name="cashPaid" inputMode="numeric" autoComplete="off" value={documentForm.cashPaid ?? ''} onChange={updateDocumentField} placeholder="اگر پرداختی نشده، صفر وارد کنید"/></DocumentField>
+                <DocumentField name="paymentMethod" label="نحوه پرداخت" error={documentErrors.paymentMethod}><textarea name="paymentMethod" rows={3} maxLength={5000} value={documentForm.paymentMethod ?? ''} onChange={updateDocumentField} placeholder="مثلاً بخشی کارت‌به‌کارت و باقی‌مانده با چک؛ جزئیات را بنویسید"/></DocumentField>
                 <button type="button" className="button button-ghost" data-invoice-pay-full onClick={() => updateDocumentField({ target: { name: 'cashPaid', value: String(paymentPreview.total) } })}>کل مبلغ پرداخت شده</button>
                 <div className="invoice-payment-result" aria-live="polite"><span>ماندهٔ پرداخت: <strong data-invoice-payment-remainder>{paymentPreview.settlementRemainder == null ? '—' : formatNumber(paymentPreview.settlementRemainder)} تومان</strong></span><span>بدهی گرمی این سند: <strong data-invoice-payment-grams>{paymentPreview.gramDebt == null ? '—' : new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 6 }).format(paymentPreview.gramDebt)} گرم طلای ۱۸ عیار</strong></span></div>
                 <p className="document-required-note">ماندهٔ تومان ÷ نرخ هر گرم = بدهی گرمی. این مقدار به حساب مشتری اضافه و در صورتحساب چاپ می‌شود.</p>

@@ -10,6 +10,14 @@ const crafted = { type: 'crafted-sale', category: 'crafted', itemName: 'النگ
 const coin = { type: 'coin-sale', category: 'coin', itemName: 'سکه', coinType: 'امامی', coinCount: '1', coinPrice: '60000000', profitPercent: '0', inventorySourceId: 'coin' };
 const melted = { type: 'melted-sale', category: 'melted', itemName: 'آبشده', itemCount: '1', meltedWeight: '1', meltedAyar: '750', meltedGramPrice: '6000000', profitPercent: '0', inventorySourceId: 'melted' };
 
+test('updated customer and payment header replaces stale row snapshots across the invoice', () => {
+  const details = { customerPhone: '09123456789', customerBirthDate: '1991-03-22', customerAddress: 'تهران\nخیابان نمونه', customerNationalId: '0012345678', paymentMethod: 'کارت‌به‌کارت\nباقی‌مانده چک' };
+  const draft = { ...header, ...details, invoiceRows: [{ ...crafted, customerNationalId: '1111111111', paymentMethod: 'قدیمی' }, coin], invoiceCurrentEmpty: true };
+  const rows = expandInvoiceDraft(draft, '6000000', 'customer-details-invoice');
+  assert.equal(rows.length, 2);
+  for (const row of rows) for (const [field, value] of Object.entries(details)) assert.equal(row[field], value);
+});
+
 test('three mixed draft rows retain one header and apply debt once with the crafted profit default', () => {
   const draft = { ...header, invoiceRows: [crafted, coin, melted], invoiceCurrentEmpty: true, invoiceEditingIndex: -1 };
   const before = structuredClone(draft);

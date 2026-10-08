@@ -188,6 +188,7 @@
 
 .form-grid input,
 .form-grid select,
+.document-form textarea,
 .search-controls input,
 .document-section > label > input,
 .document-section > label > select,
@@ -207,6 +208,7 @@
 
 .form-grid input:focus,
 .form-grid select:focus,
+.document-form textarea:focus,
 .search-controls input:focus,
 .document-section > label > input:focus,
 .document-section > label > select:focus,
@@ -227,6 +229,11 @@
   background: #f4f4ee;
   color: #68736d;
   cursor: default;
+}
+
+.document-form textarea {
+  resize: vertical;
+  line-height: 1.9;
 }
 
 .form-grid .wide {

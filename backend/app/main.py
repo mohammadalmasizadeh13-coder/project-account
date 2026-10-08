@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import delete, select, update
 
 from .accounts import register_account_routes
+from .customer_details import guard_customer_details
 from .database import imports, initialize, make_engine, read_workspace, sessions, users, workspace_requests, workspaces
 from .document_edits import register_document_routes
 from .inventory import create_stock, delete_stock, edit_stock, guard_linked_inventory_changes, guard_new_document_identity, inventory_requests, sync_misc_purchase_caches
@@ -261,7 +262,10 @@ def create_app(settings=None):
             data = {**current["data"], **changes}
             if "partners" in changes and changes["partners"] != current["data"]["partners"]:
                 raise HTTPException(409, "دفتر همکاران فقط از بخش همکاران قابل تغییر است.")
+            if "customers" in changes:
+                guard_customer_details(current["data"]["customers"], data["customers"])
             if "documents" in changes:
+                guard_customer_details(current["data"]["documents"], data["documents"], documents=True)
                 guard_partner_documents(current["data"]["documents"], data["documents"])
                 guard_linked_inventory_changes(current["data"]["documents"], data["documents"])
                 guard_new_document_identity(current["data"]["documents"], data["documents"])

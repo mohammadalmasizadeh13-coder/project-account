@@ -5,7 +5,7 @@ import { invoiceCount, iranDate } from './sales';
 import { customerSummary, settleCustomer } from './crm';
 import './crm.css';
 import PersianDateInput from './PersianDateInput';
-import { formatPersianDate } from './persianDate';
+import { formatPersianDate, normalizeDigits } from './persianDate';
 import { formatRecordDate } from './recordTime';
 import { tradeGoldPriceSummary } from './tradeGoldPrice';
 import { customerAnalytics } from './crmAnalytics';
@@ -18,7 +18,7 @@ import InvoiceDetails from './InvoiceDetails';
 const numeric = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 6 }).format(Number(value) || 0);
 const money = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(Number(value) || 0);
 const dateText = value => value ? formatPersianDate(value.slice(0, 10)) : 'ثبت نشده';
-const empty = () => ({ name: '', phone: '', birthDate: '', address: '', tag: 'عادی', followUpDate: '', note: '', rialDebt: '', gramDebt: '' });
+const empty = () => ({ name: '', phone: '', birthDate: '', address: '', nationalId: '', tag: 'عادی', followUpDate: '', note: '', rialDebt: '', gramDebt: '' });
 const balance = (value, unit) => `${numeric(Math.abs(Number(value) || 0))} ${unit} · ${Number(value) > 0 ? 'بدهکار به ما' : Number(value) < 0 ? 'بستانکار از ما' : 'تسویه'}`;
 
 export default function CustomerCRM({ customers, documents, onSave, parseNumber, initialSelectedId = '', initialView = 'customers', initialAction = '', today: suppliedToday, readOnly = false }) {
@@ -69,10 +69,12 @@ export default function CustomerCRM({ customers, documents, onSave, parseNumber,
     if (!name) return setMessage({ type: 'error', text: 'نام مشتری را وارد کنید.' });
     const phone = String(form.phone || '').replace(/[۰-۹]/g, char => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(char))).replace(/[\s()-]/g, '');
     if (phone && !/^\+?\d{7,15}$/.test(phone)) return setMessage({ type: 'error', text: 'شماره تماس معتبر وارد کنید.' });
+    const nationalId = normalizeDigits(form.nationalId).trim();
+    if (nationalId && !/^\d{10}$/.test(nationalId)) return setMessage({ type: 'error', text: 'کد ملی باید ۱۰ رقم باشد.' });
     if (form.birthDate && form.birthDate > iranDate()) return setMessage({ type: 'error', text: 'تاریخ تولد نمی‌تواند در آینده باشد.' });
     if (customers.some(customer => customer.id !== editing && (normalized(customer.name) === normalized(name) || (phone && customer.phone === phone)))) return setMessage({ type: 'error', text: 'مشتری با این نام یا شماره موجود است؛ پروندهٔ او را ویرایش کنید.' });
     const existing = customers.find(customer => customer.id === editing);
-    const record = { ...existing, ...form, id: existing?.id || `customer-${crypto.randomUUID()}`, name, phone,
+    const record = { ...existing, ...form, id: existing?.id || `customer-${crypto.randomUUID()}`, name, phone, nationalId,
       rialDebt: existing ? existing.rialDebt : parseNumber(form.rialDebt), gramDebt: existing ? existing.gramDebt : parseNumber(form.gramDebt),
       createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
     try { onSave(record); }
@@ -99,14 +101,14 @@ export default function CustomerCRM({ customers, documents, onSave, parseNumber,
     {message && <div role="status" className={`form-message ${message.type}`}>{message.text}</div>}
     {canEdit && editing && <form className="crm-editor crm-form" ref={editorRef} onSubmit={save}>
       <div className="crm-section-title"><h3>{editing === 'new' ? 'مشتری جدید' : 'ویرایش مشخصات مشتری'}</h3><button type="button" className="sd-icon-button" aria-label="بستن ویرایش مشتری" onClick={() => setEditing(null)}><X size={16}/></button></div>
-      <div className="form-grid"><label>نام و نام خانوادگی<input name="name" required value={form.name} onChange={update}/></label><label>شماره تماس<input name="phone" type="tel" value={form.phone} onChange={update} placeholder="۰۹۱۲…"/></label><label>تاریخ تولد (شمسی)<PersianDateInput name="birthDate" max={iranDate()} value={form.birthDate} onChange={update}/></label><label>گروه مشتری<select name="tag" value={form.tag} onChange={update}>{['عادی', 'وفادار', 'ویژه', 'همکار'].map(tag => <option key={tag}>{tag}</option>)}</select></label><label>تاریخ پیگیری بعدی<PersianDateInput name="followUpDate" value={form.followUpDate} onChange={update}/></label><label>نشانی<input name="address" value={form.address} onChange={update}/></label><label className="wide">یادداشت و علاقه‌مندی‌ها<input name="note" value={form.note} onChange={update} placeholder="مثلاً علاقه به طلای کم‌اجرت، سایز انگشتر یا موضوع پیگیری"/></label>
+      <div className="form-grid"><label>نام و نام خانوادگی<input name="name" required value={form.name} onChange={update}/></label><label>شماره تماس<input name="phone" type="tel" value={form.phone} onChange={update} placeholder="۰۹۱۲…"/></label><label>تاریخ تولد (شمسی)<PersianDateInput name="birthDate" max={iranDate()} value={form.birthDate} onChange={update}/></label><label>کد ملی<input name="nationalId" inputMode="numeric" dir="ltr" value={form.nationalId} onChange={update} placeholder="۱۰ رقم"/></label><label>گروه مشتری<select name="tag" value={form.tag} onChange={update}>{['عادی', 'وفادار', 'ویژه', 'همکار'].map(tag => <option key={tag}>{tag}</option>)}</select></label><label>تاریخ پیگیری بعدی<PersianDateInput name="followUpDate" value={form.followUpDate} onChange={update}/></label><label>نشانی<input name="address" value={form.address} onChange={update}/></label><label className="wide">یادداشت و علاقه‌مندی‌ها<input name="note" value={form.note} onChange={update} placeholder="مثلاً علاقه به طلای کم‌اجرت، سایز انگشتر یا موضوع پیگیری"/></label>
         {editing === 'new' && <><label>مانده اولیه ریالی (تومان)<NumberInput name="rialDebt" inputMode="decimal" value={form.rialDebt} onChange={update}/></label><label>مانده اولیه گرمی<NumberInput name="gramDebt" inputMode="decimal" value={form.gramDebt} onChange={update}/></label><small className="wide">عدد مثبت: بدهی مشتری به ما. عدد منفی: طلب مشتری از ما. ویرایش مشخصات، مانده حساب را تغییر نمی‌دهد.</small></>}
       </div><button className="button button-primary" type="submit">ذخیره پرونده</button>
     </form>}
     {view === 'customers' && <div className="crm-columns"><aside className="crm-customer-list" aria-label="فهرست مشتریان"><div className="crm-list-heading">مشتریان <span>{numeric(visible.length)} نفر</span></div>{visible.map(customer => <button key={customer.id} data-customer-id={customer.id} className={`crm-customer ${selectedId === customer.id ? 'selected' : ''}`} onClick={() => selectProfile(customer.id)}><span className="crm-avatar"><UserRound size={18}/></span><span><strong>{customer.name}</strong><small dir="ltr">{customer.phone || 'بدون شماره تماس'}</small><small>{balance(customer.rialDebt, 'تومان')}</small></span></button>)}{!visible.length && <div className="empty-state">مشتری پیدا نشد.</div>}</aside>
       {selected ? <section className="crm-profile" ref={profileRef} tabIndex={-1}>
         <header className="crm-profile-header"><div><span className="crm-tag">{selected.tag || 'عادی'}</span><h2>{selected.name}</h2><span><Phone size={13}/> {selected.phone ? <a href={`tel:${selected.phone}`}>{selected.phone}</a> : 'شماره تماس ثبت نشده'}</span></div>{canEdit && <button className="button button-ghost crm-edit-button" onClick={() => editCustomer(selected)}><Pencil size={15}/> ویرایش مشخصات</button>}</header>
-        <details className="simple-details crm-account-details"><summary>مشخصات و مانده حساب مشتری</summary><div className="crm-facts"><span><CalendarDays size={15}/> تولد: <b>{dateText(selected.birthDate)}</b></span><span>آخرین معامله: <b>{dateText(summary.lastVisit)}</b></span><span className={selected.followUpDate && selected.followUpDate <= iranDate() ? 'crm-due' : ''}>پیگیری بعدی: <b>{dateText(selected.followUpDate)}</b></span><span>نشانی: <b>{selected.address || 'ثبت نشده'}</b></span></div>
+        <details className="simple-details crm-account-details"><summary>مشخصات و مانده حساب مشتری</summary><div className="crm-facts"><span><CalendarDays size={15}/> تولد: <b>{dateText(selected.birthDate)}</b></span><span>کد ملی: <b><bdi dir="ltr">{selected.nationalId || 'ثبت نشده'}</bdi></b></span><span>آخرین معامله: <b>{dateText(summary.lastVisit)}</b></span><span className={selected.followUpDate && selected.followUpDate <= iranDate() ? 'crm-due' : ''}>پیگیری بعدی: <b>{dateText(selected.followUpDate)}</b></span><span>نشانی: <b>{selected.address || 'ثبت نشده'}</b></span></div>
         {selected.note && <p className="crm-note">{selected.note}</p>}
         <div className="crm-stats"><article><span>خرید مشتری از ما</span><strong>{money(summary.purchased)} <small>تومان</small></strong><small>{numeric(invoiceCount(summary.purchases))} سند</small></article><article><span>فروش مشتری به ما</span><strong>{money(summary.sold)} <small>تومان</small></strong><small>{numeric(invoiceCount(summary.sales))} سند</small></article><article><span>مانده ریالی</span><strong>{money(Math.abs(selected.rialDebt || 0))} <small>تومان</small></strong><small>{Number(selected.rialDebt) > 0 ? 'مشتری بدهکار است' : Number(selected.rialDebt) < 0 ? 'مشتری بستانکار است' : 'تسویه'}</small></article><article><span>مانده گرمی</span><strong>{numeric(Math.abs(selected.gramDebt || 0))} <small>گرم</small></strong><small>{Number(selected.gramDebt) > 0 ? 'مشتری بدهکار است' : Number(selected.gramDebt) < 0 ? 'مشتری بستانکار است' : 'تسویه'}</small></article></div>
         </details>

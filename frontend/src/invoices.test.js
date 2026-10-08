@@ -39,6 +39,28 @@ test('existing sets group by transaction while separate sales and legacy records
   assert.equal(invoices[1].number, 'acy-sale');
 });
 
+test('grouped invoices retain the recorded customer identity and multiline payment instructions', () => {
+  const saved = {
+    customerName: 'مشتری آزمون', customerPhone: '09123456789', customerBirthDate: '1990-03-21',
+    customerAddress: 'تهران، خیابان اول\nپلاک ۱۲', customerNationalId: '0012345678',
+    paymentMethod: 'بخشی کارت به کارت\nباقی مبلغ با چک شماره ۱۲۳',
+  };
+  const documents = [
+    { ...saved, id: 'second', transactionId: 'invoice', invoiceLine: 2, amount: 20 },
+    { ...saved, id: 'first', transactionId: 'invoice', invoiceLine: 1, amount: 10 },
+    { id: 'legacy', customerName: 'مشتری قدیمی', amount: 30 },
+  ];
+  const before = structuredClone(documents);
+  const [invoice, legacy] = groupInvoices(documents);
+  for (const [field, value] of Object.entries(saved)) assert.equal(invoice[field], value);
+  assert.equal(invoice.amount, 30);
+  assert.equal(legacy.customerName, 'مشتری قدیمی');
+  assert.equal(legacy.customerNationalId, undefined);
+  assert.equal(legacy.customerBirthDate, undefined);
+  assert.equal(legacy.paymentMethod, undefined);
+  assert.deepEqual(documents, before);
+});
+
 test('invoice totals retain recorded zero and parse Persian amounts, falling back to original rates only', () => {
   const common = { category: 'crafted', type: 'crafted-sale', itemCount: 1, weight: 2, gramPrice: 100, ayar: 750, profitPercent: 7, currentAmount: 999999 };
   const invoices = groupInvoices([

@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import Column, Index, Integer, Table, case, literal, select, update
 
 from .database import LEGACY_ACCOUNT_ID, account_column, metadata
+from .customer_details import document_detail_header
 from .inventory import ECONOMIC_FIELDS, STOCK_TYPES, TEXT_FIELDS, discounted_amount, is_sale, is_stock_entry, normalize_misc_purchase, numeric, quantity, validate_item, values_differ
 from .pricing import number
 
@@ -149,7 +150,8 @@ def validate_group(rows):
         # A partner's mixed document explicitly carries both purchase and sale rows.
         # Keep ordinary customer invoices subject to their single-direction contract.
         group_direction = ("partner-v3", row["partnerId"]) if row.get("calculationVersion") == 3 and row.get("counterpartyType") == "partner" and row.get("partnerId") == customer else direction
-        headers.append((customer, name.strip(), recorded_date, created_at, row.get("recordedAt"), group_direction))
+        headers.append((customer, name.strip(), recorded_date, created_at, row.get("recordedAt"), group_direction,
+            document_detail_header(row)))
         validate_item(row)
         saved_amount = numeric(row.get("amount"), "مبلغ ردیف", maximum=Decimal(MAX_SAFE_INTEGER))
         if is_sale(row) and number(row.get("discountPercent")) > 0:

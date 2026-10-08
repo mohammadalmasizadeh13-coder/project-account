@@ -8,9 +8,11 @@ import { invoiceItemName } from './invoices';
 import { invoiceSettlement } from './invoiceSettlement';
 import { isMiscPurchase } from './miscGold';
 import { validateDocument } from './documentValidation';
+import { customerDocumentDetails, validateCustomerDocumentDetails } from './customerDetails';
 import './document-editor.css';
 
 const money = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value);
+const documentMetadataFields = ['customerName', 'customerPhone', 'customerBirthDate', 'customerAddress', 'customerNationalId', 'paymentMethod'];
 const commonNumbers = [['profitPercent', 'سود (%)'], ['otherCosts', 'سایر هزینه‌های هر واحد (تومان)'], ['discountRial', 'تخفیف ردیف (تومان)']];
 function rowFields(row) {
   if (row.type === 'expense') return [['expenseAmount', 'مقدار هزینه']];
@@ -36,7 +38,7 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
   const expense = first.type === 'expense';
   const settled = first.settlementVersion === 1;
   const [rows, setRows] = useState(() => original.map(row => ({ ...row })));
-  const [header, setHeader] = useState({ date: first.date || '', customerId: first.customerId || '', cashPaid: first.cashPaid ?? '', settlementGoldPrice: first.settlementGoldPrice ?? '', gold18Price: first.gold18Price ?? '', gramDebt: invoice.gramDebt, rialDebt: invoice.rialDebt });
+  const [header, setHeader] = useState({ date: first.date || '', customerId: first.customerId || '', ...Object.fromEntries(documentMetadataFields.map(key => [key, first[key] ?? ''])), cashPaid: first.cashPaid ?? '', settlementGoldPrice: first.settlementGoldPrice ?? '', gold18Price: first.gold18Price ?? '', gramDebt: invoice.gramDebt, rialDebt: invoice.rialDebt });
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [error, setError] = useState('');
@@ -49,7 +51,12 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
     return () => { dialog.close(); document.body.style.overflow = overflow; if (focus?.isConnected) focus.focus(); };
   }, []);
   function close() { if (!running.current) onClose(); }
-  function updateHeader(name, value) { setHeader(previous => ({ ...previous, [name]: value })); setError(''); }
+  function updateHeader(name, value) {
+    const customer = name === 'customerId' ? customers.find(item => String(item.id) === String(value)) : null;
+    const snapshot = name === 'customerId' ? { customerName: customer?.name ?? '', ...customerDocumentDetails(customer || {}) } : {};
+    setHeader(previous => ({ ...previous, [name]: value, ...snapshot }));
+    setError('');
+  }
   function updateRow(index, name, value) { setRows(previous => previous.map((row, position) => position === index ? { ...row, [name]: value, ...(name === 'expenseUnit' && value === 'currency' && !row.expenseCurrency ? { expenseCurrency: 'USD' } : {}) } : row)); setError(''); }
   function numericField(index, name, label) {
     return <label key={name}>{label}<NumberInput name={name} placeholder={name === 'discountPercent' ? '۰ تا ۱۰۰' : undefined} value={rows[index][name] ?? (['ayar', 'meltedAyar', 'expenseGoldPurity'].includes(name) ? '750' : ['itemCount', 'coinCount'].includes(name) ? '1' : name === 'expenseAmount' ? rows[index].amount ?? '' : '')} onChange={event => updateRow(index, name, event.target.value)}/></label>;
@@ -67,9 +74,9 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
       const next = Object.fromEntries(Object.entries(row).filter(([key, value]) => String(value ?? '') !== String(original[index][key] ?? '')));
       if (header.date !== first.date) next.date = header.date;
       if (!expense && !settled && String(header.gold18Price) !== String(first.gold18Price ?? '')) next.gold18Price = header.gold18Price;
-      if (!expense && String(header.customerId) !== String(first.customerId ?? '')) {
-        next.customerId = customer?.id ?? header.customerId;
-        next.customerName = customer?.name || '';
+      if (!expense) {
+        if (String(header.customerId) !== String(original[index].customerId ?? '')) next.customerId = customer?.id ?? header.customerId;
+        for (const key of documentMetadataFields) if (String(header[key]) !== String(original[index][key] ?? '')) next[key] = header[key];
       }
       if (index === 0 && settled) {
         for (const key of ['cashPaid', 'settlementGoldPrice']) if (String(header[key]) !== String(first[key])) next[key] = header[key];
@@ -92,6 +99,10 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
           const discountError = validation.discountPercent || validation.discountRial;
           if (discountError) { setError(`ردیف ${(index + 1).toLocaleString('fa-IR')}: ${discountError}`); return; }
         }
+      }
+      if (!deleting && !expense) {
+        const metadataErrors = validateCustomerDocumentDetails(header);
+        if (Object.keys(metadataErrors).length) { setError(Object.values(metadataErrors).join(' ')); return; }
       }
       const payload = deleting ? null : changes();
       if (!deleting && !payload.some(row => Object.keys(row.changes).length)) { setError('تغییری در سند ایجاد نشده است.'); return; }
@@ -118,6 +129,14 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
           {!expense && <label>طرف حساب<select name="customerId" value={header.customerId} onChange={event => updateHeader('customerId', event.target.value)}><option value="">{first.customerName || 'انتخاب کنید'}</option>{!customers.some(customer => String(customer.id) === String(header.customerId)) && header.customerId && <option value={header.customerId}>{first.customerName}</option>}{customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>}
           {!expense && !settled && <label>نرخ طلای ۱۸ عیار هنگام معامله (تومان)<NumberInput name="gold18Price" value={header.gold18Price} onChange={event => updateHeader('gold18Price', event.target.value)}/></label>}
         </div>
+        {!expense && <fieldset className="document-edit-row"><legend>مشخصات مشتری در سند</legend>
+          <div className="document-edit-grid">
+            <label>تلفن مشتری<input name="customerPhone" type="tel" dir="ltr" maxLength={100} value={header.customerPhone} onChange={event => updateHeader('customerPhone', event.target.value)}/></label>
+            <label>تاریخ تولد<PersianDateInput name="customerBirthDate" value={header.customerBirthDate} onChange={event => updateHeader('customerBirthDate', event.target.value)}/></label>
+            <label>کد ملی<input name="customerNationalId" inputMode="numeric" dir="ltr" maxLength={10} value={header.customerNationalId} onChange={event => updateHeader('customerNationalId', event.target.value)}/></label>
+            <label>آدرس<textarea name="customerAddress" rows={2} maxLength={5000} value={header.customerAddress} onChange={event => updateHeader('customerAddress', event.target.value)}/></label>
+          </div>
+        </fieldset>}
         {rows.map((row, index) => <fieldset className="document-edit-row" data-document-row={row.id} key={row.id}><legend>{expense ? 'هزینهٔ ثبت‌شده' : `${(index + 1).toLocaleString('fa-IR')} · ${invoiceItemName(row)}`}</legend>
           <div className="document-edit-grid">
             {!expense && <label>نام جنس<input name="itemName" value={row.itemName || ''} maxLength={200} onChange={event => updateRow(index, 'itemName', event.target.value)}/></label>}
@@ -133,6 +152,7 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
           {row.type?.endsWith('-sale') && <p>تخفیف درصدی از کل مبلغ ردیف، شامل اجرت، هزینه‌ها و سود محاسبه می‌شود و تخفیف ریالی هم علاوه بر آن کسر می‌شود.</p>}
         </fieldset>)}
         {!expense && <div className="document-edit-grid">{(settled ? [['cashPaid', 'پرداخت نقدی (تومان)'], ['settlementGoldPrice', 'نرخ تبدیل مانده به طلای ۱۸ عیار (تومان)']] : [['gramDebt', 'بدهی گرمی سند'], ['rialDebt', 'بدهی نقدی سند (تومان)']]).map(([key, label]) => <label key={key}>{label}<NumberInput name={key} value={header[key]} onChange={event => updateHeader(key, event.target.value)}/></label>)}</div>}
+        {!expense && <label>نحوه پرداخت<textarea name="paymentMethod" rows={3} maxLength={5000} value={header.paymentMethod} placeholder="نحوه پرداخت و توضیحات آن را بنویسید" onChange={event => updateHeader('paymentMethod', event.target.value)}/></label>}
         <div className="document-edit-preview" aria-live="polite"><strong>مبلغ اصلاح‌شده: {Number.isFinite(total) ? money(total) : '—'} تومان</strong>{settlement && <span>بدهی گرمی: {settlement.gramDebt === null ? '—' : settlement.gramDebt.toLocaleString('fa-IR', { maximumFractionDigits: 6 })} گرم</span>}</div>
       </fieldset>}
       {error && <p role="alert" className="document-edit-error">{error}</p>}

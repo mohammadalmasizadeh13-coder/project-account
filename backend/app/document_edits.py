@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 
 from .database import read_workspace, workspace_requests, workspaces
+from .customer_details import (CUSTOMER_SNAPSHOT_FIELDS, DOCUMENT_DETAIL_FIELDS,
+    document_detail_header, normalize_customer_detail)
 from .inventory import (CURRENCIES, ECONOMIC_FIELDS, STRING_FIELDS, STOCK_TYPES, TEXT_FIELDS,
     amount as inventory_amount, decimal_output, discounted_amount, guard_linked_inventory_changes, is_sale, item_summary, item_weight,
     normalize_misc_purchase, numeric, validate_item, values_differ)
@@ -24,7 +26,7 @@ from .security import account_request_id, digest, has_permission, require_mutati
 RATE_FIELDS = {"crafted": {"gramPrice"}, "melted": {"meltedGramPrice"},
     "coin": {"coinPrice", "parsianPrice"}, "currency": {"currencyRate"}}
 TRADE_FIELDS = {"date", "customerId", "customerName", "gramDebt", "rialDebt", "gold18Price",
-    "profitPercent", "otherCosts", "discountRial", "discountPercent", "cashPaid", "settlementGoldPrice"}
+    "profitPercent", "otherCosts", "discountRial", "discountPercent", "cashPaid", "settlementGoldPrice"} | DOCUMENT_DETAIL_FIELDS
 EXPENSE_FIELDS = {"date", "description", "note", "expensePayee", "expenseUnit", "expenseCurrency",
     "expenseGoldPurity", "expenseRate", "expenseAmount"}
 EDIT_TEXT_FIELDS = STRING_FIELDS | {"expensePayee", "expenseUnit", "expenseCurrency", "customerName"}
@@ -77,7 +79,9 @@ def normalize_changes(row, changes):
         raise HTTPException(422, "فیلد ارسال‌شده برای اصلاح این سند مجاز نیست.")
     normalized = {}
     for field, value in changes.items():
-        if field == "date":
+        if field in DOCUMENT_DETAIL_FIELDS:
+            normalized[field] = normalize_customer_detail(field, value)
+        elif field == "date":
             try:
                 if not isinstance(value, str) or len(value) != 10:
                     raise ValueError()
@@ -179,7 +183,7 @@ def synchronize_customers(data, old_rows, new_rows):
             replacement = {**cached, "date": updated.get("date"), "detail": updated.get("itemSummary"),
                 "amount": updated.get("amount"), "gold18Price": updated.get("gold18Price"),
                 "gramDebt": updated.get("gramDebt", 0), "rialDebt": updated.get("rialDebt", 0)}
-            for field in SETTLEMENT_FIELDS:
+            for field in SETTLEMENT_FIELDS | DOCUMENT_DETAIL_FIELDS:
                 if field in updated:
                     replacement[field] = updated[field]
             if target is customer:
@@ -216,6 +220,9 @@ def correct_documents(data, identifier, requested_rows, identity):
                 target = document_customer(result, updated)
                 if str(old.get("customerId")) != str(updated.get("customerId")):
                     updated["customerName"] = target.get("name")
+                    for field, customer_field in CUSTOMER_SNAPSHOT_FIELDS.items():
+                        if field not in changes:
+                            updated[field] = normalize_customer_detail(field, target.get(customer_field))
                 elif "customerName" in changes and changes["customerName"] not in {old.get("customerName"), target.get("name")}:
                     raise HTTPException(422, "نام طرف حساب را از بخش مشتریان اصلاح کنید.")
                 validate_item(updated)
@@ -232,9 +239,9 @@ def correct_documents(data, identifier, requested_rows, identity):
                 updated["itemSummary"] = item_summary(updated)
             updated_rows.append(updated)
         if any(row.get("type") != "expense" for row in updated_rows):
-            headers = {(str(row.get("customerId")), row.get("customerName"), row.get("date")) for row in updated_rows}
-            if len(headers) != 1:
-                raise HTTPException(422, "تاریخ و طرف حساب تمام ردیف‌های سند باید یکسان باشد.")
+            headers = [(str(row.get("customerId")), row.get("customerName"), row.get("date"), document_detail_header(row)) for row in updated_rows]
+            if any(header != headers[0] for header in headers[1:]):
+                raise HTTPException(422, "تاریخ، مشخصات مشتری و نحوه پرداخت تمام ردیف‌های سند باید یکسان باشد.")
         settlement = next((row for row in updated_rows if row.get("settlementVersion") == 1), None)
         old_settlement = next((row for row in old_rows if row.get("settlementVersion") == 1), None)
         payment_changed = settlement and any(number(settlement.get(field)) != number(old_settlement.get(field)) for field in ("cashPaid", "settlementGoldPrice"))
