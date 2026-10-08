@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import NumberInput from './NumberInput.jsx';
 import { Coins, FilePlus2, Pencil, Plus, Printer, Search, Trash2, Users, Wallet, X } from 'lucide-react';
@@ -12,6 +12,7 @@ import { formatPartnerAmount as fmt, newPartnerInvoice, newPartnerLine, newPartn
   partnerInvoiceTotals, partnerLineTotals, savedPartnerLineTotals, partnerStatement, partnerStockTypes, partnerLineTypes, partnerTradeTypes,
   preparePartnerInvoice, preparePartnerProfile, preparePartnerSettlement, upgradePartnerInvoiceDraft, partnerInvoiceDraftFromEntry, partnerSettlementDraftFromEntry, parsePartnerNumber } from './partnerLedger.js';
 import './partner-crm.css';
+import { GalleryAccountContext } from './GalleryAccountContext.js';
 
 const DRAFT_KIND = 'partner-workspace';
 const normalized = value => normalizeDigits(value).replace(/ي/g, 'ی').replace(/ك/g, 'ک').toLowerCase().trim();
@@ -115,6 +116,7 @@ function StatementInvoiceLines({ entry, docById }) {
 }
 
 function PartnerStatement({ partner, username, documents }) {
+  const { galleryName } = useContext(GalleryAccountContext);
   const statement = partnerStatement(partner);
   const [selectedEntry, setSelectedEntry] = useState('');
   const row = statement.rows.find(entry => entry.id === selectedEntry);
@@ -127,7 +129,7 @@ function PartnerStatement({ partner, username, documents }) {
   useEffect(() => () => document.body.classList.remove('partner-print-open'), []);
   return <section className="partner-statement" data-partner-statement>
     <div className="partner-section-heading partner-screen-only"><h3>گردش حساب همکار</h3><button type="button" className="button button-ghost" data-partner-print onClick={print}><Printer size={16}/> چاپ صورت‌حساب</button></div>
-    <header className="partner-print-heading"><h2>صورت‌حساب همکار · {partner.name}</h2><p>دفتر حسابداری <bdi>{username}</bdi> · {partnerTradeTypes[partner.tradeType]}</p>{partner.phone && <p>تلفن: <bdi>{partner.phone}</bdi></p>}</header>
+    <header className="partner-print-heading"><h2>صورت‌حساب همکار · {partner.name}</h2><p><bdi>{galleryName || username}</bdi> · {partnerTradeTypes[partner.tradeType]}</p>{partner.phone && <p>تلفن: <bdi>{partner.phone}</bdi></p>}</header>
     <p className="partner-ledger-help">بدهکار: بدهی ما به همکار؛ بستانکار: طلب ما از همکار یا کاهش بدهی با پرداخت. خریدهای جدید با سود و اجرت به گرم طلای ۷۵۰ ثبت می‌شوند. گردش‌ها و ماندهٔ تومانی قبلی نیز در صورت‌حساب نمایش داده می‌شوند.</p>
     <div className="partner-statement-opening"><span>مانده قبلی / اولیه: {balanceText(statement.openingGoldBalance, 'گرم ۷۵۰')}</span><span>{balanceText(statement.openingTomanBalance, 'تومان')}</span></div>
     <div className="partner-table-scroll"><table className="partner-ledger-table"><caption>گردش بدهکار و بستانکار همکار؛ تمام وزن‌های حساب، معادل طلای ۷۵۰ هستند.</caption><thead><tr><th>تاریخ و سند</th><th>شرح / ارجاع</th><th>بدهکار طلا</th><th>بستانکار طلا</th><th>بدهکار تومان</th><th>بستانکار تومان</th><th>مانده طلا</th><th>مانده تومان</th><th className="partner-screen-only">جزئیات</th></tr></thead>
@@ -142,6 +144,8 @@ function PartnerStatement({ partner, username, documents }) {
 }
 
 export function PartnerDocumentDialog({ partner, entry, username, documents, prices, onAction, editing = false, canEdit = false, onClose, onSaved }) {
+  const account = useContext(GalleryAccountContext);
+  const galleryName = entry.galleryName || documents.find(row => (entry.documentIds || []).includes(row.id))?.galleryName || account.galleryName;
   const remittance = entry.type === 'settlement' && entry.paymentMethod === 'remittance' && !entry.linkedEntryId;
   const dialog = useRef(null);
   const [edit, setEdit] = useState(editing);
@@ -174,8 +178,9 @@ export function PartnerDocumentDialog({ partner, entry, username, documents, pri
       <div className="partner-section-heading partner-screen-only"><h2>{edit ? 'ویرایش سند همکار' : 'سند همکار'} · {partner.name}</h2><button type="button" className="partner-icon-button" data-partner-document-close disabled={locked} onClick={onClose} aria-label="بستن سند"><X size={20}/></button></div>
       {edit ? <PartnerCRM key={entry.id} embedded username={username} partners={[partner]} documents={documents} prices={prices} onAction={onAction} initialAction={remittance ? 'remittance' : 'invoice'} canPurchase={canEdit} readOnly={!canEdit} editingEntry={remittance ? null : entry} editingSettlement={remittance ? entry : null} onSaved={onSaved} onClose={onClose} onLockChange={setLocked}/>
         : <section className="partner-statement">
-          <header><h2>{remittance ? 'سند حواله' : 'سند'} {entry.invoiceNumber ? fmt(entry.invoiceNumber) : entry.id.slice(-8)} · {partner.name}</h2><p>{dayText(entry.date)}{entry.externalInvoiceNumber && ` · شماره فاکتور همکار: ${entry.externalInvoiceNumber}`}</p></header>
-          <div className="partner-section-heading partner-screen-only"><button type="button" className="button button-ghost" data-invoice-print onClick={print}><Printer size={17}/> چاپ سند</button>{canEdit && <button type="button" className="button button-primary" data-invoice-edit onClick={() => setEdit(true)}><Pencil size={16}/> ویرایش سند</button>}</div>
+          <header>{galleryName && <h2 data-invoice-gallery-name>{galleryName}</h2>}<h2>{remittance ? 'سند حواله' : 'سند'} {entry.invoiceNumber ? fmt(entry.invoiceNumber) : entry.id.slice(-8)} · {partner.name}</h2><p>{dayText(entry.date)}{entry.externalInvoiceNumber && ` · شماره فاکتور همکار: ${entry.externalInvoiceNumber}`}</p></header>
+          <div className="partner-section-heading partner-screen-only"><button type="button" className="button button-ghost" data-invoice-print onClick={print}><Printer size={17}/> چاپ روی برگهٔ آماده</button>{canEdit && <button type="button" className="button button-primary" data-invoice-edit onClick={() => setEdit(true)}><Pencil size={16}/> ویرایش سند</button>}</div>
+          <p className="partner-screen-only partner-help">برگهٔ A5 را در چاپگر بگذارید. فقط نوشته‌ها چاپ می‌شوند؛ مقیاس را روی ۱۰۰٪ بگذارید و سربرگ و پابرگ مرورگر را خاموش کنید.</p>
           {remittance ? <div className="partner-statement-opening" data-partner-remittance-details>
             <strong>{entry.goldDebit > 0 || entry.tomanDebit > 0 ? 'حواله بدهکار · بدهی ما به همکار' : 'حواله بستانکار · طلب ما از همکار'}</strong>
             <span>مقدار حواله طلا: {fmt(entry.goldDebit + entry.goldCredit)} گرم ۷۵۰</span>

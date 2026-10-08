@@ -54,6 +54,7 @@ export function AccountingLanding() {
 export function AccountingAuth({ mode, onAuthenticated }) {
   const registering = mode === 'register';
   const [username, setUsername] = useState('');
+  const [galleryName, setGalleryName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -75,10 +76,11 @@ export function AccountingAuth({ mode, onAuthenticated }) {
     if (submittedRef.current || checkingSession) return;
     setError('');
     if (!username.trim()) { setError('نام کاربری را وارد کنید.'); return; }
+    if (registering && !galleryName.trim()) { setError('نام گالری را وارد کنید.'); return; }
     if (registering && password !== confirmation) { setError('رمز عبور و تکرار آن یکسان نیستند.'); return; }
     submittedRef.current = true; setBusy(true);
     try {
-      const session = await api(`/api/auth/${registering ? 'register' : 'login'}`, { method: 'POST', body: { username: username.trim(), password } });
+      const session = await api(`/api/auth/${registering ? 'register' : 'login'}`, { method: 'POST', body: { username: username.trim(), password, ...(registering ? { galleryName: galleryName.trim() } : {}) } });
       if (!['owner', 'staff'].includes(session.user?.role)) throw new Error('این حساب دسترسی حسابداری ندارد.');
       setPassword(''); setConfirmation(''); callbackRef.current(session);
     } catch (cause) { setError(cause.message); }
@@ -88,6 +90,7 @@ export function AccountingAuth({ mode, onAuthenticated }) {
     <main className="accounting-auth-layout accounting-container"><section className="accounting-auth-copy"><p className="accounting-eyebrow"><span/> حسابداری زرنگار</p><h1>{registering ? <>یک حساب جدید،<br/><em>یک شروع مرتب.</em></> : <>خوش برگشتید،<br/><em>دفترتان آماده است.</em></>}</h1><p>{registering ? 'حساب بسازید و حسابداری کسب‌وکارتان را در فضای اختصاصی خود شروع کنید.' : 'با نام کاربری و رمز عبور وارد شوید و کارهای روزمرهٔ حسابداری را ادامه دهید.'}</p><div className="accounting-auth-points"><span><LockKeyhole size={20}/> دفتر مستقل و اطلاعات خصوصی</span><span><ReceiptText size={20}/> اسناد، مشتریان و موجودی در کنار هم</span><span><Users size={20}/> دسترسی مشخص برای همکاران</span></div></section>
       <section className="accounting-auth-card" aria-labelledby="auth-title"><span className="accounting-auth-icon"><BookOpen size={26}/></span><h2 id="auth-title">{registering ? 'ساخت حساب حسابداری' : 'ورود به حسابداری'}</h2><p>{registering ? 'اطلاعات ورود به دفتر خودتان را انتخاب کنید.' : 'برای ادامه، وارد حساب خود شوید.'}</p><form onSubmit={submit} aria-busy={busy || checkingSession}>
         <label htmlFor="account-username">نام کاربری</label><input id="account-username" name="username" autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} maxLength={200} disabled={busy} required spellCheck={false} placeholder="نام کاربری شما"/>
+        {registering && <><label htmlFor="account-gallery-name">نام گالری</label><input id="account-gallery-name" name="galleryName" autoComplete="organization" value={galleryName} onChange={event => setGalleryName(event.target.value)} maxLength={120} disabled={busy} required aria-describedby="gallery-name-hint" placeholder="نام گالری شما"/><small id="gallery-name-hint" className="accounting-input-hint">این نام روی سندها و نسخهٔ چاپی آن‌ها درج می‌شود.</small></>}
         <label htmlFor="account-password">رمز عبور</label><div className="accounting-password-field"><input id="account-password" name="password" type={showPassword ? 'text' : 'password'} autoComplete={registering ? 'new-password' : 'current-password'} value={password} onChange={event => setPassword(event.target.value)} minLength={registering ? 8 : 1} maxLength={256} disabled={busy} required aria-describedby={registering ? 'password-hint' : undefined}/><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'پنهان‌کردن رمز عبور' : 'نمایش رمز عبور'} aria-pressed={showPassword}>{showPassword ? <EyeOff size={18}/> : <Eye size={18}/>}</button></div>
         {registering && <><small id="password-hint" className="accounting-input-hint">حداقل ۸ نویسه؛ رمز مخصوص این حساب را انتخاب کنید.</small><label htmlFor="account-password-confirmation">تکرار رمز عبور</label><input id="account-password-confirmation" name="passwordConfirmation" type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={confirmation} onChange={event => setConfirmation(event.target.value)} minLength={8} maxLength={256} disabled={busy} required/></>}
         {error && <p className="accounting-auth-error" role="alert">{error}</p>}

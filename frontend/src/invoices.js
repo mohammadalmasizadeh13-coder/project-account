@@ -40,6 +40,7 @@ export function partnerDocumentRows(documents = [], partners = []) {
       const format = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 6 }).format(value);
       projected.set(String(transactionId), [{
         id: `partner-remittance-${entry.id}`, transactionId, invoiceNumber: entry.invoiceNumber,
+        galleryName: entry.galleryName,
         invoiceLine: 1, invoiceLineCount: 1, date: entry.date, createdAt: entry.createdAt, recordedAt: entry.createdAt,
         category: 'remittance', type: 'partner-remittance', typeLabel: 'حواله همکار',
         direction: remittanceDirection === 'debit' ? 'بدهکار' : 'بستانکار', remittanceDirection,
@@ -73,6 +74,7 @@ export function partnerDocumentRows(documents = [], partners = []) {
       const remittance = line.category === 'remittance';
       return {
         ...(original || line),
+        galleryName: entry.galleryName || original?.galleryName,
         id: original?.id || `partner-entry-${entry.id}-line-${index + 1}`,
         ...(original ? {} : { partnerDisplayOnly: true }),
         transactionId: entry.transactionId, invoiceNumber: entry.invoiceNumber, invoiceLine: index + 1,
@@ -121,6 +123,7 @@ export function groupInvoices(documents = []) {
       id: group.id,
       rows,
       number: invoiceNumber ?? group.id.slice(-8),
+      galleryName: first.galleryName,
       date: first.date,
       customerName: first.customerName,
       customerId: first.customerId,

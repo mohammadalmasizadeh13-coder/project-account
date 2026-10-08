@@ -177,6 +177,7 @@ try {
   await go('/register'); await ready('#account-password-confirmation');
   await until(`!document.querySelector('.accounting-submit').disabled`, 'Registration is ready');
   await fill('#account-username', 'document-regression');
+  await fill('#account-gallery-name', 'گالری آزمون ویرایش');
   await fill('#account-password', password); await fill('#account-password-confirmation', password);
   await click('.accounting-submit'); await ready('.workspace-page');
 

@@ -12,6 +12,10 @@ def account_column(**kwargs):
     return Column("account_id", String(64), nullable=False, server_default=LEGACY_ACCOUNT_ID, **kwargs)
 
 
+account_profiles = Table("noor_account_profiles", metadata,
+    account_column(primary_key=True), Column("gallery_name", String(120), nullable=False))
+
+
 users = Table("noor_users", metadata,
     Column("id", String(64), primary_key=True), Column("username", String(200), nullable=False),
     account_column(),
@@ -102,3 +106,8 @@ def read_workspace(connection, account_id=LEGACY_ACCOUNT_ID):
         from .partners import canonical_partner_records
         data["partners"] = canonical_partner_records(data["partners"])
     return {"revision": row["revision"], "data": data}
+
+
+def read_gallery_name(connection, account_id):
+    return connection.execute(select(account_profiles.c.gallery_name).where(
+        account_profiles.c.account_id == account_id)).scalar_one_or_none() or ""

@@ -6,13 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
-from .database import ensure_workspace, sessions, users
+from .account_profile import normalize_gallery_name
+from .database import account_profiles, ensure_workspace, sessions, users
 from .security import (COOKIE_NAME, digest, display_username, get_owner, hash_password, issue_session, login_throttle,
     normalize_permissions, normalize_username, public_user, require_mutation, require_owner_mutation,
     require_origin, set_session_cookie, verify_password)
 
 
-class Registration(BaseModel):
+class Credentials(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=8, max_length=256)
@@ -26,7 +27,21 @@ class Registration(BaseModel):
         return normalized
 
 
-class UserCreate(Registration):
+class GalleryProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    galleryName: str
+
+    @field_validator("galleryName")
+    @classmethod
+    def valid_gallery_name(cls, value):
+        return normalize_gallery_name(value)
+
+
+class Registration(Credentials, GalleryProfile):
+    pass
+
+
+class UserCreate(Credentials):
     permissions: list[str] = Field(default_factory=list, max_length=20)
     active: bool = True
 
@@ -73,6 +88,7 @@ def register_account_routes(application):
         try:
             with engine.begin() as connection:
                 connection.execute(users.insert().values(**user))
+                connection.execute(account_profiles.insert().values(account_id=account_id, gallery_name=payload.galleryName))
                 ensure_workspace(connection, account_id)
                 previous = request.cookies.get(COOKIE_NAME)
                 if previous:
@@ -83,11 +99,22 @@ def register_account_routes(application):
         set_session_cookie(response, token, settings)
         return result
 
+    @application.patch("/api/owner/profile")
+    def update_profile(payload: GalleryProfile, identity=Depends(require_owner_mutation)):
+        from sqlalchemy import literal
+        account_id = identity["user"]["account_id"]
+        with engine.begin() as connection:
+            connection.execute(account_profiles.insert().from_select(["account_id", "gallery_name"],
+                select(literal(account_id), literal(payload.galleryName)).where(
+                    ~select(account_profiles.c.account_id).where(account_profiles.c.account_id == account_id).exists())))
+            connection.execute(update(account_profiles).where(account_profiles.c.account_id == account_id).values(gallery_name=payload.galleryName))
+        return {"user": public_user({**identity["user"], "gallery_name": payload.galleryName})}
+
     @application.get("/api/owner/users")
     def list_users(identity=Depends(get_owner)):
         with engine.connect() as connection:
             found = connection.execute(select(users).where(users.c.account_id == identity["user"]["account_id"]).order_by(users.c.role, users.c.username)).mappings().all()
-        return {"users": [public_user(user, include_active=True) for user in found]}
+        return {"users": [public_user({**user, "gallery_name": identity["user"]["gallery_name"]}, include_active=True) for user in found]}
 
     @application.post("/api/owner/users", status_code=201)
     def create_user(payload: UserCreate, identity=Depends(require_owner_mutation)):
@@ -100,7 +127,7 @@ def register_account_routes(application):
                 connection.execute(users.insert().values(**user))
         except IntegrityError:
             raise HTTPException(409, "این نام کاربری قبلاً ثبت شده است.")
-        return {"user": public_user(user, include_active=True)}
+        return {"user": public_user({**user, "gallery_name": identity["user"]["gallery_name"]}, include_active=True)}
 
     @application.patch("/api/owner/users/{identifier}")
     def edit_user(identifier: str, payload: UserPatch, identity=Depends(require_owner_mutation)):
@@ -120,7 +147,7 @@ def register_account_routes(application):
                 raise HTTPException(409, "حساب کاربر همزمان تغییر کرده است؛ دوباره بارگذاری کنید.")
             connection.execute(delete(sessions).where(sessions.c.username == user["username"]))
             updated = {**dict(user), **values, "version": user["version"] + 1}
-        return {"user": public_user(updated, include_active=True)}
+        return {"user": public_user({**updated, "gallery_name": identity["user"]["gallery_name"]}, include_active=True)}
 
     @application.post("/api/auth/password")
     def change_password(payload: PasswordChange, request: Request, response: Response, identity=Depends(require_mutation)):

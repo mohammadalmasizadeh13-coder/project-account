@@ -16,7 +16,7 @@ function Test-NoorBackend {
     catch { return $false }
 }
 if (-not (Test-NoorBackend)) {
-    $backendProcess = Start-Process -FilePath $pythonExecutable -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000','--env-file','.env') -WorkingDirectory $backendDir -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logsDir 'backend.log') -RedirectStandardError (Join-Path $logsDir 'backend-error.log')
+    $backendProcess = Start-Process -FilePath $pythonExecutable -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000','--env-file','.env','--reload','--reload-dir','app') -WorkingDirectory $backendDir -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logsDir 'backend.log') -RedirectStandardError (Join-Path $logsDir 'backend-error.log')
     for ($attempt = 0; $attempt -lt 25; $attempt++) {
         if (Test-NoorBackend) { break }
         if ($backendProcess.HasExited) { throw 'Backend failed to start. Read artifacts/runtime/backend-error.log.' }

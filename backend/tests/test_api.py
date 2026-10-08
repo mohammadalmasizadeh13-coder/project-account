@@ -59,7 +59,7 @@ def test_guest_cannot_access_accounting_or_forge_registration_role(client):
     for route in ("/api/auth/session", "/api/owner/workspace"):
         assert client.get(route).status_code == 401
     assert client.put("/api/owner/workspace", json={"revision": 0, "data": {}}, headers={"Origin": ORIGIN}).status_code == 401
-    assert client.post("/api/auth/register", json={"username": "intruder", "password": PASSWORD, "role": "owner"}, headers={"Origin": ORIGIN}).status_code == 422
+    assert client.post("/api/auth/register", json={"galleryName": "گالری آزمایشی", "username": "intruder", "password": PASSWORD, "role": "owner"}, headers={"Origin": ORIGIN}).status_code == 422
     assert client.get("/api/public/products").status_code == 404
 
 

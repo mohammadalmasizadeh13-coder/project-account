@@ -164,7 +164,7 @@ try {
   await until(`location.pathname==='/login'`);
   await go('/register'); await ready('#account-password-confirmation');
   await until(`!document.querySelector('.accounting-submit').disabled`);
-  await fill('#account-username', 'alpha-account'); await fill('#account-password', 'browser-password-alpha'); await fill('#account-password-confirmation', 'incorrect-confirmation');
+  await fill('#account-gallery-name', 'گالری حساب آلفا'); await fill('#account-username', 'alpha-account'); await fill('#account-password', 'browser-password-alpha'); await fill('#account-password-confirmation', 'incorrect-confirmation');
   await click('.accounting-submit');
   await until(`document.querySelector('[role="alert"]')?.textContent.includes('یکسان')`);
   await fill('#account-password-confirmation', 'browser-password-alpha'); await screenshot('accounting-registration');
@@ -207,7 +207,7 @@ try {
   assert.equal(await evaluate(`document.querySelector('[data-settings-tab="storefront"]')!==null`), false);
   await click('[aria-label="خروج از حساب"]'); await ready('.accounting-hero');
   await go('/register'); await ready('#account-password-confirmation'); await until(`!document.querySelector('.accounting-submit').disabled`);
-  await fill('#account-username', 'alpha-account'); await fill('#account-password', 'browser-password-beta'); await fill('#account-password-confirmation', 'browser-password-beta');
+  await fill('#account-gallery-name', 'گالری حساب بتا'); await fill('#account-username', 'alpha-account'); await fill('#account-password', 'browser-password-beta'); await fill('#account-password-confirmation', 'browser-password-beta');
   await click('.accounting-submit'); await until(`document.querySelector('[role="alert"]')?.textContent.includes('قبلاً')`);
   await fill('#account-username', 'beta-account'); await click('.accounting-submit'); await ready('.workspace-page');
   const betaEmpty = await workspace();

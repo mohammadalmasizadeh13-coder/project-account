@@ -29,7 +29,7 @@ def accounting(tmp_path):
 
 
 def register(browser, username):
-    response = browser.post("/api/auth/register", json={"username": username, "password": PASSWORD}, headers={"Origin": ORIGIN})
+    response = browser.post("/api/auth/register", json={"galleryName": "گالری آزمایشی", "username": username, "password": PASSWORD}, headers={"Origin": ORIGIN})
     assert response.status_code == 201, response.text
     return response.json()["user"], {"Origin": ORIGIN, "X-CSRF-Token": response.json()["csrfToken"]}
 
@@ -71,7 +71,7 @@ def test_registration_creates_authenticated_empty_owner_account(accounting):
 
 @pytest.mark.parametrize("extra", [{"role": "owner"}, {"permissions": ["documents.write"]}, {"accountId": LEGACY_ACCOUNT_ID}, {"active": False}])
 def test_registration_rejects_caller_controlled_authorization(accounting, extra):
-    response = accounting.post("/api/auth/register", json={"username": "attacker", "password": PASSWORD, **extra}, headers={"Origin": ORIGIN})
+    response = accounting.post("/api/auth/register", json={"galleryName": "گالری آزمایشی", "username": "attacker", "password": PASSWORD, **extra}, headers={"Origin": ORIGIN})
     assert response.status_code == 422
     with accounting.app.state.engine.connect() as connection:
         assert connection.execute(select(users)).first() is None
@@ -79,14 +79,14 @@ def test_registration_rejects_caller_controlled_authorization(accounting, extra)
 
 @pytest.mark.parametrize("username,password", [("   ", PASSWORD), ("a", "short"), ("a" * 201, PASSWORD), ("ﬃ" * 100, PASSWORD)])
 def test_registration_validates_credentials_before_writing(accounting, username, password):
-    assert accounting.post("/api/auth/register", json={"username": username, "password": password}, headers={"Origin": ORIGIN}).status_code == 422
+    assert accounting.post("/api/auth/register", json={"galleryName": "گالری آزمایشی", "username": username, "password": password}, headers={"Origin": ORIGIN}).status_code == 422
     assert accounting.get("/api/auth/session").status_code == 401
 
 
 def test_registration_normalization_conflict_is_atomic(accounting):
     original, _ = register(accounting, "  مهدي كاظمي ")
     original_cookie = accounting.cookies[COOKIE_NAME]
-    assert accounting.post("/api/auth/register", json={"username": "مهدی کاظمی", "password": "different-password"}, headers={"Origin": ORIGIN}).status_code == 409
+    assert accounting.post("/api/auth/register", json={"galleryName": "گالری آزمایشی", "username": "مهدی کاظمی", "password": "different-password"}, headers={"Origin": ORIGIN}).status_code == 409
     assert accounting.cookies[COOKIE_NAME] == original_cookie
     assert accounting.get("/api/auth/session").json()["user"] == original
     with accounting.app.state.engine.connect() as connection:
@@ -236,7 +236,7 @@ def test_invoice_counters_are_independent_and_keep_their_own_high_watermark(acco
 
 def test_registration_origin_and_authenticated_csrf_are_required(accounting):
     for origin in (None, "https://foreign.example"):
-        assert accounting.post("/api/auth/register", json={"username": "origin-test", "password": PASSWORD}, headers={"Origin": origin} if origin else {}).status_code == 403
+        assert accounting.post("/api/auth/register", json={"galleryName": "گالری آزمایشی", "username": "origin-test", "password": PASSWORD}, headers={"Origin": origin} if origin else {}).status_code == 403
     _, headers = register(accounting, "csrf-test")
     payload = {"revision": 0, "data": {"prices": {"goldGramPrice": "100000"}}}
     assert accounting.put("/api/owner/workspace", json=payload, headers={"Origin": ORIGIN}).status_code == 403
@@ -252,7 +252,7 @@ def test_registration_rate_limit_persists_across_restart_and_recovers(tmp_path, 
         for _ in range(10):
             login_throttle(first.app.state.engine, "testclient")
     with TestClient(create_app(settings)) as restarted:
-        response = restarted.post("/api/auth/register", json={"username": "rate-limited", "password": PASSWORD}, headers={"Origin": ORIGIN})
+        response = restarted.post("/api/auth/register", json={"galleryName": "گالری آزمایشی", "username": "rate-limited", "password": PASSWORD}, headers={"Origin": ORIGIN})
         assert response.status_code == 429 and int(response.headers["Retry-After"]) > 0
         assert restarted.post("/api/auth/login", json={"username": "unknown", "password": PASSWORD}, headers={"Origin": ORIGIN}).status_code == 429
         with restarted.app.state.engine.connect() as connection:
@@ -326,6 +326,7 @@ def test_additive_migration_preserves_ledger_users_sessions_receipts_and_counter
         migrated.cookies.set(COOKIE_NAME, "old-session")
         session = migrated.get("/api/auth/session").json()
         assert session["user"]["id"] == legacy_owner["id"] and session["user"]["legacyAccount"] is True
+        assert session["user"]["galleryName"] == ""
         original = migrated.get("/api/owner/workspace").json()
         assert original == {"revision": 7, "data": legacy_data, "legacyImported": True}
         replayed = migrated.put("/api/owner/workspace", json={"revision": 6, "data": changes, "requestId": receipt_id}, headers={"Origin": ORIGIN, "X-CSRF-Token": "old-csrf"})

@@ -12,6 +12,7 @@ from fastapi import Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import Column, Float, Integer, String, Table, select, update
 
+from .account_profile import stamp_workspace_gallery
 from .database import account_column, metadata, read_workspace, workspaces
 from .inventory import amount, create_stock, decimal_output, find_source, guard_linked_inventory_changes, item_summary, numeric, quantity
 from .invoices import guard_invoice_stock, prepare_invoices, reserve_invoice_numbers, validate_group
@@ -55,6 +56,7 @@ class PartnerProfile(StrictModel):
 
 class LedgerEntry(StrictModel):
     id: str = Field(min_length=1, max_length=64)
+    galleryName: str = Field(default="", max_length=120)
     type: Literal["purchase", "sale", "mixed", "settlement"]
     direction: Literal["purchase", "sale"] | None = None
     date: str = Field(min_length=10, max_length=10)
@@ -720,6 +722,7 @@ def register_partner_routes(application, workspace_response, encode_workspace):
                 recalculate_partner(partner)
                 if len(partner["entries"]) > 50000:
                     raise HTTPException(413, "تعداد گردش‌های دفتر به حد مجاز رسیده است.")
+            stamp_workspace_gallery(current["data"], data, connection, account_id)
             data["partners"] = canonical_partner_records(data["partners"], validate_balances=True)
             encoded = encode_workspace(data)
             revision = current["revision"] + 1

@@ -7,6 +7,7 @@ export async function checkPartnerDocuments({ cdp, evaluate, ready, until, go, f
   await go('/register'); await ready('#account-password-confirmation');
   await until(`!document.querySelector('.accounting-submit').disabled`);
   await fill('#account-username', 'partner-documents');
+  await fill('#account-gallery-name', 'گالری اسناد همکاران');
   await fill('#account-password', 'partner-browser-test-password');
   await fill('#account-password-confirmation', 'partner-browser-test-password');
   await click('.accounting-submit'); await ready('.workspace-page');

@@ -35,6 +35,10 @@
 @media(max-width:760px){.partner-crm{padding:20px 14px}.partner-columns{grid-template-columns:1fr}.partner-contact-list{max-height:250px}.partner-toolbar{align-items:stretch;flex-direction:column;gap:10px}.partner-search{max-width:none}.partner-profile{padding:16px}.partner-profile-heading{gap:10px;flex-wrap:wrap}.partner-profile-heading h2{font-size:21px}.partner-profile-editor{padding:17px}.partner-tabs{gap:7px}.partner-tabs button{flex:1 1 140px}.partner-pending{align-items:stretch;flex-direction:column}.partner-invoice-line{padding:14px}.partner-invoice-totals{gap:10px}.partner-section-heading{flex-wrap:wrap}}
 @media(max-width:430px){.partner-form-grid{grid-template-columns:1fr}.partner-balance-cards{grid-template-columns:1fr}.partner-balance-cards strong{font-size:22px}.partner-invoice-form>fieldset>.button-primary,.partner-payment-form>fieldset>.button-primary{width:100%;justify-content:center}}
 @media print{
+  @page partner-document { size:A5 portrait; margin:7mm; }
+  html:has(body.partner-print-open){background:transparent!important}
+  body.partner-print-open:has(.partner-document-dialog),
+  body.partner-print-open .partner-document-dialog { page:partner-document; }
   body.partner-print-open{background:white!important;min-height:0!important;height:auto!important;margin:0!important;padding:0!important}
   body.partner-print-open *:not(:has(.partner-statement)):not(.partner-statement):not(.partner-statement *){display:none!important}
   body.partner-print-open *:has(.partner-statement){display:block!important;position:static!important;margin:0!important;padding:0!important;min-height:0!important;height:auto!important;width:100%!important;max-width:none!important;overflow:visible!important;background:white!important;border:0!important;border-radius:0!important}
@@ -55,4 +59,12 @@
   body.partner-print-open .partner-invoice-audit-values{font-size:7.5pt;gap:3px 16px}
   body.partner-print-open .partner-invoice-audit-row>td{background:#fafafa;border-bottom:1px solid #aaa}
   body.partner-print-open .partner-statement-final,body.partner-print-open .partner-statement-opening{background:#fff;border-color:#ccc;font-size:10pt;break-inside:avoid}
+  body.partner-print-open .partner-document-dialog .partner-statement{padding:0;font-size:8pt}
+  body.partner-print-open .partner-document-dialog .partner-statement h2{font-size:13pt;overflow-wrap:anywhere}
+  body.partner-print-open .partner-document-dialog .partner-statement,
+  body.partner-print-open .partner-document-dialog .partner-statement *{background:transparent!important;background-image:none!important;color:#000!important;border-color:transparent!important;box-shadow:none!important;text-shadow:none!important}
+  body.partner-print-open .partner-document-dialog::backdrop{background:transparent!important}
+  body.partner-print-open .partner-document-dialog .partner-invoice-audit-values>span,
+  body.partner-print-open .partner-document-dialog .partner-invoice-lines bdi{white-space:normal;overflow-wrap:anywhere}
+  body.partner-print-open .partner-document-dialog .partner-statement :is(svg,img,button){display:none!important}
 }

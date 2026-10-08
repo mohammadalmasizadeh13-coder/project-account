@@ -6,6 +6,7 @@ import { SaveStatus, downloadWorkspace } from './OwnerTools.jsx';
 import { matchingLegacyAccount, readLegacyWorkspace } from './legacyMigration.js';
 import { writableFields } from './access.js';
 import { clearCommittedDraft } from './accountingDrafts.js';
+import { GalleryAccountContext } from './GalleryAccountContext.js';
 import './noor-shell.css';
 
 const AccountingApp = lazy(() => import('./AccountingApp.jsx'));
@@ -126,9 +127,11 @@ export default function NoorApp() {
   </>;
   return <div className="noor-owner-shell" dir="rtl">
     <Suspense fallback={<p className="noor-loading" role="status">در حال آماده‌سازی حسابداری…</p>}>
+      <GalleryAccountContext.Provider value={{ galleryName: user.galleryName || '', accountId: user.accountId, onProfileChanged: setUser }}>
       <AccountingApp key={`${user.id}:${version}`} username={user.username} user={user} onLogout={logout} notices={notices}
         migrationNotice={migrationNotice} onImported={() => { setMigrationNotice('اطلاعات بازیابی شد و حسابداری به‌روز شد. نسخهٔ اصلی اطلاعات شما محفوظ است.'); setVersion(value => value + 1); }}
         onSessionChanged={session => { setCsrfToken(session.csrfToken); setAccountId(session.user.accountId); setUser(session.user); ownerStorage.setWritableFields(writableFields(session.user)); }}/>
+      </GalleryAccountContext.Provider>
     </Suspense>
   </div>;
 }

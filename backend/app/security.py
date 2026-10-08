@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
-from .database import LEGACY_ACCOUNT_ID, attempts, sessions, users
+from .database import LEGACY_ACCOUNT_ID, attempts, read_gallery_name, sessions, users
 
 
 COOKIE_NAME = "noor_session"
@@ -37,6 +37,7 @@ def normalize_permissions(values):
 
 def public_user(user, include_active=False):
     result = {"id": user["id"], "username": user["username"], "role": user["role"],
+        "galleryName": user.get("gallery_name", ""),
         "accountId": user["account_id"], "legacyAccount": user["account_id"] == LEGACY_ACCOUNT_ID,
         "permissions": sorted(PERMISSIONS) if user["role"] == "owner" else sorted(set(json.loads(user["permissions"])) & PERMISSIONS)}
     if include_active:
@@ -102,6 +103,8 @@ def get_user(request: Request):
     with request.app.state.engine.connect() as connection:
         session = connection.execute(select(sessions).where(sessions.c.token_hash == digest(token))).mappings().first()
         user = connection.execute(select(users).where(users.c.normalized_username == normalize_username(session["username"]))).mappings().first() if session else None
+        if user:
+            user = {**dict(user), "gallery_name": read_gallery_name(connection, user["account_id"])}
     if not session or session["expires_at"] <= time.time() or not user or not user["active"] or session["credential_version"] != credential_version(user):
         raise HTTPException(401, "نشست شما منقضی شده است؛ دوباره وارد شوید.")
     expected_account = request.headers.get("x-account-id")
@@ -168,6 +171,7 @@ def issue_session(connection, user, settings):
     token, csrf = secrets.token_urlsafe(48), secrets.token_urlsafe(32)
     connection.execute(sessions.insert().values(token_hash=digest(token), csrf=csrf, username=user["username"],
         credential_version=credential_version(user), expires_at=time.time() + settings.session_seconds))
+    user = {**dict(user), "gallery_name": read_gallery_name(connection, user["account_id"])}
     return token, {"user": public_user(user), "csrfToken": csrf}
 
 

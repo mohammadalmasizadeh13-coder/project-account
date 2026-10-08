@@ -7,7 +7,8 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import Column, Index, Integer, Table, case, literal, select, update
 
-from .database import LEGACY_ACCOUNT_ID, account_column, metadata
+from .account_profile import stamp_gallery_names
+from .database import LEGACY_ACCOUNT_ID, account_column, metadata, read_gallery_name
 from .customer_details import document_detail_header
 from .inventory import ECONOMIC_FIELDS, STOCK_TYPES, TEXT_FIELDS, discounted_amount, is_sale, is_stock_entry, normalize_misc_purchase, numeric, quantity, validate_item, values_differ
 from .pricing import number
@@ -226,6 +227,7 @@ def prepare_invoices(previous, incoming, connection, *, allow_single_stock_edit=
     The inventory route may also correct a single purchase row after applying its
     quantity, linked-sale and customer-history guards; invoice identity stays fixed.
     """
+    incoming = stamp_gallery_names(previous, incoming, read_gallery_name(connection, account_id))
     previous_by_id = {str(row["id"]): row for row in previous}
     for row in incoming:
         old = previous_by_id.get(str(row["id"]))

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import delete, select, update
 
 from .accounts import register_account_routes
+from .account_profile import stamp_workspace_gallery
 from .customer_details import guard_customer_details
 from .database import imports, initialize, make_engine, read_workspace, sessions, users, workspace_requests, workspaces
 from .document_edits import register_document_routes
@@ -326,6 +327,7 @@ def create_app(settings=None):
             if current["revision"] != payload.revision:
                 raise HTTPException(409, "دفتر همزمان تغییر کرده است؛ ابتدا آخرین نسخه را بارگذاری کنید.")
             data, created_id = create_stock(current["data"], payload.item, identity)
+            stamp_workspace_gallery(current["data"], data, connection, identity["user"]["account_id"])
             encoded = encode_workspace(data)
             updated = connection.execute(update(workspaces).where(workspaces.c.account_id == identity["user"]["account_id"], workspaces.c.revision == payload.revision).values(data=encoded, revision=payload.revision + 1))
             if updated.rowcount != 1:

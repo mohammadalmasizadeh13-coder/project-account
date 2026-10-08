@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
-import { Download, ShieldCheck, Users } from 'lucide-react';
+import { Download, Gem, ShieldCheck, Users } from 'lucide-react';
 import UserAccessManager from './UserAccessManager.jsx';
+import GalleryProfile from './GalleryProfile.jsx';
 import { LegacyImport, downloadWorkspace } from './OwnerTools.jsx';
 import './store-settings.css';
 
-export default function StoreSettings({ user, onSessionChanged, migrationNotice, onImported }) {
+export default function StoreSettings({ user, onSessionChanged, onProfileChanged, migrationNotice, onImported }) {
   const owner = user?.role === 'owner';
   const [selected, setSelected] = useState('access');
   const [visited, setVisited] = useState(['access']);
   const sections = [
+    ...(owner ? [{ key: 'profile', title: 'نام گالری', Icon: Gem }] : []),
     { key: 'access', title: owner ? 'کاربران و تغییر رمز' : 'تغییر رمز', Icon: Users },
     ...(owner ? [{ key: 'backup', title: 'پشتیبان و بازیابی', Icon: ShieldCheck }] : []),
   ];
@@ -21,6 +23,8 @@ export default function StoreSettings({ user, onSessionChanged, migrationNotice,
 
   function renderSection(key) {
     switch (key) {
+      case 'profile':
+        return <GalleryProfile user={user} onProfileChanged={onProfileChanged}/>;
       case 'access':
         return <UserAccessManager user={user} onSessionChanged={onSessionChanged}/>;
       case 'backup':
@@ -42,6 +46,7 @@ export default function StoreSettings({ user, onSessionChanged, migrationNotice,
         <h1 id="noor-settings-title">تنظیمات حسابداری</h1>
         <p>{owner ? 'حساب کارکنان، دسترسی‌ها و نسخهٔ پشتیبان دفتر خود را مدیریت کنید.' : 'رمز ورود حساب خود را از اینجا تغییر دهید.'}</p>
         <p>حساب کاربری: <bdi>{user?.username}</bdi>{owner ? ' · مالک دفتر حسابداری' : ' · کارمند دفتر حسابداری'}</p>
+        {user?.galleryName && <p>نام گالری: <bdi>{user.galleryName}</bdi></p>}
       </div>
     </header>
     <div className="noor-settings-sections" role="group" aria-label="بخش‌های تنظیمات">
