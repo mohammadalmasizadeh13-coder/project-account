@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readAccountingDraft, writeAccountingDraft } from './accountingDrafts.js';
 import { newPartnerInvoice, newPartnerLine, newPartnerProfile, newPartnerSettlement, parsePartnerNumber,
-  partnerInvoiceDraftFromEntry, partnerSettlementDraftFromEntry, partnerInvoiceTotals, partnerLineTotals, savedPartnerLineTotals, partnerStatement, preparePartnerInvoice, preparePartnerProfile,
+  partnerEntryForDocument, partnerInvoiceDraftFromEntry, partnerSettlementDraftFromEntry, partnerInvoiceTotals, partnerLineTotals, savedPartnerLineTotals, partnerStatement, preparePartnerInvoice, preparePartnerProfile,
   preparePartnerSettlement, upgradePartnerInvoiceDraft } from './partnerLedger.js';
 
 const line = { ...newPartnerLine({ goldGramPrice: 10000000 }), itemName: 'النگو', craftedKind: 'النگو', itemCount: '۳', weight: '۴٫۷۴۰', ayar: '۷۵۰', wagePercent: '۷' };
@@ -447,7 +447,7 @@ test('editing saved mixed documents restores total weights frozen fee payment di
   assert.deepEqual(entry, before);
 });
 
-test('edit reconstruction respects saved per-unit weights and rejects legacy entries', () => {
+test('edit reconstruction respects saved per-unit weights and rejects unknown entry types', () => {
   const document = { id: 'metal-document', type: 'crafted-sale', category: 'crafted', direction: 'فروش', inventorySourceId: 'source',
     itemName: 'النگو', itemCount: 3, weight: 2, ayar: 750, scaleWeight: 6, weightMode: 'unit', profitPercent: 0 };
   const entry = { calculationVersion: 3, type: 'sale', date: '2026-10-07', gold18Price: 1000, documentIds: ['metal-document'] };
@@ -458,7 +458,7 @@ test('edit reconstruction respects saved per-unit weights and rejects legacy ent
   assert.equal(preparePartnerInvoice(draft).lines[0].documentId, 'metal-document');
   assert.equal(partnerInvoiceTotals(draft).actualWeight, 6);
   assert.equal(partnerInvoiceTotals(draft).goldCredit, 6);
-  assert.throws(() => partnerInvoiceDraftFromEntry({ calculationVersion: 2 }), /قدیمی/);
+  assert.throws(() => partnerInvoiceDraftFromEntry({ calculationVersion: 2 }), /معتبر/);
 });
 
 test('editing API-created coin rows preserves their recorded labor fields and monetary total', () => {
@@ -479,22 +479,82 @@ test('editing API-created coin rows preserves their recorded labor fields and mo
   assert.equal(savedPartnerLineTotals({ ...entry.lines[0], laborGold: 1 }, {}, entry).laborGold, 1);
 });
 
-test('standalone remittance edit drafts restore historical debit or credit without converting gold and money', () => {
-  for (const direction of ['debit', 'credit']) {
-    const entry = { type: 'settlement', paymentMethod: 'remittance', date: '2026-10-07',
+test('standalone settlement edit drafts restore each payment method and direction without converting gold and money', () => {
+  for (const paymentMethod of ['cash', 'gold', 'remittance']) for (const direction of ['debit', 'credit']) {
+    const entry = { type: 'settlement', paymentMethod, date: '2026-10-07',
       [direction === 'debit' ? 'goldDebit' : 'goldCredit']: 10,
       [direction === 'debit' ? 'tomanDebit' : 'tomanCredit']: 120000,
       counterpartyName: 'همکار دوم', reference: 'حواله ۱۲', note: 'سند قدیمی' };
     const before = structuredClone(entry);
     const form = partnerSettlementDraftFromEntry(entry);
     assert.equal(form.direction, direction);
-    assert.deepEqual(preparePartnerSettlement(form), { date: entry.date, direction, paymentMethod: 'remittance', goldAmount: 10, tomanAmount: 120000,
+    assert.deepEqual(preparePartnerSettlement(form), { date: entry.date, direction, paymentMethod, goldAmount: 10, tomanAmount: 120000,
       counterpartyName: entry.counterpartyName, reference: entry.reference, note: entry.note });
     assert.deepEqual(entry, before);
   }
   assert.throws(() => partnerSettlementDraftFromEntry({ type: 'settlement', paymentMethod: 'remittance', linkedEntryId: 'invoice' }), /مستقل/);
-  assert.throws(() => partnerSettlementDraftFromEntry({ type: 'settlement', paymentMethod: 'cash' }), /مستقل/);
+  assert.throws(() => partnerSettlementDraftFromEntry({ type: 'settlement', paymentMethod: 'unknown' }), /مستقل/);
   assert.throws(() => partnerSettlementDraftFromEntry({ type: 'settlement', paymentMethod: 'remittance', goldDebit: 10, tomanCredit: 100 }), /هم‌زمان/);
+});
+
+test('statement payment actions resolve the parent invoice without treating orphaned links as standalone payments', () => {
+  const invoice = { id: 'invoice', type: 'purchase' };
+  const cash = { id: 'cash', type: 'settlement', paymentMethod: 'cash' };
+  const linked = { id: 'linked', type: 'settlement', linkedEntryId: invoice.id };
+  const orphan = { id: 'orphan', type: 'settlement', linkedEntryId: 'missing' };
+  const partner = { entries: [invoice, cash, linked, orphan] };
+  assert.equal(partnerEntryForDocument(partner, invoice.id), invoice);
+  assert.equal(partnerEntryForDocument(partner, linked.id), invoice);
+  assert.equal(partnerEntryForDocument(partner, cash.id), cash);
+  assert.equal(partnerEntryForDocument(partner, orphan.id), null);
+  assert.equal(partnerEntryForDocument(partner, 'missing'), null);
+  assert.equal(partnerEntryForDocument(undefined, invoice.id), null);
+});
+
+test('legacy invoice edit drafts preserve formulas, fiat settlement, row identities and linked payments', () => {
+  for (const calculationVersion of [1, 2]) for (const direction of ['purchase', 'sale']) {
+    const document = { id: 'legacy-metal', category: 'crafted', type: `crafted-${direction}`, itemName: 'النگو',
+      craftedKind: 'النگو', itemCount: 2, weight: 3, ayar: 750, gramPrice: 1000, wagePercent: 5, wageFixed: 20,
+      otherCosts: 10, profitPercent: calculationVersion === 2 ? 7 : 0, ...(direction === 'sale' ? { inventorySourceId: 'source' } : {}) };
+    const entry = { id: 'legacy', type: direction, calculationVersion, settlementUnit: calculationVersion === 1 ? 'toman' : 'gold',
+      date: '2026-10-07', gold18Price: 1000, paidGold: 0, paidToman: 0, documentIds: [document.id] };
+    const payment = { linkedEntryId: entry.id, counterpartyName: 'پرداخت کننده', reference: '123',
+      ...(calculationVersion === 2 ? { paidGold: 1, paidToman: 500, goldCredit: 1.5 } : { goldDebit: 1, tomanDebit: 500 }) };
+    const before = structuredClone({ entry, document, payment });
+    const draft = partnerInvoiceDraftFromEntry(entry, [document], payment);
+    assert.equal(draft.calculationVersion, calculationVersion);
+    assert.equal(draft.settlementUnit, entry.settlementUnit);
+    assert.equal(draft.paidGold, 1);
+    assert.equal(draft.paidToman, 500);
+    assert.equal(draft.lines[0].weight, direction === 'sale' ? 3 : 6);
+    const payload = preparePartnerInvoice(draft);
+    assert.equal(payload.calculationVersion || 1, calculationVersion);
+    assert.equal(payload.settlementUnit, entry.settlementUnit);
+    assert.equal(payload.lines[0].documentId, document.id);
+    assert.equal(payload.lines[0].wageFixed, 20);
+    assert.equal(payload.referenceName, payment.counterpartyName);
+    assert.equal(payload.refNumber, payment.reference);
+    if (direction === 'sale') assert.equal(payload.lines[0].inventorySourceId, 'source');
+    assert.deepEqual({ entry, document, payment }, before);
+  }
+});
+
+test('legacy coin edits retain percentage and fixed labor in the original accounting unit', () => {
+  for (const calculationVersion of [1, 2]) {
+    const entry = { type: 'purchase', calculationVersion, date: '2026-10-07', gold18Price: 100000, settlementUnit: 'gold', lines: [
+      { category: 'coin', documentId: 'old-coin', itemName: 'سکه', coinType: 'امامی', coinCount: 2, coinPrice: 100000,
+        wagePercent: 10, wageFixed: 10000, profitPercent: 0, otherCosts: 0 },
+    ] };
+    const draft = partnerInvoiceDraftFromEntry(entry);
+    const payload = preparePartnerInvoice(draft);
+    assert.equal(payload.lines[0].wagePercent, 10);
+    assert.equal(payload.lines[0].wageFixed, 10000);
+    const totals = partnerInvoiceTotals(payload);
+    assert.equal(totals.goldDebit, calculationVersion === 2 ? 2.4 : 0);
+    assert.equal(totals.tomanDebit, calculationVersion === 1 ? 240000 : 0);
+    assert.deepEqual(partnerInvoiceTotals(draft), totals);
+    if (calculationVersion === 2) assert.equal(savedPartnerLineTotals({ ...entry.lines[0], laborGold: 0.2 }, {}, entry).laborGold, 0.2);
+  }
 });
 
 test('balance purchase marker survives draft storage and invoice edit reconstruction', () => {

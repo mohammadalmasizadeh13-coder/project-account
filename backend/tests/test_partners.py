@@ -841,6 +841,145 @@ def test_v3_noop_edit_preserves_total_weight_for_multiple_pieces_already_sold(cl
     assert unchanged["amount"] == stock["amount"]
 
 
+@pytest.mark.parametrize("version,unit,expected_gold,expected_toman", [
+    (1, "gold", 4.6, -49000), (1, "toman", -2, 611000), (2, "gold", 4.11, 0),
+])
+def test_legacy_invoice_edit_preserves_formula_stock_and_linked_payment_identity(client, version, unit, expected_gold, expected_toman):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    body = supplier_payload(client, calculationVersion=version, settlementUnit=unit,
+        lines=[{"category": "crafted", "itemName": "انگشتر", "weight": 4, "itemCount": 2, "wagePercent": 10, "wageFixed": 500, "profitPercent": 0}],
+        paidGold=1, paidToman=100000, referenceName="نماینده قبلی", refNumber="قدیمی")
+    response = post_invoice(client, headers, identifier, body)
+    assert response.status_code == 201, response.text
+    original = response.json()["data"]
+    entry, payment = original["partners"][0]["entries"]
+    document = original["documents"][0]
+    payload = edit_payload(client, body, entry)
+    payload.update(date="2026-10-04", paidGold=2, paidToman=50000, referenceName="نماینده جدید", refNumber="اصلاح", note="اصلاح فاکتور")
+    payload["lines"][0]["weight"] = 6
+    path = f"/api/owner/partners/{identifier}/invoices/{entry['id']}"
+    edited = client.patch(path, json=payload, headers=headers)
+    assert edited.status_code == 200, edited.text
+    result = edited.json()
+    record = result["data"]["partners"][0]
+    assert len(record["entries"]) == 2
+    updated_entry, updated_payment = record["entries"]
+    for before, after in ((entry, updated_entry), (payment, updated_payment)):
+        for field in ("id", "createdAt", "invoiceNumber", "transactionId", "galleryName"):
+            assert before[field] == after[field]
+        assert after["date"] == "2026-10-04"
+        assert after["calculationVersion"] == version
+    assert updated_entry["settlementUnit"] == unit
+    assert updated_payment["linkedEntryId"] == entry["id"]
+    assert updated_payment["reference"] == "اصلاح" and updated_payment["counterpartyName"] == "نماینده جدید"
+    assert record["goldBalance"] == expected_gold and record["tomanBalance"] == expected_toman
+    updated_doc = result["data"]["documents"][0]
+    for field in ("id", "productCode", "transactionId", "invoiceNumber", "createdAt"):
+        assert updated_doc[field] == document[field]
+    assert updated_doc["scaleWeight"] == 6 and updated_doc["weight"] == "3"
+    assert result["createdId"] == entry["id"]
+    assert client.patch(path, json=payload, headers=headers).json() == result
+    assert client.post(f"/api/owner/partners/{identifier}/invoices", json=body, headers=headers).json()["data"] == result["data"]
+    assert client.patch(path, json={**payload, "note": "درخواست متفاوت"}, headers=headers).status_code == 409
+    following = post_invoice(client, headers, identifier, calculationVersion=3)
+    assert following.status_code == 201 and following.json()["data"]["documents"][0]["invoiceNumber"] == 2
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_legacy_invoice_noop_and_payment_removal_keep_stock_already_sold(client, version):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    body = supplier_payload(client, calculationVersion=version, paidGold=1)
+    saved = post_invoice(client, headers, created["createdId"], body)
+    assert saved.status_code == 201, saved.text
+    entry = saved.json()["data"]["partners"][0]["entries"][0]
+    stock = saved.json()["data"]["documents"][0]
+    sold = post_invoice(client, headers, created["createdId"], calculationVersion=3, lines=[{
+        "category": "crafted", "direction": "sale", "inventorySourceId": stock["id"], "itemCount": 1, "profitPercent": 0}])
+    assert sold.status_code == 201, sold.text
+    payload = edit_payload(client, body, entry)
+    path = f"/api/owner/partners/{created['createdId']}/invoices/{entry['id']}"
+    response = client.patch(path, json=payload, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["partners"][0]["goldBalance"] == sold.json()["data"]["partners"][0]["goldBalance"]
+    unchanged = next(row for row in response.json()["data"]["documents"] if row["id"] == stock["id"])
+    assert unchanged["weight"] == "1.580" and unchanged["scaleWeight"] == 4.74 and unchanged["amount"] == stock["amount"]
+    payload = edit_payload(client, body, entry)
+    payload["paidGold"] = 0
+    removed = client.patch(path, json=payload, headers=headers)
+    assert removed.status_code == 200, removed.text
+    entries = removed.json()["data"]["partners"][0]["entries"]
+    assert len(entries) == 2 and all(row.get("linkedEntryId") != entry["id"] for row in entries)
+    assert removed.json()["data"]["partners"][0]["goldBalance"] == pytest.approx(response.json()["data"]["partners"][0]["goldBalance"] + 1)
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_legacy_sale_edit_uses_existing_stock_and_updates_receipt(client, version):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    purchase = post_invoice(client, headers, identifier, calculationVersion=2, lines=[{
+        "category": "crafted", "itemName": "انگشتر", "weight": 6, "itemCount": 3, "profitPercent": 0}])
+    assert purchase.status_code == 201, purchase.text
+    stock = purchase.json()["data"]["documents"][0]
+    body = supplier_payload(client, direction="sale", calculationVersion=version, lines=[{
+        "category": "crafted", "inventorySourceId": stock["id"], "itemCount": 1, "profitPercent": 0}], paidGold=1)
+    sale = post_invoice(client, headers, identifier, body)
+    assert sale.status_code == 201, sale.text
+    entry, receipt = sale.json()["data"]["partners"][0]["entries"][-2:]
+    payload = edit_payload(client, body, entry)
+    payload["lines"][0]["itemCount"] = 2
+    payload["paidGold"] = 0.5
+    path = f"/api/owner/partners/{identifier}/invoices/{entry['id']}"
+    edited = client.patch(path, json=payload, headers=headers)
+    assert edited.status_code == 200, edited.text
+    updated, updated_receipt = edited.json()["data"]["partners"][0]["entries"][-2:]
+    assert updated["goldCredit"] == 4 and updated_receipt["goldDebit"] == 0.5
+    assert updated_receipt["id"] == receipt["id"] and updated["id"] == entry["id"]
+    assert edited.json()["data"]["partners"][0]["goldBalance"] == 2.5
+    document = edited.json()["data"]["documents"][0]
+    assert document["inventorySourceId"] == stock["id"] and document["weight"] == "2"
+    too_many = edit_payload(client, body, updated)
+    too_many["lines"][0]["itemCount"] = 4
+    before = client.get("/api/owner/workspace").json()
+    rejected = client.patch(path, json=too_many, headers=headers)
+    assert rejected.status_code == 422 and client.get("/api/owner/workspace").json() == before
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("change", ["quantity", "remove", "category", "foreign-id", "version", "unit"])
+def test_legacy_invoice_edit_rejects_stock_damage_or_formula_changes_atomically(client, version, change):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    body = supplier_payload(client, calculationVersion=version)
+    saved = post_invoice(client, headers, created["createdId"], body)
+    assert saved.status_code == 201, saved.text
+    entry = saved.json()["data"]["partners"][0]["entries"][0]
+    purchase = saved.json()["data"]["documents"][0]
+    sold = post_invoice(client, headers, created["createdId"], calculationVersion=3, lines=[{
+        "category": "crafted", "direction": "sale", "inventorySourceId": purchase["id"], "itemCount": 1}])
+    assert sold.status_code == 201, sold.text
+    payload = edit_payload(client, body, entry)
+    if change == "quantity":
+        payload["lines"][0]["weight"] = 9
+    elif change == "remove":
+        payload["lines"] = [{"category": "currency", "currencyAmount": 1, "currencyType": "USD", "currencyRate": 50000}]
+    elif change == "category":
+        payload["lines"][0] = {"category": "currency", "currencyAmount": 1, "currencyType": "USD", "currencyRate": 50000, "documentId": purchase["id"]}
+    elif change == "foreign-id":
+        payload["lines"][0]["documentId"] = sold.json()["data"]["documents"][0]["id"]
+    elif change == "version":
+        payload["calculationVersion"] = 3
+    else:
+        payload["settlementUnit"] = "toman"
+    before = client.get("/api/owner/workspace").json()
+    response = client.patch(f"/api/owner/partners/{created['createdId']}/invoices/{entry['id']}", json=payload, headers=headers)
+    assert response.status_code == 422, response.text
+    assert client.get("/api/owner/workspace").json() == before
+
+
 def test_backup_restores_invoice_sequence_for_remittance_only_partner_document(client):
     headers = login(client)
     created, _ = create_partner(client, headers)
@@ -856,14 +995,15 @@ def test_backup_restores_invoice_sequence_for_remittance_only_partner_document(c
     assert posted.json()["data"]["documents"][0]["invoiceNumber"] == 2
 
 
-def test_standalone_remittance_shares_invoice_number_sequence_and_preserves_old_request_hash(client):
+@pytest.mark.parametrize("payment_method", ["gold", "cash", "remittance"])
+def test_standalone_settlement_shares_invoice_number_sequence_and_preserves_old_request_hash(client, payment_method):
     headers = login(client)
     created, _ = create_partner(client, headers)
     identifier = created["createdId"]
     invoice_response = post_invoice(client, headers, identifier)
     assert invoice_response.status_code == 201
     before_docs = invoice_response.json()["data"]["documents"]
-    body = settlement_body(client, goldAmount=10)
+    body = settlement_body(client, goldAmount=10, paymentMethod=payment_method)
     path = f"/api/owner/partners/{identifier}/settlements"
     response = client.post(path, json=body, headers=headers)
     assert response.status_code == 201, response.text
@@ -882,18 +1022,19 @@ def test_standalone_remittance_shares_invoice_number_sequence_and_preserves_old_
     assert following.status_code == 201 and following.json()["data"]["documents"][0]["invoiceNumber"] == 3
 
 
-def test_standalone_remittance_edit_replaces_original_and_recalculates_later_balances(client):
+@pytest.mark.parametrize("original_method,edited_method", [("remittance", "gold"), ("gold", "cash"), ("cash", "remittance")])
+def test_standalone_settlement_edit_replaces_original_and_recalculates_later_balances(client, original_method, edited_method):
     headers = login(client)
     created, _ = create_partner(client, headers)
     identifier = created["createdId"]
-    original_body = settlement_body(client, goldAmount=10, tomanAmount=200000)
+    original_body = settlement_body(client, goldAmount=10, tomanAmount=200000, paymentMethod=original_method)
     collection = f"/api/owner/partners/{identifier}/settlements"
     original = client.post(collection, json=original_body, headers=headers)
     assert original.status_code == 201, original.text
     entry = original.json()["data"]["partners"][0]["entries"][0]
     following = client.post(collection, json=settlement_body(client, direction="debit", goldAmount=3, date="2026-10-07"), headers=headers)
     assert following.status_code == 201
-    body = settlement_body(client, direction="debit", goldAmount=4, tomanAmount=50000, date="2026-10-01", reference="اصلاح حواله", counterpartyName="نماینده جدید", note="شرح جدید")
+    body = settlement_body(client, direction="debit", goldAmount=4, tomanAmount=50000, date="2026-10-01", reference="اصلاح گردش", counterpartyName="نماینده جدید", note="شرح جدید", paymentMethod=edited_method)
     path = f"{collection}/{entry['id']}"
     response = client.patch(path, json=body, headers=headers)
     assert response.status_code == 200, response.text
@@ -905,7 +1046,8 @@ def test_standalone_remittance_edit_replaces_original_and_recalculates_later_bal
         assert edited[field] == entry[field]
     assert edited["goldDebit"] == edited["goldBalance"] == 4 and edited["goldCredit"] == edited["tomanCredit"] == 0
     assert edited["tomanDebit"] == 50000 and later["goldBalance"] == 7
-    assert edited["reference"] == "اصلاح حواله" and edited["counterpartyName"] == "نماینده جدید" and edited["note"] == "شرح جدید"
+    assert edited["reference"] == "اصلاح گردش" and edited["counterpartyName"] == "نماینده جدید" and edited["note"] == "شرح جدید"
+    assert edited["paymentMethod"] == edited_method and saved["createdId"] == entry["id"]
     assert saved["data"]["documents"] == []
     replay = client.patch(path, json=body, headers=headers)
     assert replay.status_code == 200 and replay.json() == saved
@@ -916,11 +1058,12 @@ def test_standalone_remittance_edit_replaces_original_and_recalculates_later_bal
     assert next_invoice.status_code == 201 and next_invoice.json()["data"]["documents"][0]["invoiceNumber"] == 3
 
 
-def test_legacy_unnumbered_remittance_is_editable_and_allocates_number_once(client):
+@pytest.mark.parametrize("payment_method", ["gold", "cash", "remittance"])
+def test_legacy_unnumbered_settlement_is_editable_and_allocates_number_once(client, payment_method):
     headers = login(client)
     created, _ = create_partner(client, headers)
     identifier = created["createdId"]
-    response = client.post(f"/api/owner/partners/{identifier}/settlements", json=settlement_body(client, goldAmount=10), headers=headers)
+    response = client.post(f"/api/owner/partners/{identifier}/settlements", json=settlement_body(client, goldAmount=10, paymentMethod=payment_method), headers=headers)
     assert response.status_code == 201
     legacy = deepcopy(response.json()["data"])
     entry = legacy["partners"][0]["entries"][0]
@@ -933,20 +1076,20 @@ def test_legacy_unnumbered_remittance_is_editable_and_allocates_number_once(clie
     assert imported.json()["data"]["partners"][0]["entries"][0]["invoiceNumber"] is None
     invoice_response = post_invoice(other, other_headers, identifier, calculationVersion=3)
     assert invoice_response.status_code == 201
-    body = settlement_body(other, goldAmount=8)
+    body = settlement_body(other, goldAmount=8, paymentMethod=payment_method)
     path = f"/api/owner/partners/{identifier}/settlements/{entry['id']}"
     edited = other.patch(path, json=body, headers=other_headers)
     assert edited.status_code == 200, edited.text
     saved = edited.json()["data"]["partners"][0]["entries"][0]
     assert saved["invoiceNumber"] == 2 and saved["transactionId"] and saved["createdAt"] == entry["createdAt"]
-    again = other.patch(path, json=settlement_body(other, goldAmount=7), headers=other_headers)
+    again = other.patch(path, json=settlement_body(other, goldAmount=7, paymentMethod=payment_method), headers=other_headers)
     assert again.status_code == 200
     latest = again.json()["data"]["partners"][0]["entries"][0]
     assert latest["invoiceNumber"] == 2 and latest["transactionId"] == saved["transactionId"]
     assert len(again.json()["data"]["partners"][0]["entries"]) == 2
 
 
-@pytest.mark.parametrize("changes", [{"goldAmount": 0, "tomanAmount": 0}, {"goldAmount": -1}, {"goldAmount": "0.00000001"}, {"paymentMethod": "gold"}])
+@pytest.mark.parametrize("changes", [{"goldAmount": 0, "tomanAmount": 0}, {"goldAmount": -1}, {"goldAmount": "0.00000001"}, {"paymentMethod": "invalid"}])
 def test_invalid_standalone_remittance_edit_is_atomic_and_correctable(client, changes):
     headers = login(client)
     created, _ = create_partner(client, headers)
@@ -963,27 +1106,26 @@ def test_invalid_standalone_remittance_edit_is_atomic_and_correctable(client, ch
     assert fixed.status_code == 200 and fixed.json()["data"]["partners"][0]["goldBalance"] == -8
 
 
-@pytest.mark.parametrize("kind", ["invoice", "linked-payment", "cash"])
-def test_remittance_edit_rejects_nonstandalone_entries(client, kind):
+@pytest.mark.parametrize("kind", ["invoice", "linked-payment"])
+@pytest.mark.parametrize("payment_method", ["gold", "cash", "remittance"])
+def test_settlement_edit_rejects_nonstandalone_entries(client, kind, payment_method):
     headers = login(client)
     created, _ = create_partner(client, headers)
     identifier = created["createdId"]
-    if kind == "cash":
-        response = client.post(f"/api/owner/partners/{identifier}/settlements", json=settlement_body(client, paymentMethod="cash"), headers=headers)
-    else:
-        response = post_invoice(client, headers, identifier, calculationVersion=2, paidGold=1, referenceName="نماینده")
+    response = post_invoice(client, headers, identifier, calculationVersion=2, paidGold=1, referenceName="نماینده")
     assert response.status_code == 201, response.text
     entry = response.json()["data"]["partners"][0]["entries"][0 if kind == "invoice" else -1]
     before = client.get("/api/owner/workspace").json()
-    rejected = client.patch(f"/api/owner/partners/{identifier}/settlements/{entry['id']}", json=settlement_body(client), headers=headers)
+    rejected = client.patch(f"/api/owner/partners/{identifier}/settlements/{entry['id']}", json=settlement_body(client, paymentMethod=payment_method), headers=headers)
     assert rejected.status_code == 422 and client.get("/api/owner/workspace").json() == before
 
 
-def test_remittance_edit_requires_partner_permission_and_scopes_account_and_entry(client):
+@pytest.mark.parametrize("payment_method", ["gold", "cash", "remittance"])
+def test_settlement_edit_requires_partner_permission_and_scopes_account_and_entry(client, payment_method):
     owner_headers = login(client)
     created, _ = create_partner(client, owner_headers)
     identifier = created["createdId"]
-    response = client.post(f"/api/owner/partners/{identifier}/settlements", json=settlement_body(client, goldAmount=10), headers=owner_headers)
+    response = client.post(f"/api/owner/partners/{identifier}/settlements", json=settlement_body(client, goldAmount=10, paymentMethod=payment_method), headers=owner_headers)
     entry = response.json()["data"]["partners"][0]["entries"][0]
     path = f"/api/owner/partners/{identifier}/settlements/{entry['id']}"
     reader = create_staff(client, owner_headers, username="remittance-editor-reader", permissions=["partners.read"])
@@ -993,7 +1135,7 @@ def test_remittance_edit_requires_partner_permission_and_scopes_account_and_entr
     writer = create_staff(client, owner_headers, username="remittance-only-writer", permissions=["partners.write"])
     writer_browser = staff_browser(client)
     writer_headers = login_as(writer_browser, writer["username"])
-    payload = settlement_body(writer_browser, goldAmount=8)
+    payload = settlement_body(writer_browser, goldAmount=8, paymentMethod=payment_method)
     assert writer_browser.patch(path, json=payload, headers={"Origin": ORIGIN}).status_code == 403
     edited = writer_browser.patch(path, json=payload, headers=writer_headers)
     assert edited.status_code == 200 and set(edited.json()["data"]) == {"partners"}
@@ -1007,19 +1149,20 @@ def test_remittance_edit_requires_partner_permission_and_scopes_account_and_entr
     assert client.patch(wrong_partner_path, json=settlement_body(client), headers=owner_headers).status_code == 404
 
 
-def test_standalone_remittance_create_and_edit_replay_survive_restart(tmp_path):
+@pytest.mark.parametrize("payment_method", ["gold", "cash", "remittance"])
+def test_standalone_settlement_create_and_edit_replay_survive_restart(tmp_path, payment_method):
     settings = Settings(database_url=f"sqlite:///{tmp_path / 'standalone-remittance.db'}", upload_dir=tmp_path / "uploads",
         owner_username="owner", owner_password_hash=PASSWORD_HASH, cookie_secure=False, origins=(ORIGIN,))
     with TestClient(create_app(settings)) as first:
         headers = login(first)
         created, _ = create_partner(first, headers)
         collection = f"/api/owner/partners/{created['createdId']}/settlements"
-        create_body = settlement_body(first, goldAmount=10)
+        create_body = settlement_body(first, goldAmount=10, paymentMethod=payment_method)
         response = first.post(collection, json=create_body, headers=headers)
         assert response.status_code == 201, response.text
         entry = response.json()["data"]["partners"][0]["entries"][0]
         path = f"{collection}/{entry['id']}"
-        edit_body = settlement_body(first, goldAmount=8)
+        edit_body = settlement_body(first, goldAmount=8, paymentMethod=payment_method)
         edited = first.patch(path, json=edit_body, headers=headers)
         assert edited.status_code == 200, edited.text
         state = first.get("/api/owner/workspace").json()

@@ -131,6 +131,13 @@ try {
     await writeFile(resolve(`artifacts/${name}.png`), Buffer.from(result.data, 'base64'));
   };
   const workspace = () => evaluate(`fetch('/api/owner/workspace').then(r=>r.json())`);
+  const savedPartnerPreview = async () => {
+    await ready('[data-partner-document-dialog] [data-invoice-print]');
+    await ready('[data-partner-document-dialog] [data-invoice-edit]');
+    assert.equal(await evaluate(`Boolean(document.querySelector('[data-partner-document-dialog] [data-partner-invoice], [data-partner-document-dialog] [data-partner-settlement-form]'))`), false, 'Saved partner document shows its preview');
+    await click('[data-partner-document-close]');
+    await until(`!document.querySelector('[data-partner-document-dialog]')`);
+  };
   const tool = async name => {
     if (name !== 'partner-invoice') return navigateWorkspace(name, { click, evaluate, pause });
     await navigateWorkspace('entries', { click, evaluate, pause });
@@ -333,6 +340,7 @@ try {
   assert.equal(await evaluate(`document.querySelector('[data-document-type]').value`), 'partner-crafted-purchase', 'Reload keeps the supplier entry type');
   await click('[data-partner-retry]');
   await until(`!document.querySelector('[data-partner-retry]')`);
+  await savedPartnerPreview();
   const replayed = await workspace();
   assert.equal(replayed.data.partners[0].entries.length, 1, 'Replay cannot duplicate debt');
   assert.equal(replayed.data.documents.length, 2, 'Replay cannot duplicate stock');
@@ -342,7 +350,7 @@ try {
   await fill('[data-partner-settlement-form] [name="goldAmount"]', '۱۱٫۷۶');
   await fill('[data-partner-settlement-form] [name="counterpartyName"]', 'تحویل‌گیرنده طلا');
   await fill('[data-partner-settlement-form] [name="reference"]', 'سند ۳۳');
-  await click('[data-partner-payment-save]'); await ready('[data-partner-statement]');
+  await click('[data-partner-payment-save]'); await savedPartnerPreview(); await ready('[data-partner-statement]');
   const settled = await workspace();
   assert.equal(settled.data.partners[0].goldBalance, 0);
   assert.equal(settled.data.partners[0].entries.length, 2);
@@ -368,6 +376,7 @@ try {
   await fill('[data-partner-line="0"] [name="profitPercent"]', '۰');
   await click('[data-partner-invoice-save]');
   await until(`document.querySelector('.partner-crm .form-message.success')?.textContent.includes('انجام شد')`);
+  await savedPartnerPreview();
   assert.equal((await workspace()).data.partners[0].goldBalance, 10, 'Coin purchase becomes gold debt');
   await fill('[data-document-type]', 'partner-melted-purchase');
   await fill('[data-partner-invoice] [name="gold18Price"]', '5000000');
@@ -380,6 +389,7 @@ try {
   await fill('[data-partner-line="0"] [name="profitPercent"]', '۰');
   await click('[data-partner-invoice-save]');
   await until(`document.querySelector('.partner-crm .form-message.success')?.textContent.includes('انجام شد')`);
+  await savedPartnerPreview();
   const beforeRemittance = await workspace();
   assert.equal(beforeRemittance.data.partners[0].goldBalance, 19.866667, 'Melted purchase converts lower purity to 750');
   assert.equal(beforeRemittance.data.customers.length, 1);

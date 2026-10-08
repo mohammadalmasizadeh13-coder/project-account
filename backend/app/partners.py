@@ -284,9 +284,10 @@ def mark_gold_balance_purchase(payload, documents, existing_entry=None):
     return {"goldBalancePurchase": True} if marked else {}
 
 
-def make_supplier_invoice(data, partner, payload, identity, connection):
+def make_supplier_invoice(data, partner, payload, identity, connection, *, existing_entry=None, previous_documents=None):
     if payload.calculationVersion == 3:
-        return make_mixed_partner_invoice(data, partner, payload, identity, connection)
+        return make_mixed_partner_invoice(data, partner, payload, identity, connection,
+            existing_entry=existing_entry, previous_documents=previous_documents)
     selling = payload.direction == "sale"
     gold_invoice = payload.calculationVersion == 2
     rate = numeric(payload.gold18Price, "نرخ طلای ۷۵۰", minimum=Decimal("0.00000001"))
@@ -295,11 +296,29 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
         raise HTTPException(422, "مقدار پرداخت طلا کمتر از دقت مجاز دفتر است.")
     paid_gold = rounded_gold(paid_gold)
     paid_toman = numeric(payload.paidToman, "پرداخت تومان", maximum=Decimal("1e12"))
-    transaction, created_at = str(uuid4()), iso_now()
+    transaction = existing_entry["transactionId"] if existing_entry else str(uuid4())
+    created_at = existing_entry["createdAt"] if existing_entry else iso_now()
+    old_documents = {row["id"]: row for row in previous_documents or [] if existing_entry and row["id"] in existing_entry["documentIds"]}
+    used_document_ids = set()
+    linked_payments = [row for row in partner["entries"] if existing_entry and row.get("linkedEntryId") == existing_entry["id"]]
+    if len(linked_payments) > 1:
+        raise HTTPException(422, "این فاکتور چند گردش تسویهٔ متصل دارد و نیازمند بررسی دفتر است.")
+    existing_payment = linked_payments[0] if linked_payments else None
     documents, details, gold_total, toman_total = [], [], Decimal(0), Decimal(0)
     draft = {**data, "documents": list(data["documents"])}
     for position, original in enumerate(payload.lines):
         line = dict(original)
+        document_id = line.pop("documentId", None)
+        old_document = None
+        if document_id is not None:
+            if not isinstance(document_id, str) or document_id not in old_documents or document_id in used_document_ids:
+                raise HTTPException(422, "شناسهٔ ردیف ویرایش‌شده معتبر نیست.")
+            old_document = old_documents[document_id]
+            if old_document["category"] != line.get("category"):
+                raise HTTPException(422, "برای تغییر نوع کالا، ردیف قبلی را حذف و ردیف تازه اضافه کنید.")
+            used_document_ids.add(document_id)
+        if line.pop("direction", payload.direction) != payload.direction:
+            raise HTTPException(422, "جهت تمام ردیف‌های این فاکتور باید یکسان باشد.")
         source_id = line.pop("inventorySourceId", None)
         source = None
         if selling:
@@ -347,14 +366,18 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
                 line[field] = format(physical / count if weight_mode == "total" else physical, "f")
             created, identifier = create_stock(draft, line, identity)
             document = created["documents"][0]
-            document.update(id=f"document-partner-{uuid4()}", source="partner-invoice", entryMethod="supplier-invoice",
+            document.update(id=document_id or f"document-partner-{uuid4()}", source="partner-invoice", entryMethod="supplier-invoice",
                 type=f"{category}-{'sale' if selling else 'purchase'}", typeLabel="فروش به همکار" if selling else "خرید از همکار", direction="فروش" if selling else "خرید", customerId=partner["id"],
                 customerName=partner["name"], counterpartyType="partner", partnerId=partner["id"],
                 externalInvoiceNumber=payload.externalInvoiceNumber, date=payload.date, createdAt=created_at, recordedAt=created_at,
                 invoiceVersion=1, invoiceLine=position + 1, invoiceLineCount=len(payload.lines), transactionId=transaction,
                 gold18Price=decimal_output(rate))
+            if old_document is not None:
+                document.update({field: old_document[field] for field in ("createdAt", "recordedAt") if field in old_document})
             if source is not None:
                 document.update(inventorySourceId=source["id"], productCode=source["productCode"])
+            elif old_document is not None and old_document["type"].endswith("-purchase"):
+                document["productCode"] = old_document["productCode"]
             line_value = number(document["amount"])
             snapshot = {}
             if category in {"crafted", "melted"}:
@@ -409,15 +432,32 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
             # A rejected stock choice has not committed. Let the editor correct
             # it, while workspace revision conflicts still use safe replay.
             raise HTTPException(422, error.detail) from error
-    balance_purchase = mark_gold_balance_purchase(payload, documents)
-    incoming = prepare_invoices(data["documents"], [*documents, *data["documents"]], connection, account_id=identity["user"]["account_id"])
+    balance_purchase = mark_gold_balance_purchase(payload, documents, existing_entry)
+    if existing_entry:
+        for document in documents:
+            document["invoiceNumber"] = existing_entry["invoiceNumber"]
+        validate_group(documents)
+        incoming = [*documents, *data["documents"]]
+        try:
+            guard_linked_inventory_changes(previous_documents, incoming)
+            downstream = [row for row in data["documents"] if str(row.get("inventorySourceId", "")) in old_documents]
+            guard_invoice_stock(incoming, [*documents, *downstream])
+        except HTTPException as error:
+            raise HTTPException(422, error.detail) from error
+    else:
+        incoming = prepare_invoices(data["documents"], [*documents, *data["documents"]], connection, account_id=identity["user"]["account_id"])
     data["documents"] = incoming
     entry = entry_base(payload, type="sale" if selling else "purchase", externalInvoiceNumber=payload.externalInvoiceNumber,
         invoiceNumber=incoming[0]["invoiceNumber"], transactionId=transaction, documentIds=[row["id"] for row in documents],
         lines=details, settlementUnit=payload.settlementUnit, gold18Price=decimal_output(rate),
         **{"goldCredit" if selling else "goldDebit": decimal_output(gold_total), "tomanCredit" if selling else "tomanDebit": decimal_output(toman_total)},
         **({"calculationVersion": 2, "conversionGoldPrice": decimal_output(rate)} if gold_invoice else {}), **balance_purchase)
-    partner["entries"].append(entry)
+    if existing_entry:
+        entry.update(id=existing_entry["id"], createdAt=created_at)
+        position = next(index for index, row in enumerate(partner["entries"]) if row["id"] == existing_entry["id"])
+        partner["entries"][position] = entry
+    else:
+        partner["entries"].append(entry)
     if paid_gold or paid_toman:
         with localcontext() as context:
             context.prec = 80
@@ -425,12 +465,20 @@ def make_supplier_invoice(data, partner, payload, identity, connection):
             gold_credit = rounded_gold(paid_gold + converted_cash)
         if gold_invoice and not gold_credit:
             raise HTTPException(422, "مقدار پرداخت کمتر از دقت مجاز دفتر است.")
-        partner["entries"].append(entry_base(payload, type="settlement",
+        payment_entry = entry_base(payload, type="settlement",
             **{"goldDebit" if selling else "goldCredit": decimal_output(gold_credit), "tomanDebit" if selling else "tomanCredit": 0 if gold_invoice else decimal_output(paid_toman)}, counterpartyName=payload.referenceName,
             reference=payload.refNumber, paymentMethod="remittance" if payload.referenceName or payload.refNumber else "cash" if paid_toman else "gold",
             linkedEntryId=entry["id"], **({"calculationVersion": 2, "settlementUnit": "gold", "gold18Price": decimal_output(rate),
                 "conversionGoldPrice": decimal_output(rate), "paidGold": decimal_output(paid_gold), "paidToman": decimal_output(paid_toman),
-                "convertedPaidTomanGold": decimal_output(converted_cash)} if gold_invoice else {})))
+                "convertedPaidTomanGold": decimal_output(converted_cash)} if gold_invoice else {}))
+        if existing_payment:
+            payment_entry.update({key: existing_payment[key] for key in ("id", "createdAt", "invoiceNumber", "transactionId") if key in existing_payment})
+            position = next(index for index, row in enumerate(partner["entries"]) if row["id"] == existing_payment["id"])
+            partner["entries"][position] = payment_entry
+        else:
+            partner["entries"].append(payment_entry)
+    elif existing_payment:
+        partner["entries"] = [row for row in partner["entries"] if row["id"] != existing_payment["id"]]
     return entry["id"]
 
 
@@ -559,6 +607,8 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
                 date=payload.date, createdAt=created_at, recordedAt=created_at, invoiceVersion=1,
                 invoiceLine=len(documents) + 1, transactionId=transaction, gold18Price=decimal_output(rate),
                 amount=decimal_output(line_gold * rate), **{key: value for key, value in snapshot.items() if key != "profitPercent"})
+            if old_document is not None:
+                document.update({field: old_document[field] for field in ("createdAt", "recordedAt") if field in old_document})
             if source is not None:
                 document.update(inventorySourceId=source["id"], productCode=source["productCode"])
             elif old_document is not None and old_document["type"].endswith("-purchase"):
@@ -707,22 +757,30 @@ def register_partner_routes(application, workspace_response, encode_workspace):
                     existing_entry = next((row for row in partner["entries"] if row["id"] == entry_id), None)
                     if existing_entry is None:
                         raise HTTPException(404, "سند همکار پیدا نشد.")
-                    if existing_entry.get("calculationVersion") != 3 or payload.calculationVersion != 3 or existing_entry["type"] == "settlement":
-                        raise HTTPException(422, "ویرایش فقط برای سند جدید همکار فعال است.")
+                    if existing_entry["type"] == "settlement":
+                        raise HTTPException(422, "گردش مستقل باید از ویرایش دریافت و پرداخت اصلاح شود.")
+                    if existing_entry.get("calculationVersion", 1) != payload.calculationVersion:
+                        raise HTTPException(422, "روش محاسبهٔ سند ثبت‌شده هنگام ویرایش قابل تغییر نیست.")
+                    if payload.calculationVersion < 3 and existing_entry.get("settlementUnit") != payload.settlementUnit:
+                        raise HTTPException(422, "واحد تسویهٔ فاکتور قدیمی هنگام ویرایش قابل تغییر نیست.")
                     previous_documents = list(data["documents"])
                     old_ids = set(existing_entry["documentIds"])
+                    if (not existing_entry.get("transactionId") or not existing_entry.get("invoiceNumber")
+                            or old_ids != {row["id"] for row in previous_documents if row["id"] in old_ids}
+                            or payload.calculationVersion < 3 and not old_ids):
+                        raise HTTPException(422, "اطلاعات اصلی این فاکتور ناقص است و نیازمند بررسی دفتر است.")
                     data["documents"] = [row for row in data["documents"] if row["id"] not in old_ids]
-                    created_id = make_mixed_partner_invoice(data, partner, payload, identity, connection,
+                    created_id = make_supplier_invoice(data, partner, payload, identity, connection,
                         existing_entry=existing_entry, previous_documents=previous_documents)
                 else:
                     existing_entry = None
                     if action == "settlement-update":
                         existing_entry = next((row for row in partner["entries"] if row["id"] == entry_id), None)
                         if existing_entry is None:
-                            raise HTTPException(404, "حوالهٔ همکار پیدا نشد.")
-                        if (existing_entry["type"] != "settlement" or existing_entry.get("paymentMethod") != "remittance"
-                                or existing_entry.get("linkedEntryId") or payload.paymentMethod != "remittance"):
-                            raise HTTPException(422, "فقط حوالهٔ مستقل همکار از این مسیر قابل ویرایش است.")
+                            raise HTTPException(404, "گردش همکار پیدا نشد.")
+                        if (existing_entry["type"] != "settlement" or existing_entry.get("linkedEntryId")
+                                or existing_entry.get("documentIds")):
+                            raise HTTPException(422, "گردش متصل به فاکتور باید از ویرایش همان فاکتور اصلاح شود.")
                     gold = rounded_gold(numeric(payload.goldAmount, "مقدار طلای گردش", maximum=Decimal("1e12")))
                     toman = numeric(payload.tomanAmount, "مبلغ تومانی گردش", maximum=Decimal("1e12"))
                     if not gold and not toman:
@@ -730,15 +788,14 @@ def register_partner_routes(application, workspace_response, encode_workspace):
                     entry = entry_base(payload, type="settlement", paymentMethod=payload.paymentMethod, counterpartyName=payload.counterpartyName,
                         reference=payload.reference, **{"goldCredit" if payload.direction == "credit" else "goldDebit": decimal_output(gold),
                             "tomanCredit" if payload.direction == "credit" else "tomanDebit": decimal_output(toman)})
-                    if payload.paymentMethod == "remittance":
-                        invoice_number = existing_entry.get("invoiceNumber") if existing_entry else None
-                        if invoice_number is None:
-                            numbered_rows = [*data["documents"], *(row for record in data["partners"] for row in record["entries"])]
-                            minimum_number = max((int(value) for row in numbered_rows if (value := number(row.get("invoiceNumber"))) > 0
-                                and value <= MAX_BALANCE and value == value.to_integral_value()), default=0)
-                            invoice_number = reserve_invoice_numbers(connection, minimum_number, 1, account_id)
-                        entry.update(invoiceNumber=invoice_number,
-                            transactionId=(existing_entry.get("transactionId") if existing_entry else None) or str(uuid4()))
+                    invoice_number = existing_entry.get("invoiceNumber") if existing_entry else None
+                    if invoice_number is None:
+                        numbered_rows = [*data["documents"], *(row for record in data["partners"] for row in record["entries"])]
+                        minimum_number = max((int(value) for row in numbered_rows if (value := number(row.get("invoiceNumber"))) > 0
+                            and value <= MAX_BALANCE and value == value.to_integral_value()), default=0)
+                        invoice_number = reserve_invoice_numbers(connection, minimum_number, 1, account_id)
+                    entry.update(invoiceNumber=invoice_number,
+                        transactionId=(existing_entry.get("transactionId") if existing_entry else None) or str(uuid4()))
                     if existing_entry:
                         entry.update(id=existing_entry["id"], createdAt=existing_entry["createdAt"])
                         position = next(index for index, row in enumerate(partner["entries"]) if row["id"] == existing_entry["id"])

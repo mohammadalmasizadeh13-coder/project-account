@@ -17,16 +17,17 @@ import { GalleryAccountContext } from './GalleryAccountContext.js';
 const DRAFT_KIND = 'partner-workspace';
 const normalized = value => normalizeDigits(value).replace(/ي/g, 'ی').replace(/ك/g, 'ک').toLowerCase().trim();
 const balanceText = (value, unit) => `${fmt(Math.abs(value))} ${unit} · ${value > 0 ? 'بدهی ما به همکار' : value < 0 ? 'طلب ما از همکار' : 'تسویه'}`;
-const actionNames = { create: 'ثبت همکار', update: 'ویرایش همکار', invoice: 'ثبت فاکتور همکار', 'invoice-update': 'ویرایش سند همکار', settlement: 'ثبت سند حساب همکار', 'settlement-update': 'ویرایش حواله همکار' };
+const actionNames = { create: 'ثبت همکار', update: 'ویرایش همکار', invoice: 'ثبت فاکتور همکار', 'invoice-update': 'ویرایش سند همکار', settlement: 'ثبت سند حساب همکار', 'settlement-update': 'ویرایش سند دریافت / پرداخت همکار' };
 const dayText = date => date ? formatPersianDate(date.slice(0, 10)) : '—';
 const initialDraft = (username, initialAction, draftKind = DRAFT_KIND) => {
   const recovered = readAccountingDraft(username, draftKind)?.form;
   const invoices = recovered?.invoices || {};
-  const upgraded = !recovered?.pending && Object.values(invoices).some(invoice => invoice.calculationVersion !== 3);
+  const keepInvoiceVersion = draftKind.startsWith('partner-invoice-edit:');
+  const upgraded = !keepInvoiceVersion && !recovered?.pending && Object.values(invoices).some(invoice => invoice.calculationVersion !== 3);
   return { selectedId: '', view: initialAction || 'statement',
     profileId: null, profile: newPartnerProfile(), invoices: {}, settlements: {}, pending: null,
     ...recovered, ...(initialAction && !recovered?.pending ? { view: initialAction } : {}),
-    invoices: recovered?.pending ? invoices : Object.fromEntries(Object.entries(invoices).map(([key, invoice]) => [key, upgradePartnerInvoiceDraft(invoice)])), upgraded,
+    invoices: recovered?.pending || keepInvoiceVersion ? invoices : Object.fromEntries(Object.entries(invoices).map(([key, invoice]) => [key, upgradePartnerInvoiceDraft(invoice)])), upgraded,
   };
 };
 
@@ -71,7 +72,7 @@ function InvoiceLine({ line, index, prices, goldPrice, calculationVersion, invoi
         <NumberField label="عیار واقعی" name={melted ? 'meltedAyar' : 'ayar'} value={melted ? line.meltedAyar : line.ayar} onChange={change} readOnly={selling} required/>
         <NumberField label="اجرت درصدی (به طلا)" name="wagePercent" value={line.wagePercent} onChange={change} help="اجرت به وزن طلای ۷۵۰ سند اضافه می‌شود."/>
         {calculationVersion >= 2 ? <><NumberField label={`اجرت ریالی هر عدد (${line.wageFixedUnit === 'rial' ? 'ریال' : 'تومان'})`} name="wageFixed" value={line.wageFixed} onChange={change} help="مبلغ با نرخ فاکتور به گرم طلای ۷۵۰ تبدیل می‌شود."/><label>واحد مبلغ اجرت<select name="wageFixedUnit" value={line.wageFixedUnit || 'toman'} onChange={event => change('wageFixedUnit', event.target.value)}><option value="toman">تومان</option><option value="rial">ریال</option></select></label></>
-          : <NumberField label="نرخ هر گرم ۷۵۰ (تومان)" name={melted ? 'meltedGramPrice' : 'gramPrice'} value={melted ? line.meltedGramPrice : line.gramPrice} onChange={change} placeholder="نرخ بالای فاکتور"/>}
+          : <><NumberField label="نرخ هر گرم ۷۵۰ (تومان)" name={melted ? 'meltedGramPrice' : 'gramPrice'} value={melted ? line.meltedGramPrice : line.gramPrice} onChange={change} placeholder="نرخ بالای فاکتور"/><NumberField label="اجرت پولی هر عدد (تومان)" name="wageFixed" value={line.wageFixed} onChange={change}/></>}
         {melted && mixed && <NumberField label="فی آب‌شده (تومان)" name="meltedFee" value={line.meltedFee} onChange={change} required help="مبلغ اصل طلا = فی ÷ ۴٫۳۳۱۸ × وزن ۷۵۰. فی این ردیف را می‌توانید تغییر دهید."/>}
         {melted ? <><TextField label="شماره انگ" name="assayCode" value={line.assayCode} onChange={change} readOnly={selling} required/><TextField label="آزمایشگاه" name="laboratoryName" value={line.laboratoryName} onChange={change} readOnly={selling} required/></>
           : <label>نوع کار<select name="craftedKind" disabled={selling} value={line.craftedKind} onChange={event => change('craftedKind', event.target.value)}>{craftedKinds.map(kind => <option key={kind}>{kind}</option>)}</select></label>}
@@ -80,6 +81,9 @@ function InvoiceLine({ line, index, prices, goldPrice, calculationVersion, invoi
         <NumberField label="تعداد سکه" name="coinCount" value={line.coinCount} onChange={change} required/>
         {line.coinType === 'پارسیان' ? <><NumberField label="وزن هر سکه پارسیان (گرم)" name="parsianWeight" value={line.parsianWeight} onChange={change} readOnly={selling} required/><NumberField label="قیمت هر سکه پارسیان (تومان)" name="parsianPrice" value={line.parsianPrice} onChange={change} required/></>
           : <NumberField label="قیمت هر سکه (تومان)" name="coinPrice" value={line.coinPrice} onChange={change} required/>}
+        <NumberField label="اجرت درصدی سکه" name="wagePercent" value={line.wagePercent} onChange={change} help={calculationVersion >= 2 ? 'اجرت درصدی با نرخ فاکتور به گرم طلای ۷۵۰ تبدیل می‌شود.' : 'اجرت درصدی به مبلغ سکه‌ها اضافه می‌شود.'}/>
+        {calculationVersion >= 2 ? <><NumberField label={`اجرت ریالی هر سکه (${line.wageFixedUnit === 'rial' ? 'ریال' : 'تومان'})`} name="wageFixed" value={line.wageFixed} onChange={change} help="مبلغ با نرخ فاکتور به گرم طلای ۷۵۰ تبدیل می‌شود."/><label>واحد مبلغ اجرت<select name="wageFixedUnit" value={line.wageFixedUnit || 'toman'} onChange={event => change('wageFixedUnit', event.target.value)}><option value="toman">تومان</option><option value="rial">ریال</option></select></label></>
+          : <NumberField label="اجرت پولی هر سکه (تومان)" name="wageFixed" value={line.wageFixed} onChange={change}/>}
       </> : <>
         <label>نوع ارز<select name="currencyType" disabled={selling} value={line.currencyType} onChange={event => { const code = event.target.value; const field = currencyCatalog.find(currency => currency.code === code)?.price; onChange({ ...line, currencyType: code, currencyRate: String(prices[field] || '') }); }}>{currencyCatalog.map(currency => <option key={currency.code} value={currency.code}>{currency.name}</option>)}</select></label>
         <NumberField label="مقدار ارز" name="currencyAmount" value={line.currencyAmount} onChange={change} required/>
@@ -115,12 +119,24 @@ function StatementInvoiceLines({ entry, docById }) {
   })}</tbody></table></div>;
 }
 
-function PartnerStatement({ partner, username, documents }) {
+function PartnerStatement({ partner, username, documents, onOpenDocument, canEditDocument, canEdit = false, canPurchase = false, locked = false }) {
   const { galleryName } = useContext(GalleryAccountContext);
   const statement = partnerStatement(partner);
   const [selectedEntry, setSelectedEntry] = useState('');
   const row = statement.rows.find(entry => entry.id === selectedEntry);
   const docById = new Map(documents.map(document => [String(document.id), document]));
+  function entryActions(entry) {
+    const target = entry.linkedEntryId ? partner.entries.find(item => item.id === entry.linkedEntryId) : entry;
+    const openable = target && (['purchase', 'sale', 'mixed'].includes(target.type) || (target.type === 'settlement' && !target.linkedEntryId));
+    const editable = openable && (canEditDocument ? canEditDocument(target) : canEdit && (target.type === 'settlement' || canPurchase));
+    return <div className="partner-entry-actions">
+      <button type="button" className="partner-table-action" aria-expanded={selectedEntry === entry.id} onClick={() => setSelectedEntry(selectedEntry === entry.id ? '' : entry.id)}>مشاهده</button>
+      {openable && onOpenDocument && <>
+        <button type="button" className="partner-table-action" data-partner-entry-view disabled={locked} onClick={() => onOpenDocument(partner.id, target.id, false)}><Printer size={14}/> نمایش و چاپ</button>
+        {editable && <button type="button" className="partner-table-action" data-partner-entry-edit disabled={locked} title={entry.linkedEntryId ? 'ویرایش دریافت / پرداخت هم‌زمان از سند اصلی' : 'ویرایش این سند'} onClick={() => onOpenDocument(partner.id, target.id, true)}><Pencil size={14}/> ویرایش</button>}
+      </>}
+    </div>;
+  }
   function print() {
     document.body.classList.add('partner-print-open');
     window.addEventListener('afterprint', () => document.body.classList.remove('partner-print-open'), { once: true });
@@ -132,8 +148,8 @@ function PartnerStatement({ partner, username, documents }) {
     <header className="partner-print-heading"><h2>صورت‌حساب همکار · {partner.name}</h2><p><bdi>{galleryName || username}</bdi> · {partnerTradeTypes[partner.tradeType]}</p>{partner.phone && <p>تلفن: <bdi>{partner.phone}</bdi></p>}</header>
     <p className="partner-ledger-help">بدهکار: بدهی ما به همکار؛ بستانکار: طلب ما از همکار یا کاهش بدهی با پرداخت. خریدهای جدید با سود و اجرت به گرم طلای ۷۵۰ ثبت می‌شوند. گردش‌ها و ماندهٔ تومانی قبلی نیز در صورت‌حساب نمایش داده می‌شوند.</p>
     <div className="partner-statement-opening"><span>مانده قبلی / اولیه: {balanceText(statement.openingGoldBalance, 'گرم ۷۵۰')}</span><span>{balanceText(statement.openingTomanBalance, 'تومان')}</span></div>
-    <div className="partner-table-scroll"><table className="partner-ledger-table"><caption>گردش بدهکار و بستانکار همکار؛ تمام وزن‌های حساب، معادل طلای ۷۵۰ هستند.</caption><thead><tr><th>تاریخ و سند</th><th>شرح / ارجاع</th><th>بدهکار طلا</th><th>بستانکار طلا</th><th>بدهکار تومان</th><th>بستانکار تومان</th><th>مانده طلا</th><th>مانده تومان</th><th className="partner-screen-only">جزئیات</th></tr></thead>
-      <tbody>{statement.rows.map(entry => <React.Fragment key={entry.id}><tr data-partner-entry={entry.id}><td>{dayText(entry.date)}<small>{['purchase', 'sale', 'mixed'].includes(entry.type) ? `${entry.type === 'mixed' ? 'سند ترکیبی' : entry.type === 'sale' ? 'فروش' : 'خرید'} · ${entry.externalInvoiceNumber || entry.invoiceNumber || 'فاکتور'}` : entry.paymentMethod === 'remittance' ? (entry.goldDebit > 0 || entry.tomanDebit > 0 ? 'حواله بدهکار' : 'حواله بستانکار') : entry.goldDebit > 0 || entry.tomanDebit > 0 ? 'دریافت از همکار' : 'پرداخت / حواله'}</small></td><td>{entry.note || (entry.type === 'mixed' ? 'سند ترکیبی همکار' : entry.type === 'purchase' ? 'فاکتور خرید از همکار' : entry.type === 'sale' ? 'فاکتور فروش به همکار' : entry.paymentMethod === 'remittance' ? 'حواله همکار' : 'تسویه حساب')}<small>{[entry.counterpartyName, entry.reference].filter(Boolean).join(' · ')}</small></td><td>{fmt(entry.goldDebit)}</td><td>{fmt(entry.goldCredit)}</td><td>{fmt(entry.tomanDebit, 2)}</td><td>{fmt(entry.tomanCredit, 2)}</td><td>{fmt(entry.goldBalance)}</td><td>{fmt(entry.tomanBalance, 2)}</td><td className="partner-screen-only"><button type="button" className="partner-table-action" aria-expanded={selectedEntry === entry.id} onClick={() => setSelectedEntry(selectedEntry === entry.id ? '' : entry.id)}>مشاهده</button></td></tr>
+    <div className="partner-table-scroll"><table className="partner-ledger-table"><caption>گردش بدهکار و بستانکار همکار؛ تمام وزن‌های حساب، معادل طلای ۷۵۰ هستند.</caption><thead><tr><th>تاریخ و سند</th><th>شرح / ارجاع</th><th>بدهکار طلا</th><th>بستانکار طلا</th><th>بدهکار تومان</th><th>بستانکار تومان</th><th>مانده طلا</th><th>مانده تومان</th><th className="partner-screen-only">عملیات سند</th></tr></thead>
+      <tbody>{statement.rows.map(entry => <React.Fragment key={entry.id}><tr data-partner-entry={entry.id}><td>{dayText(entry.date)}<small>{['purchase', 'sale', 'mixed'].includes(entry.type) ? `${entry.type === 'mixed' ? 'سند ترکیبی' : entry.type === 'sale' ? 'فروش' : 'خرید'} · ${entry.externalInvoiceNumber || entry.invoiceNumber || 'فاکتور'}` : entry.paymentMethod === 'remittance' ? (entry.goldDebit > 0 || entry.tomanDebit > 0 ? 'حواله بدهکار' : 'حواله بستانکار') : entry.goldDebit > 0 || entry.tomanDebit > 0 ? 'دریافت از همکار' : 'پرداخت / حواله'}</small></td><td>{entry.note || (entry.type === 'mixed' ? 'سند ترکیبی همکار' : entry.type === 'purchase' ? 'فاکتور خرید از همکار' : entry.type === 'sale' ? 'فاکتور فروش به همکار' : entry.paymentMethod === 'remittance' ? 'حواله همکار' : 'تسویه حساب')}<small>{[entry.counterpartyName, entry.reference].filter(Boolean).join(' · ')}</small></td><td>{fmt(entry.goldDebit)}</td><td>{fmt(entry.goldCredit)}</td><td>{fmt(entry.tomanDebit, 2)}</td><td>{fmt(entry.tomanCredit, 2)}</td><td>{fmt(entry.goldBalance)}</td><td>{fmt(entry.tomanBalance, 2)}</td><td className="partner-screen-only">{entryActions(entry)}</td></tr>
         <tr className={`partner-balance-row ${selectedEntry === entry.id ? '' : 'partner-print-only'}`}><td colSpan={9}><span>مانده قبلی: {fmt(entry.previousGoldBalance)} گرم / {fmt(entry.previousTomanBalance, 2)} تومان</span><span>مانده این سند: {fmt(entry.documentGoldBalance)} گرم / {fmt(entry.documentTomanBalance, 2)} تومان</span><span>مانده نهایی: {fmt(entry.goldBalance)} گرم / {fmt(entry.tomanBalance, 2)} تومان</span></td></tr></React.Fragment>)}</tbody>
       <tfoot><tr><th colSpan={2}>جمع گردش</th><td>{fmt(statement.goldDebit)}</td><td>{fmt(statement.goldCredit)}</td><td>{fmt(statement.tomanDebit, 2)}</td><td>{fmt(statement.tomanCredit, 2)}</td><td>{fmt(statement.goldBalance)}</td><td>{fmt(statement.tomanBalance, 2)}</td><td className="partner-screen-only"/></tr></tfoot></table></div>
     {!statement.rows.length && <p className="partner-empty">هنوز خرید یا پرداختی در حساب این همکار ثبت نشده است.</p>}
@@ -146,7 +162,10 @@ function PartnerStatement({ partner, username, documents }) {
 export function PartnerDocumentDialog({ partner, entry, username, documents, prices, onAction, editing = false, canEdit = false, onClose, onSaved }) {
   const account = useContext(GalleryAccountContext);
   const galleryName = entry.galleryName || documents.find(row => (entry.documentIds || []).includes(row.id))?.galleryName || account.galleryName;
-  const remittance = entry.type === 'settlement' && entry.paymentMethod === 'remittance' && !entry.linkedEntryId;
+  const settlement = entry.type === 'settlement' && !entry.linkedEntryId;
+  const remittance = settlement && entry.paymentMethod === 'remittance';
+  const settlementReceived = settlement && (entry.goldDebit > 0 || entry.tomanDebit > 0);
+  const documentTitle = remittance ? 'سند حواله' : settlement ? settlementReceived ? 'سند دریافت از همکار' : 'سند پرداخت به همکار' : 'سند';
   const dialog = useRef(null);
   const [edit, setEdit] = useState(editing);
   const [locked, setLocked] = useState(false);
@@ -164,10 +183,16 @@ export function PartnerDocumentDialog({ partner, entry, username, documents, pri
   }, []);
   const docById = new Map(documents.map(document => [String(document.id), document]));
   const payment = partner.entries.find(row => row.linkedEntryId === entry.id);
-  const debit = entry.goldDebit + (payment?.goldDebit || 0), credit = entry.goldCredit + (payment?.goldCredit || 0);
-  const paidGold = Number(entry.paidGold) || 0, paidToman = Number(entry.paidToman) || 0;
-  const receivedPayment = entry.direction === 'sale';
-  const cashPaymentGold = entry.convertedPaidTomanGold ?? (entry.gold18Price > 0 ? paidToman / entry.gold18Price : 0);
+  const debit = (Number(entry.goldDebit) || 0) + (Number(payment?.goldDebit) || 0), credit = (Number(entry.goldCredit) || 0) + (Number(payment?.goldCredit) || 0);
+  const tomanDebit = (Number(entry.tomanDebit) || 0) + (Number(payment?.tomanDebit) || 0), tomanCredit = (Number(entry.tomanCredit) || 0) + (Number(payment?.tomanCredit) || 0);
+  const legacyMoney = (entry.calculationVersion || 1) === 1;
+  const paymentSnapshot = (entry.calculationVersion || 1) < 3 && payment ? payment : entry;
+  const paidGold = legacyMoney && payment ? (Number(payment.goldDebit) || 0) + (Number(payment.goldCredit) || 0) : Number(paymentSnapshot.paidGold) || 0;
+  const paidToman = legacyMoney && payment ? (Number(payment.tomanDebit) || 0) + (Number(payment.tomanCredit) || 0) : Number(paymentSnapshot.paidToman) || 0;
+  const paymentName = entry.counterpartyName || payment?.counterpartyName;
+  const paymentReference = entry.reference || payment?.reference;
+  const receivedPayment = (entry.direction || entry.type) === 'sale';
+  const cashPaymentGold = paymentSnapshot.convertedPaidTomanGold ?? (entry.gold18Price > 0 ? paidToman / entry.gold18Price : 0);
   function print() {
     document.body.classList.add('partner-print-open');
     window.addEventListener('afterprint', () => document.body.classList.remove('partner-print-open'), { once: true });
@@ -176,33 +201,34 @@ export function PartnerDocumentDialog({ partner, entry, username, documents, pri
   return createPortal(<dialog ref={dialog} className="partner-document-dialog" data-partner-document-dialog dir="rtl" aria-label={`سند همکار ${partner.name}`} onCancel={event => { event.preventDefault(); if (!locked) closeRef.current?.(); }}>
     <div className="partner-crm">
       <div className="partner-section-heading partner-screen-only"><h2>{edit ? 'ویرایش سند همکار' : 'سند همکار'} · {partner.name}</h2><button type="button" className="partner-icon-button" data-partner-document-close disabled={locked} onClick={onClose} aria-label="بستن سند"><X size={20}/></button></div>
-      {edit ? <PartnerCRM key={entry.id} embedded username={username} partners={[partner]} documents={documents} prices={prices} onAction={onAction} initialAction={remittance ? 'remittance' : 'invoice'} canPurchase={canEdit} readOnly={!canEdit} editingEntry={remittance ? null : entry} editingSettlement={remittance ? entry : null} onSaved={onSaved} onClose={onClose} onLockChange={setLocked}/>
+      {edit && canEdit ? <PartnerCRM key={entry.id} embedded username={username} partners={[partner]} documents={documents} prices={prices} onAction={onAction} initialAction={settlement ? remittance ? 'remittance' : 'settlement' : 'invoice'} canPurchase={canEdit} readOnly={!canEdit} editingEntry={settlement ? null : entry} editingSettlement={settlement ? entry : null} onSaved={saved => { setEdit(false); setLocked(false); onSaved?.(saved); }} onClose={() => setEdit(false)} onLockChange={setLocked}/>
         : <section className="partner-statement">
-          <header>{galleryName && <h2 data-invoice-gallery-name>{galleryName}</h2>}<h2>{remittance ? 'سند حواله' : 'سند'} {entry.invoiceNumber ? fmt(entry.invoiceNumber) : entry.id.slice(-8)} · {partner.name}</h2><p>{dayText(entry.date)}{entry.externalInvoiceNumber && ` · شماره فاکتور همکار: ${entry.externalInvoiceNumber}`}</p></header>
+          <header>{galleryName && <h2 data-invoice-gallery-name>{galleryName}</h2>}<h2>{documentTitle} {entry.invoiceNumber ? fmt(entry.invoiceNumber) : entry.id.slice(-8)} · {partner.name}</h2><p>{dayText(entry.date)}{entry.externalInvoiceNumber && ` · شماره فاکتور همکار: ${entry.externalInvoiceNumber}`}</p></header>
           <div className="partner-section-heading partner-screen-only"><button type="button" className="button button-ghost" data-invoice-print onClick={print}><Printer size={17}/> چاپ روی برگهٔ آماده</button>{canEdit && <button type="button" className="button button-primary" data-invoice-edit onClick={() => setEdit(true)}><Pencil size={16}/> ویرایش سند</button>}</div>
           <p className="partner-screen-only partner-help">برگهٔ A5 را در چاپگر بگذارید. فقط نوشته‌ها چاپ می‌شوند؛ مقیاس را روی ۱۰۰٪ بگذارید و سربرگ و پابرگ مرورگر را خاموش کنید.</p>
-          {remittance ? <div className="partner-statement-opening" data-partner-remittance-details>
-            <strong>{entry.goldDebit > 0 || entry.tomanDebit > 0 ? 'حواله بدهکار · بدهی ما به همکار' : 'حواله بستانکار · طلب ما از همکار'}</strong>
-            <span>مقدار حواله طلا: {fmt(entry.goldDebit + entry.goldCredit)} گرم ۷۵۰</span>
-            <span>مبلغ حواله: {fmt(entry.tomanDebit + entry.tomanCredit, 2)} تومان</span>
-            {entry.counterpartyName && <span>مرجع حواله: {entry.counterpartyName}</span>}
-            {entry.reference && <span>شماره حواله: {entry.reference}</span>}
+          {settlement ? <div className="partner-statement-opening" data-partner-settlement-details data-partner-remittance-details={remittance || undefined}>
+            <strong>{remittance ? settlementReceived ? 'حواله بدهکار · بدهی ما به همکار' : 'حواله بستانکار · طلب ما از همکار' : settlementReceived ? 'دریافت از همکار · بدهکار' : 'پرداخت به همکار · بستانکار'}</strong>
+            {!remittance && <span>روش پرداخت: {entry.paymentMethod === 'cash' ? 'وجه نقد / انتقال وجه' : 'طلا'}</span>}
+            <span>{remittance ? 'مقدار حواله طلا' : 'مقدار طلا'}: {fmt(debit + credit)} گرم ۷۵۰</span>
+            <span>{remittance ? 'مبلغ حواله' : 'مبلغ'}: {fmt(tomanDebit + tomanCredit, 2)} تومان</span>
+            {entry.counterpartyName && <span>{remittance ? 'مرجع حواله' : settlementReceived ? 'پرداخت‌کننده' : 'دریافت‌کننده'}: {entry.counterpartyName}</span>}
+            {entry.reference && <span>{remittance ? 'شماره حواله' : 'شماره پیگیری'}: {entry.reference}</span>}
           </div> : <StatementInvoiceLines entry={entry} docById={docById}/>}
           {entry.note && <p>{entry.note}</p>}
           {(paidGold > 0 || paidToman > 0) && <section className="partner-statement-opening" data-partner-document-payment aria-label={receivedPayment ? 'دریافت هم‌زمان سند' : 'پرداخت هم‌زمان سند'}>
             <strong>{receivedPayment ? 'دریافت هم‌زمان از همکار · بدهکار' : 'پرداخت هم‌زمان به همکار · بستانکار'}</strong>
             {paidGold > 0 && <span>طلای {receivedPayment ? 'دریافت‌شده' : 'پرداخت‌شده'}: {fmt(paidGold)} گرم ۷۵۰</span>}
-            {paidToman > 0 && <><span>مبلغ {receivedPayment ? 'دریافت‌شده' : 'پرداخت‌شده'}: {fmt(paidToman, 2)} تومان</span><span>معادل پرداخت پولی با نرخ سند: {fmt(cashPaymentGold)} گرم ۷۵۰</span></>}
-            {entry.counterpartyName && <span>{receivedPayment ? 'پرداخت‌کننده' : 'دریافت‌کننده'}: {entry.counterpartyName}</span>}
-            {entry.reference && <span>شماره پیگیری: {entry.reference}</span>}
+            {paidToman > 0 && <><span>مبلغ {receivedPayment ? 'دریافت‌شده' : 'پرداخت‌شده'}: {fmt(paidToman, 2)} تومان</span>{!legacyMoney && <span>معادل پرداخت پولی با نرخ سند: {fmt(cashPaymentGold)} گرم ۷۵۰</span>}</>}
+            {paymentName && <span>{receivedPayment ? 'پرداخت‌کننده' : 'دریافت‌کننده'}: {paymentName}</span>}
+            {paymentReference && <span>شماره پیگیری: {paymentReference}</span>}
           </section>}
-          <div className="partner-statement-final"><span>جمع بدهکار: {fmt(debit)} گرم ۷۵۰</span><span>جمع بستانکار: {fmt(credit)} گرم ۷۵۰</span><strong>مانده این سند: {balanceText(debit - credit, 'گرم ۷۵۰')}</strong>{remittance && <strong>مانده تومان این سند: {balanceText(entry.tomanDebit - entry.tomanCredit, 'تومان')}</strong>}</div>
+          <div className="partner-statement-final"><span>جمع بدهکار: {fmt(debit)} گرم ۷۵۰</span><span>جمع بستانکار: {fmt(credit)} گرم ۷۵۰</span><strong>مانده این سند: {balanceText(debit - credit, 'گرم ۷۵۰')}</strong>{(settlement || tomanDebit > 0 || tomanCredit > 0) && <strong>مانده تومان این سند: {balanceText(tomanDebit - tomanCredit, 'تومان')}</strong>}</div>
         </section>}
     </div>
   </dialog>, document.body);
 }
 
-export default function PartnerCRM({ username, partners = [], documents = [], prices = {}, onAction, readOnly = false, canPurchase = false, initialAction = '', embedded = false, initialCategory = 'crafted', invoiceDirection = 'purchase', goldBalancePurchase = false, editingEntry = null, editingSettlement = null, onSaved, onClose, onLockChange }) {
+export default function PartnerCRM({ username, partners = [], documents = [], prices = {}, onAction, readOnly = false, canPurchase = false, initialAction = '', embedded = false, initialCategory = 'crafted', invoiceDirection = 'purchase', goldBalancePurchase = false, editingEntry = null, editingSettlement = null, onSaved, onClose, onLockChange, onOpenDocument, canEditDocument }) {
   const draftKind = editingSettlement ? `partner-settlement-edit:${editingSettlement.id}` : editingEntry ? `partner-invoice-edit:${editingEntry.id}` : goldBalancePurchase ? 'partner-gold-balance' : DRAFT_KIND;
   const [draft, setDraft] = useState(() => initialDraft(username, initialAction, draftKind));
   const draftRef = useRef(draft); draftRef.current = draft;
@@ -227,6 +253,9 @@ export default function PartnerCRM({ username, partners = [], documents = [], pr
   const settlement = { ...(draft.settlements[settlementKey] || (editingSettlement ? partnerSettlementDraftFromEntry(editingSettlement) : newPartnerSettlement())), ...(remittance ? { paymentMethod: 'remittance' } : {}) };
   const stock = inventoryReport(editingEntry ? documents.filter(document => !(editingEntry.documentIds || []).includes(document.id)) : documents).available;
   const totals = partnerInvoiceTotals(invoice);
+  const invoiceGoldDebit = invoice.calculationVersion !== 3 && selling ? totals.goldCredit : totals.goldDebit;
+  const invoiceGoldCredit = invoice.calculationVersion !== 3 && selling ? totals.goldDebit : totals.goldCredit;
+  const invoiceTomanBalance = (selling && invoice.calculationVersion !== 3 ? -1 : 1) * (totals.tomanDebit - (totals.tomanCredit || 0));
   const replacedEntry = editingEntry || editingSettlement;
   const statement = partnerStatement(replacedEntry ? { ...selected, entries: selected?.entries?.filter(entry => entry.id !== replacedEntry.id && entry.linkedEntryId !== replacedEntry.id) } : selected);
   const visible = partners.filter(partner => normalized(`${partner.name} ${partner.phone} ${partnerTradeTypes[partner.tradeType]}`).includes(normalized(query)));
@@ -295,14 +324,14 @@ export default function PartnerCRM({ username, partners = [], documents = [], pr
       {!embedded && <div className="partner-balance-cards"><article><span>مانده حساب طلا</span><strong data-partner-gold-balance>{fmt(Math.abs(statement.goldBalance))} <small>گرم ۷۵۰</small></strong><small>{statement.goldBalance > 0 ? 'بدهی ما به همکار' : statement.goldBalance < 0 ? 'طلب ما از همکار' : 'تسویه'}</small></article><article><span>مانده حساب تومان</span><strong data-partner-toman-balance>{fmt(Math.abs(statement.tomanBalance), 2)} <small>تومان</small></strong><small>{statement.tomanBalance > 0 ? 'بدهی ما به همکار' : statement.tomanBalance < 0 ? 'طلب ما از همکار' : 'تسویه'}</small></article></div>}
       {!embedded && <nav className="partner-tabs" aria-label="عملیات همکار"><button type="button" aria-pressed={view === 'statement'} disabled={locked} onClick={() => update({ view: 'statement' })}>گردش و صورت‌حساب</button>{canPurchase && canEdit && <button type="button" data-partner-purchase aria-pressed={view === 'invoice'} disabled={locked} onClick={() => update({ view: 'invoice' })}><FilePlus2 size={16}/> فاکتور خرید</button>}{canEdit && <><button type="button" data-partner-settlement aria-pressed={view === 'settlement'} disabled={locked} onClick={() => update({ view: 'settlement' })}><Wallet size={16}/> دریافت و پرداخت</button><button type="button" data-partner-remittance aria-pressed={view === 'remittance'} disabled={locked} onClick={() => update({ view: 'remittance' })}>حواله همکار</button></>}</nav>}
       {view === 'invoice' && canPurchase && canEdit ? <form data-partner-invoice className="partner-invoice-form" onSubmit={event => submit(editingEntry ? 'invoice-update' : 'invoice', selectedId, () => ({ ...preparePartnerInvoice(invoice), ...(editingEntry ? { entryId: editingEntry.id } : {}) }), event)}><fieldset disabled={locked}>
-        <h3>سند همکار · {selected.name}</h3><p className="partner-help">برای هر ردیف، نوع کالا و خرید یا تحویل به همکار را انتخاب کنید. خرید، تحویل کالا و حواله را می‌توانید در همین سند ثبت کنید. مبلغ‌ها با نرخ تبدیل زیر به گرم طلای ۷۵۰ تبدیل می‌شوند؛ فی آب‌شده در ردیف خودش قابل تعیین است.</p>
+        <h3>سند همکار · {selected.name}</h3><p className="partner-help">{invoice.calculationVersion === 3 ? 'برای هر ردیف، نوع کالا و خرید یا تحویل به همکار را انتخاب کنید. خرید، تحویل کالا و حواله را می‌توانید در همین سند ثبت کنید. مبلغ‌ها با نرخ تبدیل زیر به گرم طلای ۷۵۰ تبدیل می‌شوند؛ فی آب‌شده در ردیف خودش قابل تعیین است.' : `ویرایش فاکتور ${selling ? 'فروش به همکار' : 'خرید از همکار'} با روش محاسبهٔ زمان ثبت انجام می‌شود؛ ماندهٔ طلا و تومان بر همین اساس به‌روز می‌شود.`}</p>
         {invoice.goldBalancePurchase && <p className="partner-help" data-gold-balance-purchase-note>خرید برای تراز طلا: مشخصات آب‌شده و شرح فاکتور را کامل کنید. پس از ثبت، وزن معادل ۷۵۰ خرید آب‌شده در تراز طلا محاسبه می‌شود.</p>}
-        <div className="partner-form-grid"><label>تاریخ فاکتور<PersianDateInput name="date" value={invoice.date} required onChange={event => updateInvoice('date', event.target.value)}/></label><TextField label="شماره فاکتور همکار" name="externalInvoiceNumber" value={invoice.externalInvoiceNumber} onChange={updateInvoice}/><NumberField label="نرخ تبدیل هر گرم طلای ۷۵۰ (تومان)" name="gold18Price" value={invoice.gold18Price} onChange={updateInvoice} required/></div>
+        <div className="partner-form-grid"><label>تاریخ فاکتور<PersianDateInput name="date" value={invoice.date} required onChange={event => updateInvoice('date', event.target.value)}/></label><TextField label="شماره فاکتور همکار" name="externalInvoiceNumber" value={invoice.externalInvoiceNumber} onChange={updateInvoice}/><NumberField label="نرخ تبدیل هر گرم طلای ۷۵۰ (تومان)" name="gold18Price" value={invoice.gold18Price} onChange={updateInvoice} required/>{invoice.calculationVersion === 1 && <label>واحد تسویهٔ ثبت‌شده<input value={invoice.settlementUnit === 'toman' ? 'تومان' : 'طلای ۷۵۰'} readOnly/></label>}</div>
         {invoice.lines.map((line, index) => <InvoiceLine key={index} line={line} index={index} prices={prices} goldPrice={invoice.gold18Price} calculationVersion={invoice.calculationVersion} invoiceDirection={invoice.direction} stock={stock} canRemove={invoice.lines.length > 1} onRemove={() => updateInvoice('lines', invoice.lines.filter((_, at) => at !== index))} onChange={next => updateInvoice('lines', invoice.lines.map((item, at) => at === index ? next : item))}/>)}
-        <button type="button" className="button button-ghost" data-partner-add-line disabled={invoice.lines.length >= 100} onClick={() => updateInvoice('lines', [...invoice.lines, newPartnerLine({ ...prices, goldGramPrice: invoice.gold18Price }, embedded ? initialCategory : 'crafted', invoice.direction || 'purchase')])}><Plus size={16}/> افزودن ردیف کالا / حواله</button>
-        <details className="partner-invoice-payment"><summary>{selling ? 'دریافت هم‌زمان فروش' : 'پرداخت هم‌زمان خرید'}</summary><div className="partner-form-grid"><NumberField label={selling ? 'طلای دریافت‌شده (گرم ۷۵۰)' : 'طلای پرداخت‌شده (گرم ۷۵۰)'} name="paidGold" value={invoice.paidGold} onChange={updateInvoice}/><NumberField label={selling ? 'مبلغ دریافت‌شده (تومان)' : 'مبلغ پرداخت‌شده (تومان)'} help="با نرخ همین فاکتور به گرم طلای ۷۵۰ تبدیل و از مانده سند کم می‌شود." name="paidToman" value={invoice.paidToman} onChange={updateInvoice}/><TextField label={selling ? 'نام پرداخت‌کننده' : 'نام دریافت‌کننده پرداخت'} name="referenceName" value={invoice.referenceName} onChange={updateInvoice}/><TextField label="شماره پیگیری پرداخت" name="refNumber" value={invoice.refNumber} onChange={updateInvoice}/></div></details>
+        <button type="button" className="button button-ghost" data-partner-add-line disabled={invoice.lines.length >= 100} onClick={() => updateInvoice('lines', [...invoice.lines, newPartnerLine({ ...prices, goldGramPrice: invoice.gold18Price }, embedded ? initialCategory : 'crafted', invoice.direction || 'purchase')])}><Plus size={16}/> {invoice.calculationVersion === 3 ? 'افزودن ردیف کالا / حواله' : 'افزودن ردیف کالا'}</button>
+        <details className="partner-invoice-payment"><summary>{selling ? 'دریافت هم‌زمان فروش' : 'پرداخت هم‌زمان خرید'}</summary><div className="partner-form-grid"><NumberField label={selling ? 'طلای دریافت‌شده (گرم ۷۵۰)' : 'طلای پرداخت‌شده (گرم ۷۵۰)'} name="paidGold" value={invoice.paidGold} onChange={updateInvoice}/><NumberField label={selling ? 'مبلغ دریافت‌شده (تومان)' : 'مبلغ پرداخت‌شده (تومان)'} help={invoice.calculationVersion >= 2 ? 'با نرخ همین فاکتور به گرم طلای ۷۵۰ تبدیل و از مانده سند کم می‌شود.' : 'طبق روش ثبت این سند، در ماندهٔ تومانی حساب ثبت می‌شود.'} name="paidToman" value={invoice.paidToman} onChange={updateInvoice}/><TextField label={selling ? 'نام پرداخت‌کننده' : 'نام دریافت‌کننده پرداخت'} name="referenceName" value={invoice.referenceName} onChange={updateInvoice}/><TextField label="شماره پیگیری پرداخت" name="refNumber" value={invoice.refNumber} onChange={updateInvoice}/></div></details>
         <label className="partner-wide-field">شرح فاکتور<textarea name="note" rows={2} value={invoice.note} maxLength={5000} onChange={event => updateInvoice('note', event.target.value)}/></label>
-        <div className="partner-invoice-totals" aria-live="polite"><span>وزن واقعی کالاها: <b data-partner-physical-weight>{fmt(totals.actualWeight)} گرم</b></span><span>وزن معادل کالاها: <b>{fmt(totals.weight750)} گرم ۷۵۰</b></span><span>اجرت درصدی: <b>{fmt(totals.laborGold)} گرم</b></span><span>اجرت ریالی به طلا: <b>{fmt(totals.fixedLaborGold)} گرم</b></span><span>هزینه‌ها به طلا: <b>{fmt(totals.otherCostsGold)} گرم</b></span><span>سود همکار: <b>{fmt(totals.profitGold)} گرم</b></span><strong data-partner-preview-gold-debit>جمع بدهکار: {fmt(totals.goldDebit)} گرم ۷۵۰</strong><strong data-partner-preview-gold-credit>جمع بستانکار: {fmt(totals.goldCredit)} گرم ۷۵۰</strong>{totals.cashGoldCredit > 0 && <span>معادل پرداخت پولی: <b>{fmt(totals.cashGoldCredit)} گرم</b></span>}<strong data-partner-preview-balance>مانده طلای همکار پس از ثبت: {balanceText(statement.goldBalance + (invoice.calculationVersion === 3 ? 1 : selling ? -1 : 1) * (totals.goldDebit - totals.goldCredit), 'گرم ۷۵۰')}</strong></div>
+        <div className="partner-invoice-totals" aria-live="polite"><span>وزن واقعی کالاها: <b data-partner-physical-weight>{fmt(totals.actualWeight)} گرم</b></span><span>وزن معادل کالاها: <b>{fmt(totals.weight750)} گرم ۷۵۰</b></span><span>اجرت درصدی: <b>{fmt(totals.laborGold)} گرم</b></span>{invoice.calculationVersion >= 2 && <><span>اجرت ریالی به طلا: <b>{fmt(totals.fixedLaborGold)} گرم</b></span><span>هزینه‌ها به طلا: <b>{fmt(totals.otherCostsGold)} گرم</b></span><span>سود همکار: <b>{fmt(totals.profitGold)} گرم</b></span></>}<strong data-partner-preview-gold-debit>جمع بدهکار: {fmt(invoiceGoldDebit)} گرم ۷۵۰</strong><strong data-partner-preview-gold-credit>جمع بستانکار: {fmt(invoiceGoldCredit)} گرم ۷۵۰</strong>{(totals.convertedPaidTomanGold || totals.cashGoldCredit) > 0 && <span>معادل پرداخت پولی: <b>{fmt(totals.convertedPaidTomanGold || totals.cashGoldCredit)} گرم</b></span>}{invoice.calculationVersion === 1 && <strong data-partner-preview-toman-balance>مانده تومان همکار پس از ثبت: {balanceText(statement.tomanBalance + invoiceTomanBalance, 'تومان')}</strong>}<strong data-partner-preview-balance>مانده طلای همکار پس از ثبت: {balanceText(statement.goldBalance + invoiceGoldDebit - invoiceGoldCredit, 'گرم ۷۵۰')}</strong></div>
         <button type="submit" className="button button-primary" data-partner-invoice-save>{busy ? 'در حال ثبت…' : editingEntry ? 'ذخیره تغییرات سند' : 'ثبت سند همکار و به‌روزرسانی صندوق'}</button>
         {editingEntry && <button type="button" className="button button-ghost" data-partner-edit-cancel onClick={onClose}>بستن ویرایش</button>}
       </fieldset></form> : (view === 'settlement' || remittance) && canEdit ? <form data-partner-settlement-form className="partner-payment-form" onSubmit={event => submit(editingSettlement ? 'settlement-update' : 'settlement', selectedId, () => ({ ...preparePartnerSettlement(settlement), ...(editingSettlement ? { entryId: editingSettlement.id } : {}) }), event)}><fieldset disabled={locked}>
@@ -310,9 +339,9 @@ export default function PartnerCRM({ username, partners = [], documents = [], pr
         <div className="partner-form-grid"><label>نوع سند<select name="direction" value={settlement.direction} onChange={event => updateSettlement('direction', event.target.value)}><option value="credit">{remittance ? 'بستانکار · باید از همکار بگیرم' : 'پرداخت ما به همکار · بستانکار'}</option><option value="debit">{remittance ? 'بدهکار · باید به همکار بدهم' : 'دریافت از همکار · بدهکار'}</option></select></label>{!remittance && <label>روش پرداخت<select name="paymentMethod" value={settlement.paymentMethod} onChange={event => updateSettlement('paymentMethod', event.target.value)}><option value="gold">طلا</option><option value="cash">وجه نقد / انتقال وجه</option></select></label>}<label>تاریخ سند<PersianDateInput name="date" value={settlement.date} required onChange={event => updateSettlement('date', event.target.value)}/></label><NumberField label="مقدار طلای ۷۵۰ (گرم)" name="goldAmount" value={settlement.goldAmount} onChange={updateSettlement}/><NumberField label="مبلغ (تومان)" name="tomanAmount" value={settlement.tomanAmount} onChange={updateSettlement}/><TextField label={remittance ? 'نام مرجع حواله (اختیاری)' : 'نام دریافت‌کننده'} name="counterpartyName" value={settlement.counterpartyName} onChange={updateSettlement}/><TextField label={remittance ? 'شماره حواله' : 'شماره پیگیری پرداخت'} name="reference" value={settlement.reference} onChange={updateSettlement}/></div>
         <label className="partner-wide-field">شرح سند<textarea name="note" value={settlement.note} maxLength={5000} rows={2} onChange={event => updateSettlement('note', event.target.value)}/></label>
         {remittance && <div className="partner-invoice-totals" aria-live="polite"><strong>مانده طلا پس از ثبت: {balanceText(statement.goldBalance + (settlement.direction === 'debit' ? 1 : -1) * (parsePartnerNumber(settlement.goldAmount) || 0), 'گرم ۷۵۰')}</strong><strong>مانده تومان پس از ثبت: {balanceText(statement.tomanBalance + (settlement.direction === 'debit' ? 1 : -1) * (parsePartnerNumber(settlement.tomanAmount) || 0), 'تومان')}</strong></div>}
-        <button type="submit" className="button button-primary" data-partner-payment-save>{busy ? 'در حال ثبت…' : editingSettlement ? 'ذخیره تغییرات حواله' : remittance ? 'ثبت حواله' : 'ثبت سند دریافت / پرداخت'}</button>
+        <button type="submit" className="button button-primary" data-partner-payment-save>{busy ? 'در حال ثبت…' : editingSettlement ? remittance ? 'ذخیره تغییرات حواله' : 'ذخیره تغییرات سند' : remittance ? 'ثبت حواله' : 'ثبت سند دریافت / پرداخت'}</button>
         {editingSettlement && <button type="button" className="button button-ghost" data-partner-edit-cancel onClick={onClose}>بستن ویرایش</button>}
-      </fieldset></form> : <PartnerStatement key={selected.id} partner={selected} username={username} documents={documents}/>}
+      </fieldset></form> : <PartnerStatement key={selected.id} partner={selected} username={username} documents={documents} onOpenDocument={onOpenDocument} canEditDocument={canEditDocument} canEdit={canEdit} canPurchase={canPurchase} locked={locked}/>}
     </> : <div className="partner-empty partner-start"><Coins size={34}/><h2>دفتر همکاران شما آماده است</h2><p>همکار را ثبت کنید، فاکتور خرید را وارد کنید و پرداخت‌های او را در همان پرونده ثبت کنید.</p></div>}</main></div>
   </div>;
 }

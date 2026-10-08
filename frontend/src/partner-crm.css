@@ -1,5 +1,6 @@
 .partner-document-dialog{width:min(1200px,calc(100vw - 28px));max-width:calc(100vw - 28px);max-height:calc(100dvh - 32px);padding:0;border:1px solid #dfe6da;border-radius:14px;background:#fff;color:#355849;overflow:auto;box-sizing:border-box}
 .partner-document-dialog::backdrop{background:rgba(25,42,34,.48)}
+.partner-entry-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:145px}.partner-entry-actions .partner-table-action{display:inline-flex;align-items:center;justify-content:center;gap:5px;white-space:nowrap}.partner-entry-actions [data-partner-entry-view]{flex-basis:100%}
 .partner-document-dialog .partner-crm-embedded>.partner-toolbar{display:none}
 .partner-crm{padding:26px 32px;color:#355849;min-width:0;font-family:Vazirmatn,Tahoma,sans-serif}
 .partner-toolbar,.partner-section-heading,.partner-profile-heading,.partner-line-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px}
@@ -35,6 +36,8 @@
 @media(max-width:760px){.partner-crm{padding:20px 14px}.partner-columns{grid-template-columns:1fr}.partner-contact-list{max-height:250px}.partner-toolbar{align-items:stretch;flex-direction:column;gap:10px}.partner-search{max-width:none}.partner-profile{padding:16px}.partner-profile-heading{gap:10px;flex-wrap:wrap}.partner-profile-heading h2{font-size:21px}.partner-profile-editor{padding:17px}.partner-tabs{gap:7px}.partner-tabs button{flex:1 1 140px}.partner-pending{align-items:stretch;flex-direction:column}.partner-invoice-line{padding:14px}.partner-invoice-totals{gap:10px}.partner-section-heading{flex-wrap:wrap}}
 @media(max-width:430px){.partner-form-grid{grid-template-columns:1fr}.partner-balance-cards{grid-template-columns:1fr}.partner-balance-cards strong{font-size:22px}.partner-invoice-form>fieldset>.button-primary,.partner-payment-form>fieldset>.button-primary{width:100%;justify-content:center}}
 @media print{
+  body.partner-print-open:has(>.partner-document-dialog)>:not(.partner-document-dialog){display:none!important}
+  body.partner-print-open .partner-document-dialog{max-height:none!important}
   @page partner-document { size:A5 portrait; margin:7mm; }
   html:has(body.partner-print-open){background:transparent!important}
   body.partner-print-open:has(.partner-document-dialog),

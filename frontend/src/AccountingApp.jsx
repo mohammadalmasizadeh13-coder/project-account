@@ -21,6 +21,7 @@ import { profitPercentInput } from './profitDefaults';
 import { isMiscPurchase, miscGoldDefaults, miscGoldWeight750 } from './miscGold';
 import { cleanInvoiceLine, expandInvoiceDraft, invoiceHeader, invoiceHeaderFields, invoiceLineForms, invoiceLinePreview } from './invoiceDraft';
 import { groupInvoices, partnerDocumentRows } from './invoices';
+import { partnerEntryForDocument } from './partnerLedger';
 import { invoiceSettlement, settlementRowAmount } from './invoiceSettlement';
 import InvoiceDetails from './InvoiceDetails';
 import DocumentEditor, { canManageInvoice } from './DocumentEditor';
@@ -702,14 +703,25 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     applyStockWorkspace(saved);
     return saved.createdId;
   };
+  const canEditPartnerEntry = entry => Boolean(entry && has('partners.write')
+    && (!entry.goldBalancePurchase || has('goldPurchases.write'))
+    && (entry.type === 'settlement' ? !entry.linkedEntryId : ['purchase', 'sale', 'mixed'].includes(entry.type) && has('documents.write')));
+  const openPartnerDocument = async (partnerId, entryId, editing = false) => {
+    try {
+      await ownerStorage.flush();
+      const partner = partners.find(item => item.id === partnerId);
+      const entry = partnerEntryForDocument(partner, entryId);
+      if (!entry) throw new Error('سند مرتبط با این گردش پیدا نشد؛ صفحه را تازه کنید.');
+      if (editing && !canEditPartnerEntry(entry)) throw new Error('دسترسی ویرایش این سند همکار را ندارید.');
+      setSelectedInvoice(null);
+      setPartnerDocumentAction({ partnerId, entryId: entry.id, editing });
+    } catch (error) { setStorageMessage(error.message); }
+  };
   const openDocumentAction = async (invoice, mode) => {
+    if (invoice.partnerEntryId) return openPartnerDocument(invoice.partnerId, invoice.partnerEntryId, mode === 'edit');
     try {
       await ownerStorage.flush();
       setSelectedInvoice(null);
-      if (invoice.partnerEntryId) {
-        setPartnerDocumentAction({ partnerId: invoice.partnerId, entryId: invoice.partnerEntryId, editing: mode === 'edit' });
-        return;
-      }
       const first = invoice.rows[0];
       const legacySet = !first.transactionId && first.setId ? documents.filter(row => !row.transactionId && row.setId === first.setId && row.type === first.type && String(row.customerId ?? '') === String(first.customerId ?? '') && row.customerName === first.customerName && row.date === first.date) : null;
       const editingInvoice = legacySet ? { ...invoice, rows: legacySet, amount: legacySet.reduce((sum, row) => sum + getDocumentAmount(row), 0), gramDebt: legacySet.reduce((sum, row) => sum + toNumber(row.gramDebt), 0), rialDebt: legacySet.reduce((sum, row) => sum + toNumber(row.rialDebt), 0) } : invoice;
@@ -727,6 +739,14 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const performPartnerAction = async (action, identifier, payload, requestId) => {
     const saved = await ownerStorage.mutatePartner(action, identifier, payload, requestId);
     applyStockWorkspace(saved);
+    if (['invoice', 'settlement'].includes(action)) {
+      const partner = saved.data.partners?.find(item => item.id === identifier);
+      const entry = partnerEntryForDocument(partner, saved.createdId);
+      if (entry) {
+        setSelectedInvoice(null);
+        setPartnerDocumentAction({ partnerId: identifier, entryId: entry.id, editing: false });
+      }
+    }
     return saved;
   };
 
@@ -1403,7 +1423,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       {user.role === 'owner' && <div hidden={activeTool !== 'opening'}><OpeningInventoryPage username={username} prices={savedPrices} onComplete={completeOpeningInventory}/></div>}
       {settingsVisited && <div hidden={activeTool !== 'settings'}><StoreSettings user={user} onSessionChanged={onSessionChanged} migrationNotice={migrationNotice} onImported={onImported}/></div>}
       {activeSection === 'crm' && <nav className="section-tabs" aria-label="گروه طرف حساب">{has('customers.read') && <button type="button" data-crm-group="customers" aria-pressed={!['partners', 'partner-invoice'].includes(activeTool)} onClick={() => openTool('crm')}>مشتریان</button>}{has('partners.read') && <button type="button" data-crm-group="partners" aria-pressed={['partners', 'partner-invoice'].includes(activeTool)} onClick={() => openTool('partners')}>همکاران تجاری</button>}</nav>}
-      {activeTool === 'settings' ? null : activeTool === 'partners' ? <PartnerCRM key={activeTool} username={username} partners={partners} documents={documents} prices={savedPrices} onAction={performPartnerAction} readOnly={!has('partners.write')} canPurchase={has('partners.write') && has('documents.write')} initialAction={activeTool === 'partner-invoice' ? 'invoice' : ''}/> : activeTool === 'home' && user.role !== 'owner' ? <div><p className="form-message">{username}</p>{canOpen('entries') && <ToolHub kind="entries" onOpen={openTool} canOpen={canOpen}/>}<ToolHub kind="reports" onOpen={openTool} canOpen={canOpen}/></div> : activeTool === 'home' ? <HomePage username={username} documents={documents} prices={savedPrices} assets={assets} customers={customers} cheques={cheques} today={today} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount }} onOpen={openTool}/> : ['entries','reports'].includes(activeTool) ? <ToolHub kind={activeTool} onOpen={openTool} canOpen={canOpen}/> : ['dashboard','products','balance'].includes(activeTool) ? <SalesDashboard key={activeTool} view={{ dashboard:'sales', products:'products', balance:'balance' }[activeTool]} canCreateGoldPurchase={canOpen('gold-entry')} onOpen={openTool} username={username} documents={documents} prices={savedPrices} goldPurchases={goldPurchases} onSaveGoldPurchases={has('goldPurchases.write') ? persistGoldPurchases : undefined} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount, number: toNumber }}/> : activeTool === 'profit' ? <ProfitPage documents={documents} today={today} onOpen={openTool} canOpen={canOpen}/> : activeTool === 'rates' ? <RatesPage prices={savedPrices} onOpen={has('prices.write') ? openTool : undefined}/> : activeTool === 'customer-reports' ? <CustomerReports customers={customers} documents={documents} today={today} onSelect={openCustomer}/> : activeTool === 'cheque-reports' ? <ChequeReportPage cheques={cheques} today={today} onEdit={has('cheques.write') ? openCheque : undefined}/> : activeTool === 'opening' ? null : activeTool === 'vault' ? <><InventoryVault report={stock} assets={assets} prices={savedPrices} onCreateItem={has('documents.write') ? createStockItem : undefined} onEditItem={has('documents.write') ? (id, changes) => mutateStockItem(id, changes) : undefined} onDeleteItem={has('documents.write') ? id => mutateStockItem(id, null) : undefined} canEditPurchases={has('customers.write')} onPrices={has('prices.write') ? () => openTool('pricing') : undefined} onSell={canOpen('register') ? sellStock : undefined} onSellSet={canOpen('register') ? sellSet : undefined} onReceive={canOpen('partner-invoice') ? () => openTool('partner-crafted-purchase') : undefined} onLinkSale={has('documents.write') ? (saleId, sourceId) => persistDocuments(linkHistoricalSale(currentDocuments(), saleId, sourceId)) : undefined}/></> : activeTool === 'cheques' ? <ChequeManager key={selectedChequeId} cheques={cheques} customers={customers} onSave={persistCheques} parseNumber={toNumber} today={today} initialChequeId={selectedChequeId}/> : ['crm','crm-occasions','customer-entry','settlement-entry'].includes(activeTool) ? <div className="workspace-tools crm-section-page"><CustomerCRM key={activeTool + selectedCrmId} customers={customers} documents={documents} onSave={saveCustomerProfile} readOnly={!has('customers.write')} parseNumber={toNumber} today={today} initialSelectedId={selectedCrmId} initialView={activeTool === 'crm-occasions' ? 'occasions' : 'customers'} initialAction={activeTool === 'customer-entry' ? 'new' : activeTool === 'settlement-entry' ? 'settlement' : ''}/></div> : <div className="workspace-tools">
+      {activeTool === 'settings' ? null : activeTool === 'partners' ? <PartnerCRM key={activeTool} username={username} partners={partners} documents={documents} prices={savedPrices} onAction={performPartnerAction} onOpenDocument={openPartnerDocument} canEditDocument={canEditPartnerEntry} readOnly={!has('partners.write')} canPurchase={has('partners.write') && has('documents.write')} initialAction={activeTool === 'partner-invoice' ? 'invoice' : ''}/> : activeTool === 'home' && user.role !== 'owner' ? <div><p className="form-message">{username}</p>{canOpen('entries') && <ToolHub kind="entries" onOpen={openTool} canOpen={canOpen}/>}<ToolHub kind="reports" onOpen={openTool} canOpen={canOpen}/></div> : activeTool === 'home' ? <HomePage username={username} documents={documents} prices={savedPrices} assets={assets} customers={customers} cheques={cheques} today={today} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount }} onOpen={openTool}/> : ['entries','reports'].includes(activeTool) ? <ToolHub kind={activeTool} onOpen={openTool} canOpen={canOpen}/> : ['dashboard','products','balance'].includes(activeTool) ? <SalesDashboard key={activeTool} view={{ dashboard:'sales', products:'products', balance:'balance' }[activeTool]} canCreateGoldPurchase={canOpen('gold-entry')} onOpen={openTool} username={username} documents={documents} prices={savedPrices} goldPurchases={goldPurchases} onSaveGoldPurchases={has('goldPurchases.write') ? persistGoldPurchases : undefined} helpers={{ quantity: getDocumentQuantity, weight: getDocumentWeight, amount: getDocumentAmount, number: toNumber }}/> : activeTool === 'profit' ? <ProfitPage documents={documents} today={today} onOpen={openTool} canOpen={canOpen}/> : activeTool === 'rates' ? <RatesPage prices={savedPrices} onOpen={has('prices.write') ? openTool : undefined}/> : activeTool === 'customer-reports' ? <CustomerReports customers={customers} documents={documents} today={today} onSelect={openCustomer}/> : activeTool === 'cheque-reports' ? <ChequeReportPage cheques={cheques} today={today} onEdit={has('cheques.write') ? openCheque : undefined}/> : activeTool === 'opening' ? null : activeTool === 'vault' ? <><InventoryVault report={stock} assets={assets} prices={savedPrices} onCreateItem={has('documents.write') ? createStockItem : undefined} onEditItem={has('documents.write') ? (id, changes) => mutateStockItem(id, changes) : undefined} onDeleteItem={has('documents.write') ? id => mutateStockItem(id, null) : undefined} canEditPurchases={has('customers.write')} onPrices={has('prices.write') ? () => openTool('pricing') : undefined} onSell={canOpen('register') ? sellStock : undefined} onSellSet={canOpen('register') ? sellSet : undefined} onReceive={canOpen('partner-invoice') ? () => openTool('partner-crafted-purchase') : undefined} onLinkSale={has('documents.write') ? (saleId, sourceId) => persistDocuments(linkHistoricalSale(currentDocuments(), saleId, sourceId)) : undefined}/></> : activeTool === 'cheques' ? <ChequeManager key={selectedChequeId} cheques={cheques} customers={customers} onSave={persistCheques} parseNumber={toNumber} today={today} initialChequeId={selectedChequeId}/> : ['crm','crm-occasions','customer-entry','settlement-entry'].includes(activeTool) ? <div className="workspace-tools crm-section-page"><CustomerCRM key={activeTool + selectedCrmId} customers={customers} documents={documents} onSave={saveCustomerProfile} readOnly={!has('customers.write')} parseNumber={toNumber} today={today} initialSelectedId={selectedCrmId} initialView={activeTool === 'crm-occasions' ? 'occasions' : 'customers'} initialAction={activeTool === 'customer-entry' ? 'new' : activeTool === 'settlement-entry' ? 'settlement' : ''}/></div> : <div className="workspace-tools">
         <div className="account-main-panel">
           <div className="panel-heading"><div><span>{({ register: 'ثبت سند مشتری', expense: 'ثبت هزینه فروشگاه', 'partner-invoice': 'ثبت سند همکار', 'partner-remittance': 'حواله همکار', search: 'جستجو در سندها', cheques: 'مدیریت چک‌ها', pricing: 'ثبت نرخ طلا، سکه و ارز', crm: 'پرونده مشتریان' })[activeTool]}</span></div></div>
           <div className="ledger-panel">
@@ -1429,7 +1449,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
             {partnerEntry && <section className="document-form partner-document-entry" data-partner-document-entry data-document-scope="partner">
               {documentTypeSelector}
-              <PartnerCRM key={`${partnerEntryType}:${goldBalancePurchase}`} goldBalancePurchase={goldBalancePurchase} embedded username={username} partners={partners} documents={documents} prices={savedPrices} onAction={performPartnerAction}
+              <PartnerCRM key={`${partnerEntryType}:${goldBalancePurchase}`} goldBalancePurchase={goldBalancePurchase} embedded username={username} partners={partners} documents={documents} prices={savedPrices} onAction={performPartnerAction} onOpenDocument={openPartnerDocument} canEditDocument={canEditPartnerEntry}
                 readOnly={!has('partners.write')} canPurchase={has('partners.write') && has('documents.write')}
                 invoiceDirection={partnerEntryType.endsWith('-sale') ? 'sale' : 'purchase'} initialAction={partnerEntryType === 'partner-remittance' ? 'remittance' : 'invoice'} initialCategory={partnerDocumentTypes.find(type => type.value === partnerEntryType)?.category || 'crafted'}/>
             </section>}
@@ -1647,7 +1667,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       </details>}
       </div>}
     </div>
-    {editingPartnerEntry && <PartnerDocumentDialog key={editingPartnerEntry.id} partner={editingPartner} entry={editingPartnerEntry} username={username} documents={documents} prices={savedPrices} onAction={performPartnerAction} editing={partnerDocumentAction.editing} canEdit={has('partners.write') && (!editingPartnerEntry.goldBalancePurchase || has('goldPurchases.write')) && (has('documents.write') || (editingPartnerEntry.type === 'settlement' && editingPartnerEntry.paymentMethod === 'remittance' && !editingPartnerEntry.linkedEntryId))} onClose={() => setPartnerDocumentAction(null)} onSaved={() => { setPartnerDocumentAction(null); setStorageMessage('تغییرات سند همکار ذخیره شد و مانده حساب به‌روز شد.'); }}/>}
+    {editingPartnerEntry && <PartnerDocumentDialog key={editingPartnerEntry.id} partner={editingPartner} entry={editingPartnerEntry} username={username} documents={documents} prices={savedPrices} onAction={performPartnerAction} editing={partnerDocumentAction.editing} canEdit={canEditPartnerEntry(editingPartnerEntry)} onClose={() => setPartnerDocumentAction(null)} onSaved={() => { setPartnerDocumentAction(current => current && ({ ...current, editing: false })); setStorageMessage('تغییرات سند همکار ذخیره شد و مانده حساب به‌روز شد.'); }}/>}
     <InvoiceDetails invoice={selectedInvoice} onClose={() => setSelectedInvoice(null)} onEdit={selectedInvoice && canChangeDocument(selectedInvoice) ? () => openDocumentAction(selectedInvoice, 'edit') : undefined} onDelete={selectedInvoice && canChangeDocument(selectedInvoice) ? () => openDocumentAction(selectedInvoice, 'delete') : undefined}/>
     {documentAction && <DocumentEditor {...documentAction} customers={customers} onSave={mutateSavedDocument} onClose={() => setDocumentAction(null)}/>}
   </section>

@@ -23,7 +23,17 @@ export async function checkPartnerDocuments({ cdp, evaluate, ready, until, go, f
   await fill('[data-partner-profile] [name="name"]', 'همکار آزمایش حواله');
   await click('[data-partner-save]');
   await ready('[data-partner-settlement-form]');
-  const success = () => until(`document.querySelector('.partner-crm .form-message.success')`);
+  const savedPreview = async () => {
+    await ready('[data-partner-document-dialog] [data-invoice-print]');
+    await ready('[data-partner-document-dialog] [data-invoice-edit]');
+    assert.equal(await evaluate(`Boolean(document.querySelector('[data-partner-document-dialog] [data-partner-invoice], [data-partner-document-dialog] [data-partner-settlement-form]'))`), false, 'Saved partner document shows its preview');
+    await click('[data-partner-document-close]');
+    await until(`!document.querySelector('[data-partner-document-dialog]')`);
+  };
+  const success = async () => {
+    await until(`document.querySelector('.partner-crm .form-message.success')`);
+    await savedPreview();
+  };
   const standaloneRemittances = [];
   for (const [direction, balance] of [['debit', 10], ['credit', 0]]) {
     await fill('[data-partner-settlement-form] [name="direction"]', direction);
@@ -169,7 +179,7 @@ export async function checkPartnerDocuments({ cdp, evaluate, ready, until, go, f
   await setRow(2, { goldAmount: '۸' });
   await setRow(3, { meltedFee: '۱۲۰۰۰۰۰۰۰' });
   await click('[data-partner-invoice-save]');
-  await until(`!document.querySelector('[data-partner-document-dialog]')`);
+  await savedPreview();
   const afterEdit = (await workspace()).data;
   const editedEntry = afterEdit.partners[0].entries.find(saved => saved.id === entry.id);
   assert.equal(afterEdit.documents.length, afterMixed.documents.length);
@@ -222,7 +232,7 @@ export async function checkPartnerDocuments({ cdp, evaluate, ready, until, go, f
     await fill(`${standaloneForm} [name="${name}"]`, value);
   }
   await click('[data-partner-document-dialog] [data-partner-payment-save]');
-  await until(`!document.querySelector('[data-partner-document-dialog]')`);
+  await savedPreview();
   const afterStandaloneEdit = (await workspace()).data;
   const standaloneEdited = afterStandaloneEdit.partners[0].entries.find(saved => saved.id === standalone.id);
   assert.equal(afterStandaloneEdit.partners[0].entries.length, remittanceOnly.partners[0].entries.length);
