@@ -6,7 +6,7 @@ import { cp, readFile, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { navigateWorkspace } from './browser-navigation.mjs';
-import { formatPersianDate, persianToIso } from './src/persianDate.js';
+import { persianToIso } from './src/persianDate.js';
 
 // Run after building from frontend. All financial records and Chrome data are disposable.
 const origin = 'http://127.0.0.1:4196';
@@ -142,14 +142,16 @@ try {
     customerAddress: 'تهران، خیابان آزمون\nپلاک ۱۲، واحد ۳',
   };
   const paymentMethod = 'بخشی کارت به کارت به حساب فروشگاه\nباقی مبلغ با چک شماره ۱۲۳ در پایان ماه';
-  const checkSheet = async () => {
+  const checkSheet = async (customerIdentity = identity, paymentText = paymentMethod) => {
     await ready('.invoice-sheet');
-    assert.equal(await text('[data-invoice-customer-phone]'), identity.customerPhone);
-    assert.equal(await text('[data-invoice-customer-birth-date]'), formatPersianDate(identity.customerBirthDate));
-    assert.equal(await text('[data-invoice-customer-national-id]'), identity.customerNationalId);
-    assert.equal(await text('[data-invoice-customer-address]'), identity.customerAddress);
-    assert.equal(await text('[data-invoice-payment-method]'), paymentMethod);
-    assert.ok((await text('.invoice-notes')).includes('نحوه پرداخت'), 'Payment text has a readable Persian heading');
+    assert.ok((await text('.invoice-customer')).includes(customerIdentity.customerName), 'The buyer or seller name stays in the invoice header');
+    for (const selector of ['.invoice-item-code', '.invoice-customer-details', '[data-invoice-customer-phone]', '[data-invoice-customer-birth-date]', '[data-invoice-customer-national-id]', '[data-invoice-customer-address]', '[data-invoice-payment-method]']) {
+      assert.equal(await evaluate(`document.querySelectorAll('.invoice-sheet '+${JSON.stringify(selector)}).length`), 0, `${selector} is absent from the customer invoice`);
+    }
+    const sheet = await text('.invoice-sheet');
+    assert.ok(!sheet.includes(paymentText), 'Saved free-text payment instructions stay off the customer invoice');
+    assert.ok(!sheet.includes('NG-ID-001') && !sheet.includes('NG-ID-002'), 'Internal product codes stay off the customer invoice');
+    assert.ok((await text('.invoice-footer')).includes('محاسبه تمامی کار های ساخته با احتساب ۷ درصد میباشد'), 'The requested crafted-work notice appears at the bottom');
   };
   await cdp('Page.enable'); await cdp('Runtime.enable');
   await cdp('Fetch.enable', { patterns: [{ urlPattern: '*fonts.googleapis.com*' }, { urlPattern: '*fonts.gstatic.com*' }] });
@@ -197,6 +199,8 @@ try {
   assert.equal(await value('[name="paymentMethod"]'), paymentMethod, 'Reload and the payment step retain arbitrary payment text');
   await click('[data-invoice-payment-confirm]');
   await checkSheet();
+  assert.ok(await text('[data-invoice-cash-paid]'), 'The cash settlement amount stays visible');
+  assert.equal(await evaluate(`document.querySelector('[data-invoice-settlement-rate]').previousElementSibling.textContent.trim()`), 'نرخ هر گرم طلای ۱۸ عیار', 'The settlement rate uses the customer-facing gold-rate label');
   const saved = await workspace();
   const rows = saved.data.documents.filter(row => row.customerName === identity.customerName).sort((a, b) => a.invoiceLine - b.invoiceLine);
   assert.equal(rows.length, 2, 'Both rows save together');
@@ -209,14 +213,14 @@ try {
   for (const [key, documentKey] of Object.entries({ phone: 'customerPhone', birthDate: 'customerBirthDate', address: 'customerAddress', nationalId: 'customerNationalId' })) assert.equal(customer[key], identity[documentKey]);
   await screenshot('customer-details-invoice-desktop', '.invoice-sheet');
   await cdp('Emulation.setEmulatedMedia', { media: 'print' });
-  for (const selector of ['[data-invoice-customer-phone]', '[data-invoice-customer-birth-date]', '[data-invoice-customer-national-id]', '[data-invoice-customer-address]', '[data-invoice-payment-method]']) {
+  await checkSheet();
+  for (const selector of ['.invoice-customer', '[data-invoice-cash-paid]', '[data-invoice-settlement-rate]', '[data-invoice-total]', '.invoice-footer']) {
     assert.ok(await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});return el.getBoundingClientRect().height>0&&getComputedStyle(el).visibility!=='hidden';})()`), `${selector} remains visible in print`);
   }
-  assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-invoice-payment-method]')).whiteSpace`), 'pre-wrap', 'Payment line breaks remain printable');
   await cdp('Emulation.setEmulatedMedia', { media: '' });
   const pdf = Buffer.from((await cdp('Page.printToPDF', { printBackground: true, preferCSSPageSize: true })).data, 'base64');
   await writeFile('artifacts/customer-details-invoice-print.pdf', pdf);
-  assert.equal((pdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1, 'The complete two-row invoice fits on one A4 page');
+  assert.equal((pdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1, 'The complete two-row invoice fits on one A5 page');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Customer details fit the mobile viewport');
   await screenshot('customer-details-invoice-mobile', '.invoice-dialog');
@@ -268,12 +272,10 @@ try {
   for (const [key, supplied] of Object.entries(purchaseCustomer)) assert.equal(purchase[key], supplied);
   await tool('search');
   await click(`.document-card[data-invoice-id="${purchase.transactionId}"] [data-invoice-view]`);
-  await ready('.invoice-sheet');
-  assert.equal(await text('[data-invoice-payment-method]'), purchasePayment, 'Purchase print includes the payment text');
-  assert.equal(await text('[data-invoice-customer-national-id]'), purchaseCustomer.customerNationalId);
+  await checkSheet(purchaseCustomer, purchasePayment);
   await click('[data-invoice-close]');
   assert.equal(errors.length, 0, `No uncaught browser exceptions: ${JSON.stringify(errors)}`);
-  console.log('Customer details browser checks passed: complete customer entry, Persian birthday and national ID, two-row draft reload, free text payment for sales and purchases, saved customer profile and immutable invoice details, CRM editing, existing/new customer selection, desktop/mobile display and A4 print.');
+  console.log('Customer details browser checks passed: customer entry, draft reload, saved private customer/payment details, CRM editing, buyer/seller names and settlement amounts, hidden internal invoice details, requested footer notice, desktop/mobile display and A5 print.');
 
 } catch (error) {
   if (errors.length) console.error('Browser exceptions:', JSON.stringify(errors));

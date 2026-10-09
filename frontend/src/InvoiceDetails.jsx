@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { Printer, X } from 'lucide-react';
 import { documentBreakdown, number, quantity } from './assets';
 import { formatRecordDate } from './recordTime';
-import { formatPersianDate } from './persianDate';
 import { invoiceItemName, invoiceRowAmount } from './invoices';
 import { isMiscPurchase, miscGoldWeight750 } from './miscGold.js';
 import { coinSpec, coinSummary, isModernCoin, isOrdinaryCoin } from './coins.js';
@@ -104,14 +103,6 @@ export default function InvoiceDetails({ invoice, galleryName, accountId, onClos
   } : null;
   const isPurchase = invoice.direction === 'خرید';
   const isPartner = first.counterpartyType === 'partner';
-  const customerDetails = {
-    phone: invoice.customerPhone ?? first.customerPhone,
-    birthDate: invoice.customerBirthDate ?? first.customerBirthDate,
-    address: invoice.customerAddress ?? first.customerAddress,
-    nationalId: invoice.customerNationalId ?? first.customerNationalId,
-  };
-  const hasCustomerDetails = Object.values(customerDetails).some(value => String(value || '').trim());
-  const paymentMethod = String(invoice.paymentMethod ?? first.paymentMethod ?? '').trim();
   const notes = [...new Set(rows.map(row => String(row.note || '').trim()).filter(Boolean))];
   return createPortal(<div className="invoice-overlay" onClick={event => { if (event.target === event.currentTarget) onClose?.(); }}>
     <section className="invoice-dialog" role="dialog" aria-modal="true" aria-labelledby="invoice-title" tabIndex={-1} ref={dialogRef} dir="rtl">
@@ -138,22 +129,14 @@ export default function InvoiceDetails({ invoice, galleryName, accountId, onClos
           </dl>
         </header>
         <div className="invoice-content">
-        {hasCustomerDetails && <section className="invoice-customer-details" aria-label="مشخصات مشتری">
-          <dl>
-            {customerDetails.phone && <div><dt>شماره تماس:</dt><dd data-invoice-customer-phone><bdi dir="ltr">{customerDetails.phone}</bdi></dd></div>}
-            {customerDetails.birthDate && <div><dt>تاریخ تولد:</dt><dd data-invoice-customer-birth-date>{formatPersianDate(customerDetails.birthDate)}</dd></div>}
-            {customerDetails.nationalId && <div><dt>کد ملی:</dt><dd data-invoice-customer-national-id><bdi dir="ltr">{customerDetails.nationalId}</bdi></dd></div>}
-            {customerDetails.address && <div className="invoice-customer-address"><dt>نشانی:</dt><dd data-invoice-customer-address>{customerDetails.address}</dd></div>}
-          </dl>
-        </section>}
         <div className="invoice-table-scroll"><table className="invoice-items"><caption className="invoice-table-caption">مشخصات کالاها؛ وزن هر ردیف مجموع وزن همان کالا است. مبالغ به تومان است.</caption><colgroup><col className="invoice-col-index"/><col className="invoice-col-description"/><col className="invoice-col-wage"/><col className="invoice-col-purity"/><col className="invoice-col-weight"/><col className="invoice-col-rate"/><col className="invoice-col-amount"/></colgroup><thead><tr><th scope="col">ردیف</th><th scope="col">شرح کالا</th><th scope="col">اجرت<br/><small>درصد</small></th><th scope="col">عیار</th><th scope="col">وزن کل<br/><small>گرم</small></th><th scope="col">فی<br/><small>تومان</small></th><th scope="col">مبلغ<br/><small>تومان</small></th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.id || index} data-invoice-item={row.id || index} data-invoice-detail-line={index + 1}>
-          <td>{decimal(index + 1)}</td><td className="invoice-item-description"><strong>{invoiceItemName(row)}</strong><small>{isMiscPurchase(row) ? 'طلای متفرقه' : row.category === 'crafted' ? row.craftedKind || categories.crafted : categories[row.category] || row.typeLabel}</small>{row.productCode && <bdi className="invoice-item-code" dir="ltr">{row.productCode}</bdi>}<CoinDetails row={row}/>{isMiscPurchase(row) && <small>وزن معادل ۷۵۰: <span data-invoice-misc-weight750>{debtGrams(miscGoldWeight750(row) * quantity(row))}</span> گرم</small>}{row.category === 'melted' && <small>انگ: <bdi>{row.assayCode || '—'}</bdi>{row.laboratoryName && ` · ${row.laboratoryName}`}<br/>وزن معادل ۷۵۰: {decimal(number(row.meltedWeight) * number(row.meltedAyar || 750) / 750 * quantity(row))} گرم</small>}{row.type?.endsWith('-sale') && number(row.discountPercent) > 0 && <small data-invoice-discount-percent>تخفیف درصدی: {decimal(row.discountPercent)}٪{number(row.discountRial) > 0 && ` + ${money(row.discountRial)} تومان تخفیف ریالی`}</small>}</td>
+          <td>{decimal(index + 1)}</td><td className="invoice-item-description"><strong>{invoiceItemName(row)}</strong><small>{isMiscPurchase(row) ? 'طلای متفرقه' : row.category === 'crafted' ? row.craftedKind || categories.crafted : categories[row.category] || row.typeLabel}</small><CoinDetails row={row}/>{isMiscPurchase(row) && <small>وزن معادل ۷۵۰: <span data-invoice-misc-weight750>{debtGrams(miscGoldWeight750(row) * quantity(row))}</span> گرم</small>}{row.category === 'melted' && <small>انگ: <bdi>{row.assayCode || '—'}</bdi>{row.laboratoryName && ` · ${row.laboratoryName}`}<br/>وزن معادل ۷۵۰: {decimal(number(row.meltedWeight) * number(row.meltedAyar || 750) / 750 * quantity(row))} گرم</small>}{row.type?.endsWith('-sale') && number(row.discountPercent) > 0 && <small data-invoice-discount-percent>تخفیف درصدی: {decimal(row.discountPercent)}٪{number(row.discountRial) > 0 && ` + ${money(row.discountRial)} تومان تخفیف ریالی`}</small>}</td>
           <td data-invoice-wage>{row.category !== 'currency' && number(row.wagePercent) > 0 ? `${decimal(row.wagePercent)}٪` : ''}</td><td>{rowPurity(row) == null ? '—' : decimal(rowPurity(row))}</td><td data-invoice-weight>{rowWeight(row) == null ? '—' : decimal(rowWeight(row))}</td><td>{rowRate(row) == null ? '—' : money(rowRate(row))}{(['crafted', 'melted'].includes(row.category) || (row.category === 'coin' && isOrdinaryCoin(row))) && <small>هر گرم ۷۵۰</small>}</td><td className="invoice-row-total">{money(invoiceRowAmount(row))}</td>
         </tr>)}{Array.from({ length: Math.max(0, 4 - rows.length) }, (_, index) => <tr className="invoice-empty-row" aria-hidden="true" key={`empty-${index}`}><td>{decimal(rows.length + index + 1)}</td><td/><td/><td/><td/><td/><td/></tr>)}</tbody></table></div>
         <div className="invoice-bottom">
-          <div className="invoice-notes">{paymentMethod && <><h3>نحوه پرداخت</h3><p data-invoice-payment-method>{paymentMethod}</p></>}{notes.length > 0 && <><h3>توضیحات</h3>{notes.map(note => <p key={note}>{note}</p>)}</>}<p>تمام مبالغ به تومان است.</p>{totals.weight > 0 && <p>وزن کل کالاها: <strong data-invoice-total-weight>{decimal(totals.weight)} گرم</strong></p>}</div>
+          <div className="invoice-notes">{notes.length > 0 && <><h3>توضیحات</h3>{notes.map(note => <p key={note}>{note}</p>)}</>}<p>تمام مبالغ به تومان است.</p>{totals.weight > 0 && <p>وزن کل کالاها: <strong data-invoice-total-weight>{decimal(totals.weight)} گرم</strong></p>}</div>
           <section className="invoice-payment" aria-labelledby="invoice-payment-title"><h3 id="invoice-payment-title">جزئیات پرداخت</h3><dl className="invoice-totals">
-            {settlement && <><div><dt>{isPurchase ? 'پرداخت نقدی به فروشنده' : 'پرداخت نقدی مشتری'}</dt><dd data-invoice-cash-paid>{money(settlement.cashPaid)} تومان</dd></div><div><dt>نرخ تبدیل هر گرم طلای ۷۵۰</dt><dd data-invoice-settlement-rate>{money(settlement.goldPrice)} تومان</dd></div><div><dt>مانده تبدیل‌شده به طلا</dt><dd data-invoice-settlement-remainder>{money(settlement.remainder)} تومان</dd></div></>}
+            {settlement && <><div><dt>{isPurchase ? 'پرداخت نقدی به فروشنده' : 'پرداخت نقدی مشتری'}</dt><dd data-invoice-cash-paid>{money(settlement.cashPaid)} تومان</dd></div><div><dt>نرخ هر گرم طلای ۱۸ عیار</dt><dd data-invoice-settlement-rate>{money(settlement.goldPrice)} تومان</dd></div><div><dt>مانده تبدیل‌شده به طلا</dt><dd data-invoice-settlement-remainder>{money(settlement.remainder)} تومان</dd></div></>}
             {!settlement && number(invoice.rialDebt) !== 0 && <div><dt>{isPartner ? 'بدهی نقدی ما به همکار' : isPurchase ? 'بدهی نقدی ما به مشتری' : 'بدهی نقدی مشتری'}</dt><dd>{money(invoice.rialDebt)} تومان</dd></div>}
             {totals.costs > 0 && <div><dt>هزینه‌های دیگر</dt><dd>{money(totals.costs)} تومان</dd></div>}
             <div><dt>تخفیف</dt><dd data-invoice-discount>{money(totals.discount)} تومان</dd></div>
@@ -161,7 +144,7 @@ export default function InvoiceDetails({ invoice, galleryName, accountId, onClos
             <div className="invoice-grand-total"><dt>جمع کل:</dt><dd data-invoice-total>{money(invoice.amount)} تومان</dd></div>
           </dl></section>
         </div>
-        <footer className="invoice-footer"><div className="invoice-signatures"><span>امضا / مهر</span><span>امضای {isPurchase ? 'فروشنده' : 'خریدار'}</span></div><div className="invoice-footer-brand"><span dir="auto">{documentGalleryName}</span><span className="invoice-thanks" dir="ltr">Thank You</span></div></footer>
+        <footer className="invoice-footer"><div className="invoice-signatures"><span>امضا / مهر</span><span>امضای {isPurchase ? 'فروشنده' : 'خریدار'}</span></div><div className="invoice-footer-brand"><span dir="auto">{documentGalleryName}</span><span className="invoice-thanks" dir="ltr">Thank You</span></div><p className="invoice-footnote" data-invoice-footnote>محاسبه تمامی کار های ساخته با احتساب ۷ درصد میباشد</p></footer>
         </div>
       </article>
     </section>
