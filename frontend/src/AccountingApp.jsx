@@ -26,6 +26,8 @@ import { invoiceSettlement, settlementRowAmount } from './invoiceSettlement';
 import InvoiceDetails from './InvoiceDetails';
 import DocumentEditor, { canManageInvoice } from './DocumentEditor';
 import NumberInput from './NumberInput.jsx';
+import CoinFields from './CoinFields.jsx';
+import { coinSpec, coinSummary, isModernCoin, isOrdinaryCoin, selectCoin } from './coins.js';
 import './invoice-draft.css';
 import InventoryVault from './InventoryVault';
 import StockNameField from './StockNameField';
@@ -73,7 +75,6 @@ const partnerDocumentTypes = [
   { value: 'partner-remittance', label: 'حواله همکار', category: null },
 ];
 
-const coinTypes = coinCatalog.map(coin => coin.name);
 const coinPriceFields = Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price]));
 
 const openingCategoryMeta = {
@@ -113,6 +114,8 @@ function createEmptyDocumentForm(type = 'crafted-sale') {
     discountRial: '',
     discountPercent: '',
     coinType: 'امامی بانکی ۸۶',
+    ...selectCoin('امامی بانکی ۸۶'),
+    profitFixed: '',
     currencyType: 'USD',
     currencyRate: '',
     currencyAmount: '',
@@ -166,6 +169,8 @@ function createOpeningInventoryItem(category) {
     discountRial: '',
     discountPercent: '',
     coinType: 'امامی بانکی ۸۶',
+    ...selectCoin('امامی بانکی ۸۶'),
+    profitFixed: '',
     currencyType: 'USD',
     currencyRate: '',
     currencyAmount: '',
@@ -271,6 +276,7 @@ const getLiveDocumentAmount = (document, prices) => document.type === 'expense' 
 function getDocumentWeight(document) {
   if (isMiscPurchase(document)) return getDocumentQuantity(document) * miscGoldWeight750(document);
   if (document.category === 'crafted') return getDocumentQuantity(document) * toNumber(document.weight);
+  if (document.category === 'coin' && isOrdinaryCoin(document)) return getDocumentQuantity(document) * coinSpec(document).weight;
   if (document.category === 'coin' && document.coinType === 'پارسیان') return getDocumentQuantity(document) * toNumber(document.parsianWeight);
   if (document.category === 'melted') return getDocumentQuantity(document) * getMeltedWeight750(document);
   return 0;
@@ -289,6 +295,7 @@ function describeDocumentItem(document) {
   }
 
   if (document.category === 'coin') {
+    if (isModernCoin(document)) return `${coinSummary(document)}، ${formatDecimal(quantity)} عدد`;
     if (document.coinType === 'پارسیان') return `سکه پارسیان، ${formatDecimal(quantity)} عدد، هر عدد ${formatDecimal(document.parsianWeight)} گرم`;
     return `${document.coinType}، ${formatDecimal(document.coinCount || 1)} عدد`;
   }
@@ -305,7 +312,7 @@ function isOpeningItemBlank(item) {
   if (String(item.itemName || '').trim() || String(item.craftedKind || '').trim()) return false;
   if (item.category === 'crafted' && isJewelrySetKind(item.craftedKind)) return false;
   const customProfit = String(item.profitPercent ?? '').trim() && toNumber(item.profitPercent) !== Number(profitPercentInput('', item.category));
-  if ([item.wageFixed, item.wagePercent, item.otherCosts].some(value => String(value || '').trim()) || customProfit) return false;
+  if ([item.wageFixed, item.wagePercent, item.otherCosts, item.profitFixed].some(value => String(value || '').trim()) || customProfit) return false;
   if (item.category === 'currency') return ![item.currencyAmount, item.currencyRate, item.description, item.note].some(value => String(value || '').trim());
   if (item.category === 'crafted') {
     return !String(item.description || '').trim() && !toNumber(item.itemCount) && !toNumber(item.weight) && !String(item.note || '').trim();
@@ -323,7 +330,7 @@ function isOpeningItemBlank(item) {
 }
 
 function validateOpeningItem(item, prices) {
-  const form = { ...item, type: 'opening-' + item.category, customerName: 'موجودی اولیه', date: iranDate(), gramPrice: prices.goldGramPrice, meltedGramPrice: prices.goldGramPrice, coinPrice: String(getCoinPrice(item.coinType, prices)), currencyRate: item.currencyRate || String(currencyRate(item.currencyType, prices) || ''), wagePercent: item.wagePercent || '0' };
+  const form = { ...item, type: 'opening-' + item.category, customerName: 'موجودی اولیه', date: iranDate(), gramPrice: item.gramPrice || prices.goldGramPrice, meltedGramPrice: prices.goldGramPrice, coinPrice: item.coinPrice || String(getCoinPrice(item.coinType, prices)), currencyRate: item.currencyRate || String(currencyRate(item.currencyType, prices) || ''), wagePercent: item.wagePercent || '0' };
   if (isSeparateSetForm(form)) return Object.values(validateSetForm(form))[0] || '';
   const errors = validateDocument(form, item.category, toNumber);
   const count = stockQuantity(form);
@@ -378,6 +385,7 @@ function createOpeningDocumentFromItem(item, prices, index) {
       coinPrice: item.coinType === 'پارسیان' ? item.parsianPrice : String(getCoinPrice(item.coinType, prices) || item.coinPrice || ''),
       parsianWeight: item.parsianWeight,
       parsianPrice: item.parsianPrice,
+      ...(isModernCoin(item) ? { coinPricingVersion: 2, coinGroup: item.coinGroup, coinWeight: coinSpec(item).weight, coinAyar: coinSpec(item).ayar, coinWeight750: coinSpec(item).weight750, gramPrice: item.gramPrice || prices.goldGramPrice, coinPrice: item.coinPrice || String(getCoinPrice(item.coinType, prices) || ''), profitFixed: item.profitFixed || '0' } : {}),
     };
   }
 
@@ -532,12 +540,8 @@ function OpeningInventoryPage({ username, prices, onComplete }) {
             {isSeparateSetForm(item) && <div className="wide"><JewelrySetEditor parts={item.setParts} onChange={parts => updateItemField(item.id, 'setParts', parts)} prices={openingPrices} errors={openingErrors[item.id]}/></div>}
 
             {category === 'coin' && <>
-              <label>نوع سکه<select value={item.coinType} onChange={event => updateItemField(item.id, 'coinType', event.target.value)}>{coinTypes.map(type => <option key={type} value={type}>{type}</option>)}</select></label>
-              <label>تعداد<NumberInput inputMode="decimal" value={item.coinCount} onChange={event => updateItemField(item.id, 'coinCount', event.target.value)} placeholder="مثلاً ۱۰"/></label>
-              {item.coinType === 'پارسیان' && <>
-                <label>وزن هر عدد پارسیان<NumberInput inputMode="decimal" value={item.parsianWeight} onChange={event => updateItemField(item.id, 'parsianWeight', event.target.value)} placeholder="گرم"/></label>
-                <label>قیمت هر عدد پارسیان<NumberInput inputMode="numeric" value={item.parsianPrice} onChange={event => updateItemField(item.id, 'parsianPrice', event.target.value)} placeholder="تومان"/></label>
-              </>}
+              <CoinFields value={{ ...item, gramPrice: item.gramPrice || openingPrices.goldGramPrice, coinPrice: item.coinPrice || String(getCoinPrice(item.coinType, openingPrices) || '') }} prices={openingPrices} onChange={next => { setItems(current => current.map(row => row.id === item.id ? next : row)); setOpeningErrors(current => ({ ...current, [item.id]: {} })); setMessage(null); }}/>
+              {isModernCoin(item) && <label>سود ثابت هر سکه (تومان)<NumberInput name="profitFixed" value={item.profitFixed} onChange={event => updateItemField(item.id, 'profitFixed', event.target.value)} placeholder="اختیاری"/></label>}
             </>}
 
             {category === 'melted' && <>
@@ -652,7 +656,8 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const documentLocked = documentLocks[documentDraftKind];
   const setDocumentLocked = locked => setDocumentLocks(current => ({ ...current, [documentDraftKind]: locked }));
   const [draftError, setDraftError] = useState('');
-  const [customerDocumentForm, setCustomerDocumentForm] = useState(() => ({ ...createEmptyDocumentForm(), gramPrice: priceForm.goldGramPrice, ...initialDocumentDraft.current?.form }));
+  const [customerDocumentForm, setCustomerDocumentForm] = useState(() => ({ ...createEmptyDocumentForm(), gramPrice: priceForm.goldGramPrice, ...initialDocumentDraft.current?.form,
+    ...(initialDocumentDraft.current?.form ? { coinPricingVersion: initialDocumentDraft.current.form.coinPricingVersion } : {}) }));
   const [expenseDocumentForm, setExpenseDocumentForm] = useState(() => ({ ...createEmptyDocumentForm('expense'), ...initialExpenseDraft.current?.form }));
   const documentForm = documentDraftKind === 'expense' ? expenseDocumentForm : customerDocumentForm;
   const setDocumentForm = documentDraftKind === 'expense' ? setExpenseDocumentForm : setCustomerDocumentForm;
@@ -961,7 +966,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
   const editInvoiceRow = index => {
     if (!documentForm.invoiceCurrentEmpty) { setFormMessage({ type: 'error', text: 'ابتدا ورودی فعلی را به سند اضافه کنید یا پاک کنید، سپس ردیف دیگری را ویرایش کنید.' }); return; }
-    setDocumentForm(current => ({ ...createEmptyDocumentForm(invoiceRows[index].type), ...invoiceRows[index], ...invoiceHeader(current), invoiceRows: current.invoiceRows, invoiceEditingIndex: index, invoiceCurrentEmpty: false }));
+    setDocumentForm(current => ({ ...createEmptyDocumentForm(invoiceRows[index].type), ...invoiceRows[index], coinPricingVersion: invoiceRows[index].coinPricingVersion, ...invoiceHeader(current), invoiceRows: current.invoiceRows, invoiceEditingIndex: index, invoiceCurrentEmpty: false }));
     setStockQuery(invoiceRows[index].productCode || ''); setDocumentErrors({}); setFormMessage(null);
   };
 
@@ -1543,17 +1548,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                   </>}
                 </>}
 
-                {selectedDocumentType.category === 'coin' && <>
-                  <DocumentField name="coinType" label="نوع سکه" error={documentErrors.coinType}><select disabled={saleMode && Boolean(selectedStock)} name="coinType" value={documentForm.coinType} onChange={updateDocumentField}>{coinTypes.map(type => <option key={type} value={type}>{type}</option>)}</select></DocumentField>
-                  {documentForm.coinType === 'پارسیان' ? <>
-                    <DocumentField name="coinCount" label="تعداد" error={documentErrors.coinCount} required><NumberInput name="coinCount" inputMode="decimal" value={documentForm.coinCount} onChange={updateDocumentField} placeholder="مثلاً ۱۰"/></DocumentField>
-                    <DocumentField name="parsianWeight" label="گرم هر عدد پارسیان" error={documentErrors.parsianWeight} required><NumberInput readOnly={saleMode && Boolean(selectedStock?.parsianWeight)} name="parsianWeight" inputMode="decimal" value={documentForm.parsianWeight} onChange={updateDocumentField} placeholder="مثلاً ۱.۲"/></DocumentField>
-                    <DocumentField name="parsianPrice" label="قیمت هر عدد پارسیان" error={documentErrors.parsianPrice} required><NumberInput name="parsianPrice" inputMode="numeric" value={documentForm.parsianPrice} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
-                  </> : <>
-                    <DocumentField name="coinCount" label="تعداد" error={documentErrors.coinCount} required><NumberInput name="coinCount" inputMode="decimal" value={documentForm.coinCount} onChange={updateDocumentField} placeholder="۱"/></DocumentField>
-                    <DocumentField name="coinPrice" label="قیمت هر سکه" error={documentErrors.coinPrice} required><NumberInput name="coinPrice" inputMode="numeric" value={documentForm.coinPrice} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
-                  </>}
-                </>}
+                {selectedDocumentType.category === 'coin' && <CoinFields value={documentForm} prices={savedPrices} locked={saleMode && Boolean(selectedStock)} errors={documentErrors} onChange={next => { setDocumentForm({ ...next, invoiceCurrentEmpty: false }); setDocumentErrors({}); setFormMessage(null); }}/>}
 
                 {selectedDocumentType.category === 'melted' && <>
                   <DocumentField name="itemCount" label="تعداد قطعه" error={documentErrors.itemCount} required><NumberInput name="itemCount" inputMode="decimal" value={documentForm.itemCount} onChange={updateDocumentField} placeholder="مثلاً ۳"/></DocumentField>
@@ -1574,6 +1569,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                   <DocumentField name="wageFixed" label="اجرت ثابت هر عدد / قطعه (تومان)" error={documentErrors.wageFixed}><NumberInput name="wageFixed" inputMode="decimal" value={documentForm.wageFixed} onChange={updateDocumentField} placeholder="اختیاری"/></DocumentField>
                 </>}
                 <DocumentField name="otherCosts" label="هزینه‌های دیگر هر واحد (تومان)" error={documentErrors.otherCosts}><NumberInput name="otherCosts" inputMode="decimal" value={documentForm.otherCosts} onChange={updateDocumentField} placeholder="اختیاری"/></DocumentField>
+                {selectedDocumentType.category === 'coin' && isModernCoin(documentForm) && <DocumentField name="profitFixed" label="سود ثابت هر سکه (تومان)" error={documentErrors.profitFixed}><NumberInput name="profitFixed" value={documentForm.profitFixed ?? ''} onChange={updateDocumentField} placeholder="اختیاری"/></DocumentField>}
                 {!miscMode && <DocumentField name="profitPercent" label={saleMode ? 'درصد سود فروشنده' : 'سود درصدی'} error={documentErrors.profitPercent}><NumberInput name="profitPercent" inputMode="decimal" value={documentForm.profitPercent} onChange={updateDocumentField} placeholder={selectedDocumentType.category === 'crafted' ? 'خالی = ۷٪' : 'مثلاً ۷'}/></DocumentField>}
                 {selectedDocumentType.value.endsWith('-sale') && <>
                   <DocumentField name="discountRial" label="تخفیف ریالی" error={documentErrors.discountRial}><NumberInput name="discountRial" inputMode="numeric" value={documentForm.discountRial} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>

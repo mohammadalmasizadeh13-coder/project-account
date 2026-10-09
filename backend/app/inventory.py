@@ -27,11 +27,11 @@ except ZoneInfoNotFoundError:
 TEXT_FIELDS = {"itemName", "description", "note"}
 ECONOMIC_FIELDS = {
     "crafted": {"weight", "ayar", "itemCount", "wagePercent", "wageFixed", "craftedKind"},
-    "coin": {"coinType", "coinCount", "parsianWeight", "wagePercent", "wageFixed"},
+    "coin": {"coinType", "coinCount", "parsianWeight", "wagePercent", "wageFixed", "coinPricingVersion", "coinGroup", "coinWeight", "coinAyar", "coinWeight750", "profitFixed"},
     "melted": {"meltedWeight", "meltedAyar", "itemCount", "assayCode", "laboratoryName", "wagePercent", "wageFixed"},
     "currency": {"currencyType", "currencyAmount"},
 }
-STRING_FIELDS = TEXT_FIELDS | {"craftedKind", "coinType", "currencyType", "assayCode", "laboratoryName"}
+STRING_FIELDS = TEXT_FIELDS | {"craftedKind", "coinType", "coinGroup", "currencyType", "assayCode", "laboratoryName"}
 LINKED_PROTECTED_FIELDS = set().union(*ECONOMIC_FIELDS.values()) | {
     "category", "source", "type", "direction", "productCode", "date", "customerId",
     "gramPrice", "meltedGramPrice", "coinPrice", "parsianPrice", "currencyRate", "profitPercent", "otherCosts",
@@ -44,6 +44,11 @@ CURRENCIES = {"USD", "EUR", "AED", "GBP", "TRY"}
 COIN_RATE_FIELDS = {"امامی بانکی ۸۶": "bankEmami86Price", "نیم سکه بانکی ۸۶": "bankHalf86Price",
     "ربع سکه بانکی ۸۶": "bankQuarter86Price", "سکه یک گرمی بانکی ۸۶": "bankOneGram86Price", "امامی": "emamiCoinPrice",
     "تمام": "tamamCoinPrice", "نیم": "halfCoinPrice", "ربع": "quarterCoinPrice"}
+BANK_COINS = {"امامی بانکی ۸۶", "نیم سکه بانکی ۸۶", "ربع سکه بانکی ۸۶", "سکه یک گرمی بانکی ۸۶"}
+ORDINARY_COIN_SPECS = {"تمام عادی": ("8.133", "900"), "نیم عادی": ("4.066", "900"), "ربع عادی": ("2.022", "900")}
+ORDINARY_COINS = {*ORDINARY_COIN_SPECS, "پارسیان", "گل رز", "سایر"}
+COIN_PHYSICAL_FIELDS = ("coinPricingVersion", "coinGroup", "coinType", "coinWeight", "coinAyar", "coinWeight750", "parsianWeight")
+COINS |= ORDINARY_COINS
 CURRENCY_RATE_FIELDS = {"USD": "usdPrice", "EUR": "eurPrice", "AED": "aedPrice", "GBP": "gbpPrice", "TRY": "tryPrice"}
 KINDS = {"النگو", "دستبند", "گردنبند", "زنجیر", "انگشتر", "گوشواره", "آویز و پلاک", "نیم‌ست", "ست", "سرویس", "پابند", "سایر"}
 NUMERIC_FIELDS = (set().union(*ECONOMIC_FIELDS.values()) - STRING_FIELDS) | {
@@ -70,6 +75,7 @@ def is_sale(document):
 
 
 def validate_stock_identity(document):
+    normalize_coin_specs(document)
     name = document.get("itemName")
     if not isinstance(name, str) or not name.strip():
         raise HTTPException(422, "نام کالا را وارد کنید.")
@@ -133,6 +139,64 @@ def decimal_output(value):
     return int(value) if value == value.to_integral_value() else float(value)
 
 
+def is_priced_coin(document):
+    return document.get("category") == "coin" and number(document.get("coinPricingVersion")) == 2
+
+
+def is_ordinary_coin(document):
+    return is_priced_coin(document) and document.get("coinGroup") == "ordinary"
+
+
+def normalize_coin_specs(document):
+    """Versioned coins keep physical grams separate from their 750 equivalent."""
+    if document.get("category") != "coin":
+        return document
+    if "coinPricingVersion" not in document:
+        if isinstance(document.get("coinType"), str) and document["coinType"] in ORDINARY_COINS - {"پارسیان"}:
+            raise HTTPException(422, "نسخهٔ محاسبه و گروه سکه را مشخص کنید.")
+        return document
+    if number(document.get("coinPricingVersion")) != 2:
+        raise HTTPException(422, "نسخهٔ محاسبهٔ سکه معتبر نیست.")
+    document["coinPricingVersion"] = 2
+    group, kind = document.get("coinGroup"), document.get("coinType")
+    if not isinstance(kind, str) or not isinstance(group, str) or group not in {"bank", "ordinary"} or kind not in (BANK_COINS if group == "bank" else ORDINARY_COINS):
+        raise HTTPException(422, "گروه و نوع سکه با هم مطابقت ندارند.")
+    for field in ("parsianWeight", "parsianPrice"):
+        document.pop(field, None)
+    numeric(document.get("profitFixed"), "سود ثابت هر سکه", default=0)
+    if group == "ordinary":
+        if kind in ORDINARY_COIN_SPECS:
+            document["coinWeight"], document["coinAyar"] = ORDINARY_COIN_SPECS[kind]
+        weight = numeric(document.get("coinWeight"), "وزن ترازوی هر سکه", minimum=Decimal("0.000001"), maximum=Decimal("100000"))
+        purity = numeric(document.get("coinAyar"), "عیار اصلی سکه", minimum=Decimal(1), maximum=Decimal(1000))
+        with localcontext() as context:
+            context.prec = 60
+            document["coinWeight750"] = decimal_output(weight * purity / 750)
+    else:
+        for field in ("coinWeight", "coinAyar", "coinWeight750"):
+            document.pop(field, None)
+    return document
+
+
+def coin_rate_field(document):
+    if is_ordinary_coin(document):
+        return "gramPrice", "goldGramPrice"
+    if not is_priced_coin(document) and document.get("coinType") == "پارسیان":
+        return "parsianPrice", None
+    return "coinPrice", COIN_RATE_FIELDS.get(document.get("coinType"))
+
+
+def coin_base(document, rate):
+    count = quantity(document)
+    if is_ordinary_coin(document):
+        return count * number(document.get("coinWeight")) * number(document.get("coinAyar")) / 750 * rate
+    return count * rate
+
+
+def coin_fixed_profit(document):
+    return quantity(document) * numeric(document.get("profitFixed"), "سود ثابت هر سکه", default=0) if is_priced_coin(document) else Decimal(0)
+
+
 def quantity(document):
     category = document["category"]
     field = "currencyAmount" if category == "currency" else "coinCount" if category == "coin" else "itemCount"
@@ -143,6 +207,7 @@ def quantity(document):
 
 
 def validate_item(document):
+    normalize_coin_specs(document)
     quantity(document)
     category = document["category"]
     if category in {"crafted", "melted"}:
@@ -155,7 +220,7 @@ def validate_item(document):
     if category == "coin":
         if document.get("coinType") not in COINS:
             raise HTTPException(422, "نوع سکه معتبر نیست.")
-        if document["coinType"] == "پارسیان":
+        if document["coinType"] == "پارسیان" and not is_priced_coin(document):
             numeric(document.get("parsianWeight"), "وزن پارسیان", minimum=Decimal("0.000001"), maximum=Decimal("100000"))
     if category == "currency" and document.get("currencyType") not in CURRENCIES:
         raise HTTPException(422, "نوع ارز معتبر نیست.")
@@ -195,12 +260,13 @@ def amount(document, prices=None):
         elif category == "melted":
             base = count * number(document.get("meltedWeight")) * number(document.get("meltedAyar") or 750) / 750 * rate("meltedGramPrice", "goldGramPrice")
         elif category == "coin":
-            base = count * (rate("parsianPrice", "") if document.get("coinType") == "پارسیان" else rate("coinPrice", COIN_RATE_FIELDS.get(document.get("coinType"), "")))
+            field, market_field = coin_rate_field(document)
+            base = coin_base(document, rate(field, market_field))
         else:
             base = count * rate("currencyRate", CURRENCY_RATE_FIELDS.get(document.get("currencyType"), ""))
         wage = Decimal(0) if category == "currency" else base * numeric(document.get("wagePercent"), "اجرت درصدی", default=0) / 100 + count * numeric(document.get("wageFixed"), "اجرت ثابت", default=0)
         costs = count * numeric(document.get("otherCosts"), "هزینهٔ تاریخی", default=0, status=409)
-        profit = (base + wage + costs) * numeric(document.get("profitPercent"), "سود تاریخی", default=0, status=409) / 100
+        profit = (base + wage + costs) * numeric(document.get("profitPercent"), "سود تاریخی", default=0, status=409) / 100 + coin_fixed_profit(document)
         return decimal_output(base + wage + costs + profit)
 
 
@@ -215,6 +281,8 @@ def item_weight(document):
         return decimal_output(weight)
     if document["category"] == "melted":
         return decimal_output(count * number(document.get("meltedWeight")) * number(document.get("meltedAyar") or 750) / 750)
+    if is_ordinary_coin(document):
+        return decimal_output(count * number(document.get("coinWeight")))
     if document["category"] == "coin" and document.get("coinType") == "پارسیان":
         return decimal_output(count * number(document.get("parsianWeight")))
     return 0
@@ -237,7 +305,9 @@ def item_summary(document):
             detail = f"{count} عدد، هر عدد {format_number(document.get('weight'))} گرم، عیار {format_number(document.get('ayar'))}، معادل هر عدد {format_number(equivalent)} گرم طلای ۷۵۰"
     elif category == "coin":
         detail = f"{document.get('coinType', 'سکه')}، {count} عدد"
-        if document.get("coinType") == "پارسیان":
+        if is_ordinary_coin(document):
+            detail += f"، وزن ترازوی هر عدد {format_number(document.get('coinWeight'))} گرم، عیار اصلی {format_number(document.get('coinAyar'))}، معادل عیار ۷۵۰ هر عدد {format_number(document.get('coinWeight750'))} گرم"
+        elif document.get("coinType") == "پارسیان":
             detail += f"، هر عدد {format_number(document.get('parsianWeight'))} گرم"
     elif category == "melted":
         detail = f"{count} قطعه، هر قطعه {format_number(document.get('meltedWeight'))} گرم، عیار {document.get('meltedAyar') or 750}، انگ {document.get('assayCode') or '-'}، آزمایشگاه {document.get('laboratoryName') or '-'}"
@@ -322,7 +392,11 @@ def create_stock(data, item, identity):
     category = item.get("category")
     if not isinstance(category, str) or category not in STOCK_TYPES:
         raise HTTPException(422, "نوع موجودی معتبر نیست.")
-    rate_fields = {"crafted": {"gramPrice"}, "coin": {"coinPrice", "parsianPrice"}, "melted": {"meltedGramPrice"}, "currency": {"currencyRate"}}[category]
+    if is_priced_coin(item):
+        item = normalize_coin_specs(dict(item))
+        for field in ("parsianPrice", "parsianWeight", "coinPrice" if is_ordinary_coin(item) else "gramPrice"):
+            item.pop(field, None)
+    rate_fields = {"crafted": {"gramPrice"}, "coin": {"coinPrice", "parsianPrice", "gramPrice"}, "melted": {"meltedGramPrice"}, "currency": {"currencyRate"}}[category]
     allowed = {"category", "otherCosts", "profitPercent"} | TEXT_FIELDS | ECONOMIC_FIELDS[category] | rate_fields
     if set(item) - allowed:
         raise HTTPException(422, "فقط مشخصات جنس را ارسال کنید؛ شناسه، بدهی، مشتری و اطلاعات سند توسط سرور تعیین می‌شوند.")
@@ -344,7 +418,7 @@ def create_stock(data, item, identity):
         else:
             if field == "profitPercent" and category == "crafted":
                 value = crafted_profit_or_default(value)
-            optional_default = 0 if field in {"wagePercent", "wageFixed", "otherCosts", "profitPercent"} else defaults.get(field)
+            optional_default = 0 if field in {"wagePercent", "wageFixed", "otherCosts", "profitPercent", "profitFixed"} else defaults.get(field)
             parsed = numeric(value, "مشخصات عددی جنس", default=optional_default)
             if field in {"wagePercent", "profitPercent"} and parsed > 100:
                 raise HTTPException(422, "درصد اجرت یا سود باید بین صفر و صد باشد.")
@@ -360,7 +434,7 @@ def create_stock(data, item, identity):
     elif category == "melted":
         rate_field, market_field = "meltedGramPrice", "goldGramPrice"
     elif category == "coin":
-        rate_field, market_field = ("parsianPrice", None) if document["coinType"] == "پارسیان" else ("coinPrice", COIN_RATE_FIELDS.get(document["coinType"]))
+        rate_field, market_field = coin_rate_field(document)
     else:
         rate_field, market_field = "currencyRate", CURRENCY_RATE_FIELDS.get(document["currencyType"])
     if rate_field not in document:

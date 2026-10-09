@@ -4,8 +4,10 @@ import time
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 from sqlalchemy import select
+from fastapi import HTTPException
 
 from .database import images, products, read_workspace
+from .inventory import is_ordinary_coin, is_priced_coin, normalize_coin_specs
 from .pricing import DEFAULT_CRAFTED_PROFIT_PERCENT, base_price_breakdown, crafted_profit_or_default, number, parse_timestamp, price_breakdown
 
 
@@ -88,8 +90,14 @@ def valid_product(item):
         return False
     if stock_type == "currency":
         return item.get("currencyType") in CURRENCIES
-    if stock_type == "coin" and item.get("coinType") not in {*COIN_RATES, "پارسیان"}:
-        return False
+    if stock_type == "coin":
+        if is_priced_coin(item):
+            try:
+                normalize_coin_specs(dict(item))
+            except HTTPException:
+                return False
+        elif item.get("coinType") not in {*COIN_RATES, "پارسیان"}:
+            return False
     constraints = [("wagePercent", 0, Decimal("0"), Decimal("100")),
         ("wageFixed", 0, Decimal("0"), Decimal("1e12"))]
     if stock_type in {"crafted", "melted"}:
@@ -112,9 +120,9 @@ def optional_number(value):
 
 def price_basis(item, rate, prices, stale_seconds):
     stock_type = item["category"]
-    unit = item.get("currencyType") if stock_type == "currency" else "coin" if stock_type == "coin" else "gram-750"
+    unit = item.get("currencyType") if stock_type == "currency" else "coin" if stock_type == "coin" and not is_ordinary_coin(item) else "gram-750"
     missing = {"unit": unit, "rate": None, "source": "نرخ ثبت نشده", "updatedAt": None, "stale": True, "mode": "unavailable"}
-    if stock_type in {"crafted", "melted"}:
+    if stock_type in {"crafted", "melted"} or is_ordinary_coin(item):
         if rate.get("value") is None:
             return missing
         return {"unit": unit, "rate": rate["value"], "source": rate.get("source", "نرخ طلا"),
@@ -146,6 +154,8 @@ def catalog(connection, rate, public=False, stale_seconds=300):
         crafted_kind = crafted_kind_for(item) if stock_type == "crafted" else None
         weight = optional_number(item.get("weight") if stock_type == "crafted" else item.get("meltedWeight") if stock_type == "melted" else item.get("parsianWeight") if stock_type == "coin" and item.get("coinType") == "پارسیان" else None)
         purity = optional_number(item.get("ayar") or 750) if stock_type == "crafted" else optional_number(item.get("meltedAyar") or 750) if stock_type == "melted" else None
+        if is_ordinary_coin(item):
+            weight, purity = optional_number(item.get("coinWeight")), optional_number(item.get("coinAyar"))
         wage_percent, wage_fixed = (Decimal(0), Decimal(0)) if stock_type == "currency" else (number(item.get("wagePercent", 0)), number(item.get("wageFixed", 0)))
         valid = valid_product(item)
         if public and (not published or item["remaining"] <= 0 or not valid):
@@ -159,6 +169,7 @@ def catalog(connection, rate, public=False, stale_seconds=300):
             "stockType": stock_type,
             "craftedKind": crafted_kind,
             "coinType": item.get("coinType") if stock_type == "coin" else None,
+            **({field: item.get(field) for field in ("coinPricingVersion", "coinGroup", "coinWeight", "coinAyar", "coinWeight750", "profitFixed")} if is_priced_coin(item) else {}),
             "currencyType": item.get("currencyType") if stock_type == "currency" else None,
             "currencyName": CURRENCIES.get(item.get("currencyType"), (None,))[0] if stock_type == "currency" else None,
             "weight": weight, "purity": purity,
@@ -167,11 +178,13 @@ def catalog(connection, rate, public=False, stale_seconds=300):
             "remaining": float(max(Decimal(0), item["remaining"])), "published": published,
             "images": pictures.get(identifier, []), "price": None, "priceBasis": basis,
         }
+        if is_priced_coin(item):
+            product["profitPercent"] = info.get("profitPercent", optional_number(item.get("profitPercent")) or 0)
         if valid and basis["rate"] is not None:
-            if stock_type in {"crafted", "melted"}:
-                product["price"] = price_breakdown(weight, purity, wage_percent, wage_fixed, product["profitPercent"], product["taxPercent"], basis["rate"])
+            if stock_type in {"crafted", "melted"} or is_ordinary_coin(item):
+                product["price"] = price_breakdown(weight, purity, wage_percent, wage_fixed, product["profitPercent"], product["taxPercent"], basis["rate"], item.get("profitFixed", 0) if is_priced_coin(item) else 0)
             else:
-                product["price"] = base_price_breakdown(basis["rate"], wage_percent, wage_fixed, product["profitPercent"], product["taxPercent"])
+                product["price"] = base_price_breakdown(basis["rate"], wage_percent, wage_fixed, product["profitPercent"], product["taxPercent"], item.get("profitFixed", 0) if is_priced_coin(item) else 0)
         result.append(product)
     # Existing ledger writes newest entries first.
     return result

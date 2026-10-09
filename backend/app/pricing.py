@@ -32,23 +32,23 @@ def number(value, fallback="0"):
     return Decimal(fallback)
 
 
-def base_price_breakdown(base, wage_percent, wage_fixed, profit_percent, tax_percent):
+def base_price_breakdown(base, wage_percent, wage_fixed, profit_percent, tax_percent, profit_fixed=0):
     with localcontext() as context:
         context.prec = 80
         gold = number(base)
         wage = gold * number(wage_percent) / 100 + number(wage_fixed)
-        profit = (gold + wage) * number(profit_percent) / 100
+        profit = (gold + wage) * number(profit_percent) / 100 + number(profit_fixed)
         tax = (wage + profit) * number(tax_percent) / 100
         # Round each displayed component, then sum them so the invoice is reproducible.
         parts = {name: int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP)) for name, value in {"gold": gold, "wage": wage, "profit": profit, "tax": tax}.items()}
     return {**parts, "total": sum(parts.values())}
 
 
-def price_breakdown(weight, purity, wage_percent, wage_fixed, profit_percent, tax_percent, rate):
+def price_breakdown(weight, purity, wage_percent, wage_fixed, profit_percent, tax_percent, rate, profit_fixed=0):
     with localcontext() as context:
         context.prec = 80
         base = number(weight) * number(purity) / Decimal(750) * number(rate)
-        return base_price_breakdown(base, wage_percent, wage_fixed, profit_percent, tax_percent)
+        return base_price_breakdown(base, wage_percent, wage_fixed, profit_percent, tax_percent, profit_fixed)
 
 
 def iso_now():

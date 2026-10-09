@@ -9,6 +9,7 @@ import { defaultVaultFilters, filterInventoryItems, inventoryDisplayGroups } fro
 import VaultItemEditor from './VaultItemEditor.jsx';
 import VaultStockCreate from './VaultStockCreate.jsx';
 import { isMiscPurchase, miscGoldWeight750 } from './miscGold.js';
+import { coinSpec, isModernCoin, isOrdinaryCoin } from './coins.js';
 import './inventory.css';
 
 const number = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(parseNumber(value));
@@ -126,7 +127,15 @@ function VaultItem({ item, value, prices, onSell, onEdit, onDelete, canEditPurch
   }
   if (item.category === 'coin') {
     specifications.push(['نوع سکه', item.coinType]);
-    if (item.coinType === 'پارسیان') specifications.push(['وزن هر عدد', `${number(item.parsianWeight)} گرم`]);
+    if (isOrdinaryCoin(item)) {
+      const spec = coinSpec(item);
+      specifications.push(
+        ['وزن ترازو هر سکه', `${goldGrams(spec.weight)} گرم`], ['عیار اصلی', number(spec.ayar)],
+        ['وزن معادل ۷۵۰ هر سکه', `${goldGrams(spec.weight750)} گرم`],
+        ['وزن ترازو موجودی', `${goldGrams(spec.weight * item.remaining)} گرم`],
+        ['وزن معادل ۷۵۰ موجودی', `${goldGrams(spec.weight750 * item.remaining)} گرم`],
+      );
+    } else if (!isModernCoin(item) && item.coinType === 'پارسیان') specifications.push(['وزن هر عدد', `${number(item.parsianWeight)} گرم`]);
   }
   if (item.category === 'currency') specifications.push(['نوع ارز', currencyName(item.currencyType)], ['نرخ ثبت‌شده هر واحد', `${number(item.currencyRate)} تومان`]);
   return <details className="vault-item" data-product-code={item.productCode} data-inventory-id={item.id}>
@@ -164,7 +173,8 @@ function VaultItem({ item, value, prices, onSell, onEdit, onDelete, canEditPurch
           <div><dt>مجموع اجرت هر واحد</dt><dd>{number(unitValue.wage)} تومان</dd></div>
         </>}
         <div><dt>هزینه‌های دیگر هر واحد</dt><dd>{number(unitValue.costs)} تومان</dd></div>
-        <div><dt>سود ({number(item.profitPercent)}٪)</dt><dd>{number(unitValue.profit)} تومان</dd></div>
+        {item.category === 'coin' && isModernCoin(item) && <div><dt>سود ثابت هر سکه</dt><dd>{number(item.profitFixed)} تومان</dd></div>}
+        <div><dt>{item.category === 'coin' && isModernCoin(item) ? `مجموع سود (${number(item.profitPercent)}٪ + سود ثابت)` : `سود (${number(item.profitPercent)}٪)`}</dt><dd>{number(unitValue.profit)} تومان</dd></div>
         <div><dt>قیمت نهایی هر واحد</dt><dd>{number(unitValue.total)} تومان</dd></div>
       </dl>
       {item.remaining > 0 && <div className="vault-item-value"><span>ارزش کل موجودی این جنس</span><strong>{number(value?.total)} تومان</strong><small>اجرت: {number(value?.wage)} · هزینه‌های دیگر: {number(value?.costs)} · سود: {number(value?.profit)} تومان</small></div>}
@@ -247,14 +257,14 @@ export default function InventoryVault({ report, assets, prices, onPrices, onSel
         <article><span>ارزش کل به ریال</span><strong>{number(assets.totalRial)} <small>ریال</small></strong><small>{number(assets.totalToman)} تومان</small></article>
         <article><span>معادل کل به دلار</span><strong>{assets.equivalentUsd === null ? '—' : number(assets.equivalentUsd)} <small>دلار</small></strong>{assets.equivalentUsd === null && <small>نرخ دلار را ثبت کنید.</small>}</article>
       </div>
-      <h3 className="vault-gold-heading">وزن طلای ساخته، متفرقه و آب‌شده</h3>
+      <h3 className="vault-gold-heading">وزن طلای ساخته، متفرقه، آب‌شده و سکه‌های عادی</h3>
       <div className="vault-stats asset-totals asset-gold-weights">
         <article><span>گرم خود کارها</span><strong>{number(assets.goldWeightGrams)} <small>گرم</small></strong><small>وزن ترازو، بدون اجرت و سود</small></article>
         <article><span>گرم خود کارها با عیار ۷۵۰</span><strong>{number(assets.goldGrams750)} <small>گرم</small></strong><small>وزن طلا پس از تبدیل عیار</small></article>
         <article><span>گرم با اجرت</span><strong>{assets.goldWithWageGrams750 === null ? '—' : number(assets.goldWithWageGrams750)} <small>گرم</small></strong><small>معادل طلای ۷۵۰، بدون سود</small></article>
         <article><span>گرم با اجرت و سود</span><strong>{assets.goldWithWageAndProfitGrams750 === null ? '—' : number(assets.goldWithWageAndProfitGrams750)} <small>گرم</small></strong><small>معادل طلای ۷۵۰ با سود ثبت‌شده</small></article>
       </div>
-      <p className="vault-note vault-gold-note">وزن‌ها برای موجودی طلای ساخته، متفرقه و آب‌شده هستند؛ سکه و ارز جدا نمایش داده می‌شوند. اجرت و سود با نرخ ثبت‌شده طلا به گرم تبدیل می‌شوند؛ هزینه‌های دیگر جداگانه به تومان آمده‌اند. این وزن‌ها با هم جمع نمی‌شوند.</p>
+      <p className="vault-note vault-gold-note">وزن‌ها شامل موجودی طلای ساخته، متفرقه، آب‌شده و سکه‌های عادی با وزن و عیار ثبت‌شده هستند. تعداد سکه‌ها و موجودی ارز نیز جدا نمایش داده می‌شوند. اجرت و سود با نرخ جاری طلا به گرم تبدیل می‌شوند؛ هزینه‌های دیگر جداگانه به تومان آمده‌اند. این وزن‌ها با هم جمع نمی‌شوند.</p>
       {assets.goldWithWageGrams750 === null && <p className="vault-note vault-gold-note">برای نمایش گرم با اجرت و سود، نرخ هر گرم طلای ۷۵۰ را ثبت کنید.</p>}
       <p className="vault-note">ارزش کل شامل طلا، سکه و ارز با اجرت، هزینه‌های دیگر و سود ثبت‌شده است و وجه نقد صندوق نیست. نرخ روزِ ثبت‌شده و در نبود آن نرخ ورود هر جنس مبنای ارزش‌گذاری است. پارسیان با قیمت ثبت‌شده هر عدد محاسبه می‌شود.</p>
       {prices.updatedAt && <p className="vault-note">آخرین ثبت نرخ‌ها: {new Date(prices.updatedAt).toLocaleString('fa-IR')}</p>}

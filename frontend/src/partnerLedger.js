@@ -1,6 +1,7 @@
 import { coinCatalog, currencyCatalog } from './assets.js';
 import { normalizeDigits } from './persianDate.js';
 import { iranDate } from './sales.js';
+import { coinBase, coinOptions, coinSpec, isModernCoin, isOrdinaryCoin, selectCoin } from './coins.js';
 
 export const partnerTradeTypes = { wholesaler: 'بنکدار و عمده‌فروش', melted: 'آبشده‌فروش', jeweler: 'طلافروش و کارگاه', other: 'سایر همکاران' };
 export const partnerStockTypes = { crafted: 'طلای ساخته', melted: 'طلای آبشده', coin: 'سکه', currency: 'ارز' };
@@ -58,7 +59,7 @@ export function newPartnerLine(prices = {}, category = 'crafted', direction = 'p
     gramPrice: String(prices.goldGramPrice || ''), wagePercent: '0', wageFixed: '', wageFixedUnit: 'toman', otherCosts: '', profitPercent: category === 'crafted' ? '7' : '0',
     meltedWeight: '', meltedAyar: '750', meltedGramPrice: String(prices.goldGramPrice || ''),
     meltedFee: String(prices.meltedFee || (savedNumber(prices.goldGramPrice) * MELTED_FEE_DIVISOR) || ''), assayCode: '', laboratoryName: '',
-    coinType: 'امامی بانکی ۸۶', coinCount: '1', coinPrice: String(prices.bankEmami86Price || ''), parsianWeight: '', parsianPrice: '',
+    ...selectCoin('امامی بانکی ۸۶', prices), coinCount: '1', profitFixed: '',
     currencyType: 'USD', currencyAmount: '', currencyRate: String(prices.usdPrice || ''),
     remittanceDirection: 'credit', goldAmount: '', counterpartyName: '', reference: '', note: '',
   };
@@ -113,6 +114,10 @@ export function partnerInvoiceDraftFromEntry(entry, documents = [], payment = {}
     const rowDirection = ['purchase', 'sale'].includes(record.direction) ? record.direction : String(document.type).endsWith('-sale') ? 'sale' : direction;
     const defaults = newPartnerLine({ ...prices, meltedFee: record.meltedFee }, record.category, rowDirection);
     const form = Object.fromEntries(Object.keys(defaults).map(key => [key, record[key] ?? defaults[key]]));
+    // Loading old rows must not opt their recorded board/Parsian prices into a new formula.
+    if (record.category === 'coin' && !isModernCoin(record)) {
+      for (const key of ['coinPricingVersion', 'coinGroup', 'coinWeight', 'coinAyar', 'coinWeight750', 'profitFixed']) form[key] = '';
+    }
     form.direction = rowDirection;
     form.wageFixedUnit = 'toman';
     if (record.category === 'remittance') return form;
@@ -152,7 +157,7 @@ export function preparePartnerLine(form, rate, calculationVersion = 2, invoiceDi
     line.direction = form.direction || invoiceDirection;
     if (!['purchase', 'sale'].includes(line.direction)) throw new Error('نوع خرید یا فروش ردیف را انتخاب کنید.');
   }
-  if (calculationVersion >= 2) line.profitPercent = numeric(form.profitPercent, 'سود همکار', { optional: true, max: 100 });
+  if (calculationVersion >= 2 || category === 'coin' && isModernCoin(form)) line.profitPercent = numeric(form.profitPercent, 'سود همکار', { optional: true, max: 100 });
   if (['crafted', 'melted'].includes(category)) {
     const weightKey = category === 'crafted' ? 'weight' : 'meltedWeight';
     const purityKey = category === 'crafted' ? 'ayar' : 'meltedAyar';
@@ -182,7 +187,20 @@ export function preparePartnerLine(form, rate, calculationVersion = 2, invoiceDi
     line.wagePercent = numeric(form.wagePercent, 'اجرت درصدی', { optional: true, max: 100 });
     if (calculationVersion >= 2 && form.wageFixedUnit && !['rial', 'toman'].includes(form.wageFixedUnit)) throw new Error('واحد اجرت ریالی را انتخاب کنید.');
     line.wageFixed = numeric(form.wageFixed, 'اجرت پولی هر عدد', { optional: true }) / (calculationVersion >= 2 && form.wageFixedUnit === 'rial' ? 10 : 1);
-    if (form.coinType === 'پارسیان') {
+    if (isModernCoin(form)) {
+      const definition = coinOptions.find(coin => coin.name === form.coinType);
+      if (!definition || form.coinGroup !== definition.group) throw new Error('نوع و گروه سکه معتبر را انتخاب کنید.');
+      line.coinPricingVersion = 2; line.coinGroup = definition.group;
+      line.profitFixed = numeric(form.profitFixed, 'سود پولی هر سکه', { optional: true });
+      if (isOrdinaryCoin(form)) {
+        const spec = coinSpec(form);
+        line.coinWeight = numeric(definition.custom ? form.coinWeight : spec.weight, 'وزن ترازو هر سکه', { positive: true, max: 1e5 });
+        line.coinAyar = numeric(definition.custom ? form.coinAyar : spec.ayar, 'عیار اصلی سکه', { positive: true, max: 1000 });
+        if (line.coinAyar < 1) throw new Error('عیار سکه باید بین ۱ و ۱۰۰۰ باشد.');
+        line.coinWeight750 = line.coinWeight * line.coinAyar / 750;
+        line.gramPrice = numeric(calculationVersion >= 2 || !text(form.gramPrice) ? rate : form.gramPrice, 'نرخ هر گرم طلای ۷۵۰', { positive: true });
+      } else line.coinPrice = numeric(form.coinPrice, 'نرخ تابلو هر سکه', { positive: true });
+    } else if (form.coinType === 'پارسیان') {
       line.parsianWeight = numeric(form.parsianWeight, 'وزن هر سکه پارسیان', { positive: true, max: 1e5 });
       line.parsianPrice = numeric(form.parsianPrice, 'قیمت هر سکه پارسیان', { positive: true });
     } else line.coinPrice = numeric(form.coinPrice, 'قیمت هر سکه', { positive: true });
@@ -204,16 +222,18 @@ function mixedPartnerLineTotals(line, goldPrice, invoiceDirection) {
   const direction = remittance ? line.remittanceDirection || 'credit' : line.direction || invoiceDirection || 'purchase';
   const count = remittance ? 1 : savedNumber(line.category === 'currency' ? line.currencyAmount : line.category === 'coin' ? line.coinCount : line.itemCount) || (line.category === 'currency' ? 0 : 1);
   const metal = ['crafted', 'melted'].includes(line.category);
+  const ordinary = line.category === 'coin' && isOrdinaryCoin(line);
+  const coin = ordinary ? coinSpec(line) : null;
   const melted = line.category === 'melted';
   const weight = savedNumber(melted ? line.meltedWeight : line.weight);
-  const purity = metal ? savedNumber(melted ? line.meltedAyar : line.ayar) : null;
+  const purity = metal ? savedNumber(melted ? line.meltedAyar : line.ayar) : ordinary ? coin.ayar : null;
   const actualWeight = metal ? weight * (line.weightMode === 'unit' ? count : 1)
-    : line.category === 'coin' && line.coinType === 'پارسیان' ? count * savedNumber(line.parsianWeight) : 0;
-  const weight750 = metal ? actualWeight * purity / 750 : 0;
+    : ordinary ? count * coin.weight : line.category === 'coin' && line.coinType === 'پارسیان' ? count * savedNumber(line.parsianWeight) : 0;
+  const weight750 = metal || ordinary ? actualWeight * purity / 750 : 0;
   const meltedFee = melted ? savedNumber(line.meltedFee) : 0;
-  const rate = remittance ? conversionGoldPrice : melted ? meltedFee / MELTED_FEE_DIVISOR : metal ? conversionGoldPrice
+  const rate = remittance ? conversionGoldPrice : melted ? meltedFee / MELTED_FEE_DIVISOR : metal || ordinary ? conversionGoldPrice
     : savedNumber(line.category === 'coin' ? line.coinType === 'پارسیان' ? line.parsianPrice : line.coinPrice : line.currencyRate);
-  const baseAmount = remittance ? savedNumber(line.goldAmount) * conversionGoldPrice : (metal ? weight750 : count) * rate;
+  const baseAmount = remittance ? savedNumber(line.goldAmount) * conversionGoldPrice : (metal || ordinary ? weight750 : count) * rate;
   const principalGold = remittance ? roundPartnerAmount(savedNumber(line.goldAmount)) : metal && !melted ? weight750 : convert(baseAmount);
   const hasLabor = metal || line.category === 'coin';
   const laborGold = hasLabor ? principalGold * savedNumber(line.wagePercent) / 100 : 0;
@@ -221,7 +241,7 @@ function mixedPartnerLineTotals(line, goldPrice, invoiceDirection) {
   const otherCostsGold = remittance ? 0 : convert(count * savedNumber(line.otherCosts));
   const profitPercent = remittance ? 0 : savedNumber(line.profitPercent);
   const beforeProfitGold = principalGold + laborGold + fixedLaborGold + otherCostsGold;
-  const profitGold = beforeProfitGold * profitPercent / 100;
+  const profitGold = beforeProfitGold * profitPercent / 100 + (line.category === 'coin' && isModernCoin(line) ? convert(count * savedNumber(line.profitFixed)) : 0);
   const goldAmount = beforeProfitGold + profitGold;
   const credit = remittance ? direction === 'credit' : direction === 'sale';
   return { actualWeight, purity, weight750, principalGold, laborGold, fixedLaborGold, otherCostsGold, profitGold, profitPercent,
@@ -236,7 +256,7 @@ export function partnerLineTotals(line, goldPrice = 0, calculationVersion = 1, i
   const count = savedNumber(line.category === 'currency' ? line.currencyAmount : line.category === 'coin' ? line.coinCount : line.itemCount) || (line.category === 'currency' ? 0 : 1);
   const conversionGoldPrice = savedNumber(goldPrice);
   const convert = amount => conversionGoldPrice > 0 ? amount / conversionGoldPrice : 0;
-  const profitPercent = calculationVersion === 2 ? savedNumber(line.profitPercent) : 0;
+  const profitPercent = calculationVersion === 2 || line.category === 'coin' && isModernCoin(line) ? savedNumber(line.profitPercent) : 0;
   const otherCostsGold = calculationVersion === 2 ? convert(count * savedNumber(line.otherCosts)) : 0;
   if (metal) {
     const weight = savedNumber(line.category === 'crafted' ? line.weight : line.meltedWeight);
@@ -252,17 +272,21 @@ export function partnerLineTotals(line, goldPrice = 0, calculationVersion = 1, i
       tomanDebit: calculationVersion === 2 ? 0 : count * (savedNumber(line.otherCosts) + savedNumber(line.wageFixed)),
       rate: calculationVersion === 2 ? conversionGoldPrice : savedNumber(line.category === 'crafted' ? line.gramPrice : line.meltedGramPrice) || savedNumber(goldPrice), count };
   }
-  const price = line.category === 'coin' ? (line.coinType === 'پارسیان' ? line.parsianPrice : line.coinPrice) : line.currencyRate;
+  const ordinary = line.category === 'coin' && isOrdinaryCoin(line);
+  const coinGramPrice = calculationVersion >= 2 ? conversionGoldPrice : savedNumber(line.gramPrice) || conversionGoldPrice;
+  const price = line.category === 'coin' ? coinBase({ ...line, gramPrice: coinGramPrice, coinCount: 1 }) : line.currencyRate;
   const laborToman = line.category === 'coin' ? count * savedNumber(price) * savedNumber(line.wagePercent) / 100 : 0;
   const fixedLaborToman = line.category === 'coin' ? count * savedNumber(line.wageFixed) / (calculationVersion >= 2 && line.wageFixedUnit === 'rial' ? 10 : 1) : 0;
   const principalGold = calculationVersion === 2 ? convert(count * savedNumber(price)) : 0;
   const laborGold = calculationVersion === 2 ? convert(laborToman) : 0;
   const fixedLaborGold = calculationVersion === 2 ? convert(fixedLaborToman) : 0;
-  const profitGold = (principalGold + laborGold + fixedLaborGold + otherCostsGold) * profitPercent / 100;
-  return { actualWeight: line.category === 'coin' && line.coinType === 'پارسیان' ? count * savedNumber(line.parsianWeight) : 0,
-    purity: null, weight750: 0, laborGold, fixedLaborGold, otherCostsGold, profitGold, profitPercent, conversionGoldPrice, principalGold,
+  const fixedProfit = line.category === 'coin' && isModernCoin(line) ? count * savedNumber(line.profitFixed) : 0;
+  const beforeProfitToman = count * (savedNumber(price) + savedNumber(line.otherCosts)) + laborToman + fixedLaborToman;
+  const profitGold = (principalGold + laborGold + fixedLaborGold + otherCostsGold) * profitPercent / 100 + (calculationVersion === 2 ? convert(fixedProfit) : 0);
+  return { actualWeight: ordinary ? count * coinSpec(line).weight : line.category === 'coin' && line.coinType === 'پارسیان' ? count * savedNumber(line.parsianWeight) : 0,
+    purity: ordinary ? coinSpec(line).ayar : null, weight750: ordinary ? count * coinSpec(line).weight750 : 0, laborGold, fixedLaborGold, otherCostsGold, profitGold, profitPercent, conversionGoldPrice, principalGold,
     goldDebit: principalGold + laborGold + fixedLaborGold + otherCostsGold + profitGold,
-    tomanDebit: calculationVersion === 2 ? 0 : count * (savedNumber(price) + savedNumber(line.otherCosts)) + laborToman + fixedLaborToman, rate: savedNumber(price), count };
+    tomanDebit: calculationVersion === 2 ? 0 : beforeProfitToman * (1 + profitPercent / 100) + fixedProfit, rate: ordinary ? coinGramPrice : savedNumber(price), count };
 }
 
 // Invoice details contain authoritative totals, while linked inventory documents
@@ -282,7 +306,7 @@ export function savedPartnerLineTotals(line, document = {}, entry = {}) {
   const calculationVersion = entry.calculationVersion === 3 ? 3 : entry.calculationVersion === 2 ? 2 : 1;
   const fallback = partnerLineTotals(record, entry.gold18Price, calculationVersion, entry.direction || entry.type);
   const actualWeight = metal ? firstNumber(line.scaleWeight, document.scaleWeight, fallback.actualWeight) : fallback.actualWeight;
-  const weight750 = metal ? firstNumber(line.weight750, document.totalWeight750, fallback.weight750) : 0;
+  const weight750 = metal ? firstNumber(line.weight750, document.totalWeight750, fallback.weight750) : record.category === 'coin' && isOrdinaryCoin(record) ? fallback.weight750 : 0;
   const wagePercent = firstNumber(line.wagePercent, document.wagePercent, 0);
   const laborGold = metal || (calculationVersion >= 2 && record.category === 'coin')
     ? firstNumber(line.laborGold, document.laborGold, calculationVersion === 3 || record.category === 'coin' ? fallback.laborGold : weight750 * wagePercent / 100) : 0;

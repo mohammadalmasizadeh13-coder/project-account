@@ -4,6 +4,7 @@ import { isTradeDocument } from './tradeGoldPrice.js';
 import { craftedKinds } from './crmAnalytics.js';
 import { profitPercentInput } from './profitDefaults.js';
 import { isMiscPurchase } from './miscGold.js';
+import { coinOptions, coinSpec, isModernCoin, isOrdinaryCoin } from './coins.js';
 
 export function validateDocument(form, category, parseNumber) {
   form = { ...form, profitPercent: profitPercentInput(form.profitPercent, category, form) };
@@ -33,7 +34,19 @@ export function validateDocument(form, category, parseNumber) {
   if (category === 'coin') {
     if (!coinCatalog.some(coin => coin.name === form.coinType)) errors.coinType = 'نوع سکه معتبر را انتخاب کنید.';
     numeric('coinCount', 'تعداد سکه');
-    if (form.coinType === 'پارسیان') {
+    if (!errors.coinCount && !Number.isSafeInteger(parseNumber(form.coinCount))) errors.coinCount = 'تعداد سکه باید عدد صحیح باشد.';
+    if (isModernCoin(form)) {
+      const definition = coinOptions.find(coin => coin.name === form.coinType);
+      if (!definition || form.coinGroup !== definition.group) errors.coinType = 'نوع و گروه سکه معتبر را انتخاب کنید.';
+      if (isOrdinaryCoin(form)) {
+        if (definition.custom) {
+          numeric('coinWeight', 'وزن ترازو هر سکه'); numeric('coinAyar', 'عیار اصلی سکه');
+          if (!errors.coinAyar && (coinSpec(form).ayar < 1 || coinSpec(form).ayar > 1000)) errors.coinAyar = 'عیار سکه باید بین ۱ و ۱۰۰۰ باشد.';
+        }
+        numeric('gramPrice', 'نرخ هر گرم طلای ۷۵۰');
+      } else numeric('coinPrice', 'نرخ تابلو هر سکه');
+      numeric('profitFixed', 'سود پولی هر سکه', true, true);
+    } else if (form.coinType === 'پارسیان') {
       numeric('parsianWeight', 'وزن پارسیان'); numeric('parsianPrice', 'قیمت پارسیان');
     } else numeric('coinPrice', 'قیمت سکه');
   }

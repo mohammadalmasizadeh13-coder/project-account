@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom';
 import NumberInput from './NumberInput.jsx';
 import { Coins, FilePlus2, Pencil, Plus, Printer, Search, Trash2, Users, Wallet, X } from 'lucide-react';
 import PersianDateInput from './PersianDateInput.jsx';
-import { coinCatalog, currencyCatalog } from './assets.js';
+import { currencyCatalog } from './assets.js';
+import CoinFields from './CoinFields.jsx';
+import { coinSummary, isModernCoin, isOrdinaryCoin } from './coins.js';
 import { craftedKinds } from './crmAnalytics.js';
 import { formatPersianDate, normalizeDigits } from './persianDate.js';
 import { readAccountingDraft, writeAccountingDraft } from './accountingDrafts.js';
@@ -77,10 +79,9 @@ function InvoiceLine({ line, index, prices, goldPrice, calculationVersion, invoi
         {melted ? <><TextField label="شماره انگ" name="assayCode" value={line.assayCode} onChange={change} readOnly={selling} required/><TextField label="آزمایشگاه" name="laboratoryName" value={line.laboratoryName} onChange={change} readOnly={selling} required/></>
           : <label>نوع کار<select name="craftedKind" disabled={selling} value={line.craftedKind} onChange={event => change('craftedKind', event.target.value)}>{craftedKinds.map(kind => <option key={kind}>{kind}</option>)}</select></label>}
       </> : line.category === 'coin' ? <>
-        <label>نوع سکه<select name="coinType" disabled={selling} value={line.coinType} onChange={event => { const name = event.target.value; const field = coinCatalog.find(coin => coin.name === name)?.price; onChange({ ...line, coinType: name, coinPrice: String(prices[field] || '') }); }}>{coinCatalog.map(coin => <option key={coin.name}>{coin.name}</option>)}</select></label>
-        <NumberField label="تعداد سکه" name="coinCount" value={line.coinCount} onChange={change} required/>
-        {line.coinType === 'پارسیان' ? <><NumberField label="وزن هر سکه پارسیان (گرم)" name="parsianWeight" value={line.parsianWeight} onChange={change} readOnly={selling} required/><NumberField label="قیمت هر سکه پارسیان (تومان)" name="parsianPrice" value={line.parsianPrice} onChange={change} required/></>
-          : <NumberField label="قیمت هر سکه (تومان)" name="coinPrice" value={line.coinPrice} onChange={change} required/>}
+        <CoinFields value={isOrdinaryCoin(line) && calculationVersion >= 2 ? { ...line, gramPrice: goldPrice } : line} onChange={onChange} prices={calculationVersion >= 2 ? { ...prices, goldGramPrice: goldPrice } : prices} locked={selling} rateReadOnly={isOrdinaryCoin(line) && calculationVersion >= 2}/>
+        {isOrdinaryCoin(line) && calculationVersion >= 2 && <small>نرخ طلای سکه از نرخ بالای همین فاکتور گرفته می‌شود.</small>}
+        {isModernCoin(line) && <NumberField label="سود ثابت هر سکه (تومان)" name="profitFixed" value={line.profitFixed} onChange={change} help="سود ثابت علاوه بر سود درصدی محاسبه می‌شود."/>}
         <NumberField label="اجرت درصدی سکه" name="wagePercent" value={line.wagePercent} onChange={change} help={calculationVersion >= 2 ? 'اجرت درصدی با نرخ فاکتور به گرم طلای ۷۵۰ تبدیل می‌شود.' : 'اجرت درصدی به مبلغ سکه‌ها اضافه می‌شود.'}/>
         {calculationVersion >= 2 ? <><NumberField label={`اجرت ریالی هر سکه (${line.wageFixedUnit === 'rial' ? 'ریال' : 'تومان'})`} name="wageFixed" value={line.wageFixed} onChange={change} help="مبلغ با نرخ فاکتور به گرم طلای ۷۵۰ تبدیل می‌شود."/><label>واحد مبلغ اجرت<select name="wageFixedUnit" value={line.wageFixedUnit || 'toman'} onChange={event => change('wageFixedUnit', event.target.value)}><option value="toman">تومان</option><option value="rial">ریال</option></select></label></>
           : <NumberField label="اجرت پولی هر سکه (تومان)" name="wageFixed" value={line.wageFixed} onChange={change}/>}
@@ -90,7 +91,7 @@ function InvoiceLine({ line, index, prices, goldPrice, calculationVersion, invoi
         <NumberField label="نرخ هر واحد ارز (تومان)" name="currencyRate" value={line.currencyRate} onChange={change} required/>
       </>}
       <NumberField label="هزینه دیگر هر عدد / واحد (تومان)" name="otherCosts" value={line.otherCosts} onChange={change}/>
-      {calculationVersion >= 2 && <NumberField label="سود همکار (درصد)" name="profitPercent" value={line.profitPercent} onChange={change} help="درصد دلخواه یا صفر؛ سود روی اصل طلا به‌اضافهٔ اجرت و هزینه‌ها، به گرم محاسبه می‌شود."/>}
+      {(calculationVersion >= 2 || (line.category === 'coin' && isModernCoin(line))) && <NumberField label="سود همکار (درصد)" name="profitPercent" value={line.profitPercent} onChange={change} help={calculationVersion >= 2 ? 'درصد دلخواه یا صفر؛ سود روی اصل طلا به‌اضافهٔ اجرت و هزینه‌ها، به گرم محاسبه می‌شود.' : 'سود درصدی روی مبلغ پایه به‌اضافهٔ اجرت و هزینه‌ها محاسبه می‌شود.'}/>}
       </>}
     </div>
     <div className="partner-line-preview" aria-live="polite">{metal && <><span>وزن واقعی کل: <b>{fmt(totals.actualWeight)} گرم</b></span><span>اصل طلای ۷۵۰: <b>{fmt(totals.weight750)} گرم</b></span><span>اجرت درصدی به طلا: <b>{fmt(totals.laborGold)} گرم</b></span></>}
@@ -100,22 +101,28 @@ function InvoiceLine({ line, index, prices, goldPrice, calculationVersion, invoi
   </section>;
 }
 
+function CoinAudit({ line, document, goldPrice }) {
+  const row = { ...document, ...line };
+  if (row.category !== 'coin' || !isModernCoin(row)) return null;
+  return <><small data-partner-coin-spec>{coinSummary(row)}</small><small>{isOrdinaryCoin(row) ? 'نرخ هر گرم ۷۵۰' : 'نرخ تابلو هر سکه'}: {fmt(isOrdinaryCoin(row) ? row.gramPrice || goldPrice : row.coinPrice, 2)} تومان</small><small>سود: {fmt(row.profitPercent)}٪ + {fmt(row.profitFixed, 2)} تومان برای هر سکه</small></>;
+}
+
 function StatementInvoiceLines({ entry, docById }) {
   const lines = entry.lines?.length ? entry.lines : (entry.documentIds || []).filter(id => docById.has(String(id))).map(id => ({ documentId: id }));
   if (entry.calculationVersion === 3) return <div className="partner-table-scroll"><table className="partner-invoice-lines"><thead><tr><th>شرح و نوع ردیف</th><th>جهت معامله</th><th>تعداد</th><th>وزن ۷۵۰ (گرم)</th><th>مبلغ (تومان)</th><th>بدهکار طلا</th><th>بستانکار طلا</th></tr></thead>{lines.map((line, index) => {
     const totals = savedPartnerLineTotals(line, docById.get(String(line.documentId)), entry);
     const remittance = line.category === 'remittance';
-    return <tbody key={index}><tr><td>{remittance ? line.note || 'حواله' : totals.itemName}<small>{partnerLineTypes[totals.category]}</small></td><td>{remittance ? line.remittanceDirection === 'debit' ? 'حواله بدهکار' : 'حواله بستانکار' : line.direction === 'sale' ? 'تحویل به همکار' : 'خرید از همکار'}</td><td>{remittance ? '—' : fmt(totals.count)}</td><td>{remittance ? fmt(line.goldAmount) : fmt(totals.weight750)}</td><td>{remittance ? '—' : fmt(totals.amount, 2)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.goldCredit)}</td></tr>
+    return <tbody key={index}><tr><td>{remittance ? line.note || 'حواله' : totals.itemName}<small>{partnerLineTypes[totals.category]}</small><CoinAudit line={line} document={docById.get(String(line.documentId))} goldPrice={entry.gold18Price}/></td><td>{remittance ? line.remittanceDirection === 'debit' ? 'حواله بدهکار' : 'حواله بستانکار' : line.direction === 'sale' ? 'تحویل به همکار' : 'خرید از همکار'}</td><td>{remittance ? '—' : fmt(totals.count)}</td><td>{remittance ? fmt(line.goldAmount) : fmt(totals.weight750)}</td><td>{remittance ? '—' : fmt(totals.amount, 2)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.goldCredit)}</td></tr>
       <tr className="partner-invoice-audit-row"><td colSpan={7}><div className="partner-invoice-audit-values">{remittance ? <span>{[line.counterpartyName, line.reference].filter(Boolean).join(' · ') || 'حواله طلای ۷۵۰'}</span> : <><span>وزن واقعی: <bdi>{fmt(totals.actualWeight)} گرم</bdi></span>{totals.purity != null && <span>عیار: <bdi>{fmt(totals.purity)}</bdi></span>}{line.category === 'melted' && <><span>فی آب‌شده: <bdi>{fmt(line.meltedFee, 2)} تومان</bdi></span><span>فی ÷ ۴٫۳۳۱۸: <bdi>{fmt(totals.rate, 2)} تومان برای هر گرم ۷۵۰</bdi></span></>}<span>اجرت درصدی: <bdi>{fmt(totals.laborGold)} گرم</bdi></span><span>اجرت ریالی به طلا: <bdi>{fmt(totals.fixedLaborGold)} گرم</bdi></span><span>هزینه‌ها به طلا: <bdi>{fmt(totals.otherCostsGold)} گرم</bdi></span><span>سود: <bdi>{fmt(totals.profitGold)} گرم ({fmt(totals.profitPercent)}٪)</bdi></span><span>نرخ تبدیل هر گرم ۷۵۰: <bdi>{fmt(totals.conversionGoldPrice, 2)} تومان</bdi></span></>}</div></td></tr></tbody>;
   })}</table></div>;
   if (entry.calculationVersion === 2) return <div className="partner-table-scroll"><table className="partner-invoice-lines"><thead><tr><th>شرح</th><th>تعداد</th><th>وزن واقعی (گرم)</th><th>عیار</th><th>وزن ۷۵۰ (گرم)</th><th>اجرت درصدی</th><th>درصد سود</th><th>بدهی طلای ۷۵۰ (گرم)</th></tr></thead>{lines.map((line, index) => {
     const totals = savedPartnerLineTotals(line, docById.get(String(line.documentId)), entry);
-    return <tbody key={index}><tr><td>{totals.itemName}<small>{partnerStockTypes[totals.category]}</small></td><td><bdi>{fmt(totals.count)}</bdi></td><td><bdi>{totals.actualWeight ? fmt(totals.actualWeight) : '—'}</bdi></td><td><bdi>{totals.purity == null ? '—' : fmt(totals.purity)}</bdi></td><td><bdi>{fmt(totals.weight750)}</bdi></td><td><bdi>{fmt(totals.wagePercent)}٪</bdi></td><td><bdi>{fmt(totals.profitPercent)}٪</bdi></td><td><bdi>{fmt(totals.goldDebit)}</bdi></td></tr>
+    return <tbody key={index}><tr><td>{totals.itemName}<small>{partnerStockTypes[totals.category]}</small><CoinAudit line={line} document={docById.get(String(line.documentId))} goldPrice={entry.gold18Price}/></td><td><bdi>{fmt(totals.count)}</bdi></td><td><bdi>{totals.actualWeight ? fmt(totals.actualWeight) : '—'}</bdi></td><td><bdi>{totals.purity == null ? '—' : fmt(totals.purity)}</bdi></td><td><bdi>{fmt(totals.weight750)}</bdi></td><td><bdi>{fmt(totals.wagePercent)}٪</bdi></td><td><bdi>{fmt(totals.profitPercent)}٪</bdi></td><td><bdi>{fmt(totals.goldDebit)}</bdi></td></tr>
       <tr className="partner-invoice-audit-row"><td colSpan={8}><div className="partner-invoice-audit-values"><span>اجرت درصدی به طلا: <bdi>{fmt(totals.laborGold)} گرم</bdi></span><span>اجرت ریالی به طلا: <bdi>{fmt(totals.fixedLaborGold)} گرم</bdi></span><span>هزینه‌ها به طلا: <bdi>{fmt(totals.otherCostsGold)} گرم</bdi></span><span>سود به طلا: <bdi>{fmt(totals.profitGold)} گرم</bdi></span><span>نرخ تبدیل هر گرم ۷۵۰: <bdi>{fmt(totals.conversionGoldPrice, 2)} تومان</bdi></span>{totals.tomanDebit !== 0 && <span>بدهی تومان: <bdi>{fmt(totals.tomanDebit, 2)}</bdi></span>}</div></td></tr></tbody>;
   })}</table></div>;
   return <div className="partner-table-scroll"><table><thead><tr><th>شرح</th><th>تعداد</th><th>وزن واقعی کل</th><th>عیار</th><th>وزن ۷۵۰</th><th>اجرت درصدی</th><th>اجرت طلا</th><th>فی تومان</th><th>بدهی طلا</th><th>بدهی تومان</th></tr></thead><tbody>{lines.map((line, index) => {
     const totals = savedPartnerLineTotals(line, docById.get(String(line.documentId)), entry);
-    return <tr key={index}><td>{totals.itemName}<small>{partnerStockTypes[totals.category]}</small></td><td>{fmt(totals.count)}</td><td>{totals.actualWeight ? `${fmt(totals.actualWeight)} گرم` : '—'}</td><td>{totals.purity == null ? '—' : fmt(totals.purity)}</td><td>{fmt(totals.weight750)}</td><td>{fmt(totals.wagePercent)}٪</td><td>{fmt(totals.laborGold)}</td><td>{fmt(totals.rate, 2)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.tomanDebit, 2)}</td></tr>;
+    return <tr key={index}><td>{totals.itemName}<small>{partnerStockTypes[totals.category]}</small><CoinAudit line={line} document={docById.get(String(line.documentId))} goldPrice={entry.gold18Price}/></td><td>{fmt(totals.count)}</td><td>{totals.actualWeight ? `${fmt(totals.actualWeight)} گرم` : '—'}</td><td>{totals.purity == null ? '—' : fmt(totals.purity)}</td><td>{fmt(totals.weight750)}</td><td>{fmt(totals.wagePercent)}٪</td><td>{fmt(totals.laborGold)}</td><td>{fmt(totals.rate, 2)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.tomanDebit, 2)}</td></tr>;
   })}</tbody></table></div>;
 }
 

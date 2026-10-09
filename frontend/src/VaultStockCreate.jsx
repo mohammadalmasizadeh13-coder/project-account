@@ -6,13 +6,15 @@ import { craftedKinds } from './crmAnalytics.js';
 import { stockCategories } from './inventory.js';
 import { normalizeDigits } from './persianDate.js';
 import { profitPercentInput } from './profitDefaults.js';
+import CoinFields from './CoinFields.jsx';
+import { coinOptions, coinSpec, isOrdinaryCoin, selectCoin } from './coins.js';
 
 const rateValue = value => value == null || value === '' ? '' : String(value);
 const initial = prices => ({
   category: 'crafted', itemName: '', craftedKind: 'انگشتر', itemCount: '1', weight: '', ayar: '750',
   gramPrice: rateValue(prices.goldGramPrice), meltedGramPrice: rateValue(prices.goldGramPrice),
   meltedWeight: '', meltedAyar: '750', assayCode: '', laboratoryName: '',
-  coinType: 'امامی', coinCount: '1', coinPrice: rateValue(prices.emamiCoinPrice), parsianWeight: '', parsianPrice: '',
+  ...selectCoin(coinOptions[0].name, prices), coinCount: '1', profitFixed: '0',
   currencyType: 'USD', currencyAmount: '', currencyRate: rateValue(prices.usdPrice),
   wagePercent: '0', wageFixed: '0', otherCosts: '0', profitPercent: '7', description: '', note: '',
 });
@@ -28,7 +30,7 @@ function categoryFields(draft) {
   ];
   if (draft.category === 'coin') return [
     ['coinType', 'نوع سکه', 'coin'], ['coinCount', 'تعداد سکه', 'count'],
-    ...(draft.coinType === 'پارسیان' ? [['parsianWeight', 'وزن هر سکهٔ پارسیان (گرم)', 'weight'], ['parsianPrice', 'قیمت هر سکهٔ پارسیان هنگام ورود (تومان)', 'rate']] : [['coinPrice', 'قیمت هر سکه هنگام ورود (تومان)', 'rate']]),
+    ...(isOrdinaryCoin(draft) ? [['coinWeight', 'وزن ترازو هر سکه (گرم)', 'weight'], ['coinAyar', 'عیار اصلی', 'purity'], ['gramPrice', 'نرخ هر گرم طلای ۷۵۰ (تومان)', 'rate']] : [['coinPrice', 'قیمت تابلو هر سکه هنگام ورود (تومان)', 'rate']]),
   ];
   if (draft.category === 'melted') return [
     ['itemCount', 'تعداد قطعه', 'count'], ['meltedWeight', 'وزن ترازو هر قطعه (گرم)', 'weight'], ['meltedAyar', 'عیار', 'purity'],
@@ -51,6 +53,7 @@ export default function VaultStockCreate({ prices = {}, onCreate, onClose, onCre
   const costs = [
     ...(draft.category === 'currency' ? [] : [['wagePercent', 'اجرت درصدی', 'percent'], ['wageFixed', 'اجرت ثابت هر عدد یا قطعه (تومان)', 'money']]),
     ['otherCosts', 'هزینه‌های دیگر هر واحد (تومان)', 'money'], ['profitPercent', 'سود ثبت‌شده (درصد)', 'percent'],
+    ...(draft.category === 'coin' ? [['profitFixed', 'سود ثابت هر سکه (تومان)', 'money']] : []),
   ];
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -65,7 +68,7 @@ export default function VaultStockCreate({ prices = {}, onCreate, onClose, onCre
     setDraft(previous => {
       const next = { ...previous, [key]: value };
       if (key === 'category' && !profitEdited.current) next.profitPercent = profitPercentInput('', value);
-      if (key === 'coinType' && value !== 'پارسیان') next.coinPrice = rateValue(prices[coinCatalog.find(coin => coin.name === value)?.price]);
+      if (key === 'coinType') Object.assign(next, selectCoin(value, prices));
       if (key === 'currencyType') next.currencyRate = rateValue(prices[currencyCatalog.find(currency => currency.code === value)?.price]);
       return next;
     });
@@ -75,10 +78,11 @@ export default function VaultStockCreate({ prices = {}, onCreate, onClose, onCre
     event.preventDefault();
     if (running.current) return;
     const item = { category: draft.category, itemName: draft.itemName.trim(), description: draft.description.trim(), note: draft.note.trim() };
+    if (draft.category === 'coin') Object.assign(item, { coinPricingVersion: 2, coinGroup: draft.coinGroup, coinWeight750: coinSpec(draft).weight750 });
     const nextErrors = {};
     if (!item.itemName) nextErrors.itemName = 'نام جنس را وارد کنید.';
     for (const [key, label, kind] of [...fields, ...costs]) {
-      const raw = key === 'profitPercent' ? profitPercentInput(draft[key], draft.category) : draft[key].trim();
+      const raw = key === 'profitPercent' ? profitPercentInput(draft[key], draft.category) : String(draft[key] ?? '').trim();
       if (['kind', 'coin', 'currency', 'text'].includes(kind)) {
         if (!raw) nextErrors[key] = `${label} را وارد کنید.`;
         else item[key] = raw;
@@ -124,9 +128,9 @@ export default function VaultStockCreate({ prices = {}, onCreate, onClose, onCre
         <div className="vault-editor-grid">
           <label htmlFor="stock-new-category">گروه جنس<select id="stock-new-category" name="category" value={draft.category} onChange={event => update('category', event.target.value)}>{Object.entries(stockCategories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label htmlFor="stock-new-itemName">نام جنس<input id="stock-new-itemName" name="itemName" value={draft.itemName} maxLength={200} required aria-invalid={!!errors.itemName} aria-describedby={errors.itemName ? 'stock-new-itemName-error' : undefined} onChange={event => update('itemName', event.target.value)} autoFocus/>{errors.itemName && <small className="vault-editor-field-error" id="stock-new-itemName-error">{errors.itemName}</small>}</label>
-          {fields.map(renderField)}
+          {draft.category === 'coin' ? <CoinFields value={draft} onChange={next => { setDraft(next); setErrors({}); setError(''); }} prices={prices} errors={errors}/> : fields.map(renderField)}
         </div>
-        <p className="vault-editor-note">نرخ ورود از نرخ موجود حسابداری پر می‌شود و قابل اصلاح است. خالی‌گذاشتن نرخ، آخرین نرخ معتبر حسابداری را به کار می‌برد؛ قیمت پارسیان را حتماً وارد کنید. نرخ ورود در سابقهٔ جنس ثبت می‌شود و ارزش روز موجودی از نرخ جاری حسابداری محاسبه می‌شود.</p>
+        <p className="vault-editor-note">نرخ ورود از نرخ موجود حسابداری پر می‌شود و قابل اصلاح است. سکه بانکی با نرخ تابلو و سکه عادی با وزن معادل ۷۵۰ و نرخ روز محاسبه می‌شود. نرخ ورود در سابقهٔ جنس ثبت می‌شود و ارزش روز موجودی از نرخ جاری حسابداری محاسبه می‌شود.</p>
         <fieldset className="vault-editor-spec-fields"><legend>اجرت و هزینه‌ها</legend><div className="vault-editor-grid">{costs.map(renderField)}</div>{draft.category === 'crafted' && <p className="vault-editor-note">سود کار ساخته در حالت پیش‌فرض یا با فیلد خالی ۷٪ است؛ درصد دلخواه یا صفر را هم می‌توانید وارد کنید.</p>}</fieldset>
         <div className="vault-editor-text-fields">
           <label htmlFor="stock-new-description">شرح حسابداری<textarea id="stock-new-description" name="description" rows={2} maxLength={5000} value={draft.description} onChange={event => update('description', event.target.value)}/></label>

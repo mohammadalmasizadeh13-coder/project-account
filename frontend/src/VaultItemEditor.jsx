@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import NumberInput from './NumberInput.jsx';
 import { Pencil, Trash2, X } from 'lucide-react';
-import { coinCatalog, currencyCatalog } from './assets.js';
+import { currencyCatalog } from './assets.js';
 import { craftedKinds } from './crmAnalytics.js';
 import { stockCategories } from './inventory.js';
 import { normalizeDigits } from './persianDate.js';
 import { isMiscPurchase, miscGoldWeight750 } from './miscGold.js';
+import CoinFields from './CoinFields.jsx';
+import { coinSpec, isModernCoin, isOrdinaryCoin, legacyCoinOptions } from './coins.js';
 
 const fieldsByCategory = {
   crafted: [
@@ -36,11 +38,13 @@ export default function VaultItemEditor({ item, name, mode, onSave, onDelete, on
   const [errors, setErrors] = useState({});
   const [draft, setDraft] = useState(() => Object.fromEntries([
     'itemName', 'description', 'note', ...(fieldsByCategory[item.category] || []).map(([key]) => key), 'parsianWeight',
+    'coinPricingVersion', 'coinGroup', 'coinWeight', 'coinAyar', 'coinWeight750',
   ].map(key => [key, String(item[key] ?? defaults[key] ?? '')])));
   const deleting = mode === 'delete';
   const locked = hasSales(item);
   const purchase = item.source !== 'opening-inventory';
-  const fields = [...(fieldsByCategory[item.category] || []).filter(([key]) => !isMiscPurchase(item) || !['wagePercent', 'wageFixed'].includes(key)), ...(item.category === 'coin' && draft.coinType === 'پارسیان' ? [['parsianWeight', 'وزن هر سکهٔ پارسیان (گرم)', 'weight']] : [])];
+  const modernCoin = item.category === 'coin' && isModernCoin(item);
+  const fields = [...(fieldsByCategory[item.category] || []).filter(([key]) => !isMiscPurchase(item) || !['wagePercent', 'wageFixed'].includes(key)), ...(modernCoin && isOrdinaryCoin(draft) ? [['coinWeight', 'وزن ترازو هر سکه (گرم)', 'weight'], ['coinAyar', 'عیار اصلی', 'purity']] : item.category === 'coin' && !modernCoin && draft.coinType === 'پارسیان' ? [['parsianWeight', 'وزن هر سکهٔ پارسیان (گرم)', 'weight']] : [])];
   useEffect(() => {
     const dialog = ref.current;
     const previousOverflow = document.body.style.overflow;
@@ -74,10 +78,14 @@ export default function VaultItemEditor({ item, name, mode, onSave, onDelete, on
       else changes[key] = parsed;
     }
     // Selecting Parsian must supply its weight even when the previous field was absent.
-    if (!locked && item.category === 'coin' && draft.coinType === 'پارسیان' && item.coinType !== 'پارسیان') {
+    if (!locked && item.category === 'coin' && !modernCoin && draft.coinType === 'پارسیان' && item.coinType !== 'پارسیان') {
       const weight = numericValue(draft.parsianWeight);
       if (!Number.isFinite(weight) || weight <= 0) nextErrors.parsianWeight = 'وزن معتبر و بیشتر از صفر برای پارسیان وارد کنید.';
       else changes.parsianWeight = weight;
+    }
+    if (!locked && modernCoin) {
+      if (draft.coinGroup !== item.coinGroup) changes.coinGroup = draft.coinGroup;
+      if (['coinType', 'coinGroup', 'coinWeight', 'coinAyar'].some(key => Object.hasOwn(changes, key))) changes.coinWeight750 = coinSpec(draft).weight750;
     }
     setErrors(nextErrors);
     const invalid = Object.keys(nextErrors)[0];
@@ -102,7 +110,7 @@ export default function VaultItemEditor({ item, name, mode, onSave, onDelete, on
     const props = { id: `vault-edit-${key}`, name: key, value: draft[key] ?? '', onChange: event => update(key, event.target.value), 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `vault-edit-${key}-error` : undefined };
     let control;
     if (['kind', 'coin', 'currency'].includes(kind)) {
-      const choices = kind === 'kind' ? craftedKinds.map(value => [value, value]) : kind === 'coin' ? coinCatalog.map(coin => [coin.name, coin.name]) : currencyCatalog.map(currency => [currency.code, currency.name]);
+      const choices = kind === 'kind' ? craftedKinds.map(value => [value, value]) : kind === 'coin' ? [...legacyCoinOptions, { name: 'پارسیان' }].map(coin => [coin.name, coin.name]) : currencyCatalog.map(currency => [currency.code, currency.name]);
       if (props.value && !choices.some(([value]) => value === props.value)) choices.unshift([props.value, props.value]);
       control = <select {...props}><option value="">انتخاب کنید</option>{choices.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select>;
     } else control = kind === 'text' ? <input {...props} type="text" maxLength={200}/> : <NumberInput {...props} maxLength={32}/>;
@@ -119,7 +127,7 @@ export default function VaultItemEditor({ item, name, mode, onSave, onDelete, on
           <label htmlFor="vault-edit-note">یادداشت داخلی<textarea id="vault-edit-note" name="note" value={draft.note} maxLength={5000} rows={2} onChange={event => update('note', event.target.value)}/></label>
         </fieldset>
         <p className="vault-editor-note">شرح و یادداشت در دفتر خصوصی حسابداری شما ذخیره می‌شوند.</p>
-        <fieldset disabled={busy || locked} className="vault-editor-spec-fields"><legend>مشخصات و موجودی</legend><div className="vault-editor-grid">{fields.map(field)}</div></fieldset>
+        <fieldset disabled={busy || locked} className="vault-editor-spec-fields"><legend>مشخصات و موجودی</legend><div className="vault-editor-grid">{modernCoin ? <CoinFields value={draft} onChange={next => { setDraft(next); setErrors({}); setError(''); }} locked={locked} groupLocked errors={errors} showRate={false}/> : fields.map(field)}</div></fieldset>
         {isMiscPurchase(item) && <p className="vault-editor-note" data-misc-edit-weight750>وزن معادل ۷۵۰ هر عدد: {new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 6 }).format(miscGoldWeight750(draft))} گرم</p>}
         {locked && <p className="vault-editor-note important">این جنس فروش مرتبط دارد؛ فقط نام، شرح و یادداشت قابل ویرایش است. وزن، اجرت، تعداد و سایر مشخصات حفظ می‌شوند.</p>}
         <p className="vault-editor-note">نرخ تاریخی، سود و هزینه‌های ثبت‌شدهٔ سند در این فرم تغییر نمی‌کنند.</p>

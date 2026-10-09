@@ -1,6 +1,7 @@
 import { documentBreakdown, number, quantity } from './assets.js';
 import { dateBefore, iranDate } from './sales.js';
 import { isoToPersian, normalizeDigits, persianToIso } from './persianDate.js';
+import { coinBase } from './coins.js';
 
 export const workspaceSections = { home: 'صفحه اصلی', entries: 'اسناد', reports: 'گزارش‌های حسابداری', crm: 'CRM و طرف حساب‌ها', settings: 'تنظیمات حسابداری' };
 export const toolSections = {
@@ -68,7 +69,7 @@ export function profitReport(documents, period = 'today', today = iranDate()) {
     discounts += discount;
     if (hasSellerProfit) { sellerProfit += recordedSellerProfit; sellerProfitKnown += 1; }
     const hasRecordedCost = source && source.amount !== undefined && source.amount !== null && source.amount !== '' && Number.isFinite(Number(source.amount));
-    const hasPrice = source && number(source.category === 'crafted' ? source.gramPrice : source.category === 'melted' ? source.meltedGramPrice : source.category === 'currency' ? source.currencyRate : source.coinType === 'پارسیان' ? source.parsianPrice : source.coinPrice) > 0;
+    const hasPrice = source && (source.category === 'coin' ? coinBase(source) > 0 : number(source.category === 'crafted' ? source.gramPrice : source.category === 'melted' ? source.meltedGramPrice : source.currencyRate) > 0);
     const known = source && source.category === sale.category && quantity(source) > 0 && quantity(sale) > 0 && (hasRecordedCost || hasPrice);
     if (!known) { unknownRevenue += saleAmount; return { sale, revenue: saleAmount, cost: null, profit: null, ...sellerFields }; }
     const lotCost = hasRecordedCost ? number(source.amount) : documentBreakdown(source).total;

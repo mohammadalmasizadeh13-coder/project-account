@@ -1,5 +1,6 @@
 import { normalizeDigits } from './persianDate.js';
 import { coinCatalog, currencyRate, quantity } from './assets.js';
+import { coinSpec, isModernCoin, isOrdinaryCoin } from './coins.js';
 
 export const stockCategories = { crafted: 'کار ساخته', coin: 'سکه', melted: 'آب‌شده', currency: 'ارز' };
 export const normalizeProductCode = value => normalizeDigits(value).trim().toUpperCase().replace(/\s/g, '');
@@ -45,6 +46,11 @@ export function validateStockSale(sale, documents) {
   if (!Number.isFinite(quantity) || quantity <= 0 || (sale.category !== 'currency' && !Number.isSafeInteger(quantity))) return 'مقدار فروش باید معتبر و بیشتر از صفر باشد؛ تعداد جنس باید صحیح باشد.';
   if (sale.category === 'currency' && sale.currencyType !== item.currencyType) return 'نوع ارز با موجودی انتخاب‌شده مطابقت ندارد.';
   if (sale.category === 'coin' && sale.coinType !== item.coinType) return 'نوع سکه با موجودی انتخاب‌شده مطابقت ندارد.';
+  if (sale.category === 'coin' && isModernCoin(sale) !== isModernCoin(item)) return 'روش قیمت‌گذاری سکه با موجودی انتخاب‌شده مطابقت ندارد.';
+  if (sale.category === 'coin' && isOrdinaryCoin(item)) {
+    const source = coinSpec(item), selected = coinSpec(sale);
+    if (source.weight !== selected.weight || source.ayar !== selected.ayar) return 'وزن و عیار سکه با موجودی انتخاب‌شده مطابقت ندارد.';
+  }
   if (quantity > item.remaining) return 'تعداد فروش از موجودی این کد بیشتر است.';
   if (sale.date < item.date) return 'تاریخ فروش نمی‌تواند قبل از ورود این جنس به صندوق باشد.';
   return '';
@@ -65,10 +71,12 @@ export function validateStockSales(sales, documents) {
   return '';
 }
 
-export const stockIdentityFields = ['itemName', 'craftedKind', 'weight', 'ayar', 'coinType', 'currencyType', 'parsianWeight', 'meltedWeight', 'meltedAyar', 'assayCode', 'laboratoryName', 'setId', 'setName', 'setKind', 'setMode', 'setPieceCount'];
+export const stockIdentityFields = ['itemName', 'craftedKind', 'weight', 'ayar', 'coinType', 'coinPricingVersion', 'coinGroup', 'coinWeight', 'coinAyar', 'coinWeight750', 'currencyType', 'parsianWeight', 'meltedWeight', 'meltedAyar', 'assayCode', 'laboratoryName', 'setId', 'setName', 'setKind', 'setMode', 'setPieceCount'];
 
 export function stockSaleForm(item, form, prices = {}) {
   const fields = Object.fromEntries(stockIdentityFields.map(key => [key, item[key] ?? '']));
+  // Absent coin identity is distinct from an empty persisted value at the API.
+  for (const key of ['coinPricingVersion', 'coinGroup', 'coinWeight', 'coinAyar', 'coinWeight750', 'parsianWeight']) fields[key] = item[key];
   const coinRates = Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price]));
   return { ...form, ...fields, itemName: String(item.itemName || '').trim(),
     type: `${item.category}-sale`, inventorySourceId: item.id, productCode: item.productCode,
@@ -76,7 +84,7 @@ export function stockSaleForm(item, form, prices = {}) {
     currencyAmount: '1', currencyRate: String(currencyRate(item.currencyType, prices) || item.currencyRate || ''),
     gramPrice: prices.goldGramPrice || item.gramPrice || '', meltedGramPrice: prices.goldGramPrice || item.meltedGramPrice || '',
     coinPrice: prices[coinRates[item.coinType]] || item.coinPrice || '', parsianPrice: item.parsianPrice || '',
-    wagePercent: item.wagePercent || '0', wageFixed: item.wageFixed || '0', otherCosts: item.otherCosts || '0', profitPercent: '7', discountRial: '', discountPercent: '',
+    wagePercent: item.wagePercent || '0', wageFixed: item.wageFixed || '0', otherCosts: item.otherCosts || '0', profitPercent: '7', profitFixed: '0', discountRial: '', discountPercent: '',
   };
 }
 

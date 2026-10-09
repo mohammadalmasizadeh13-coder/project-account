@@ -5,6 +5,7 @@ import { cp, mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { checkPartnerDocumentActions } from './partner-document-browser-scenarios.mjs';
+import { checkCoinTrading } from './coin-browser-scenarios.mjs';
 
 // Disposable database, isolated browser profile, and real UI/API interactions.
 const origin = 'http://127.0.0.1:4203';
@@ -107,7 +108,7 @@ try {
     await writeFile(resolve(`artifacts/${name}.png`), Buffer.from(result.data, 'base64'));
   };
   const workspace = () => evaluate(`fetch('/api/owner/workspace').then(r=>r.json())`);
-  await checkPartnerDocumentActions({ cdp, evaluate, ready, until, go, fill, click, resize, screenshot, workspace });
+  await (process.env.COIN_BROWSER_CHECK === '1' ? checkCoinTrading : checkPartnerDocumentActions)({ cdp, evaluate, ready, until, go, fill, click, resize, screenshot, workspace });
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
 } catch (error) {
   if (evaluate) { try { console.error('Browser state:', await evaluate(`JSON.stringify({path:location.pathname,text:document.body.innerText.slice(-4500)})`)); } catch {} }

@@ -14,7 +14,9 @@ from sqlalchemy import Column, Float, Integer, String, Table, select, update
 
 from .account_profile import stamp_workspace_gallery
 from .database import account_column, metadata, read_workspace, workspaces
-from .inventory import amount, create_stock, decimal_output, find_source, guard_linked_inventory_changes, item_summary, numeric, quantity
+from .inventory import (COIN_PHYSICAL_FIELDS, amount, coin_base, coin_fixed_profit, coin_rate_field,
+    create_stock, decimal_output, find_source, guard_linked_inventory_changes, is_ordinary_coin,
+    is_priced_coin, item_summary, numeric, quantity)
 from .invoices import guard_invoice_stock, prepare_invoices, reserve_invoice_numbers, validate_group
 from .pricing import iso_now, number
 from .security import account_request_id, digest, get_user, has_permission, require_mutation
@@ -26,6 +28,22 @@ partner_requests = Table("noor_partner_requests", metadata,
     Column("revision", Integer, nullable=False), Column("created_id", String(64), nullable=False),
     Column("created_at", Float, nullable=False))
 MAX_BALANCE = Decimal("9007199254740991")
+
+
+def copy_coin_identity(source, line):
+    if source.get("category") == "coin":
+        for field in COIN_PHYSICAL_FIELDS:
+            if field in source:
+                line[field] = source[field]
+            else:
+                line.pop(field, None)
+
+
+def coin_snapshot(document):
+    if document.get("category") != "coin":
+        return {}
+    fields = (*COIN_PHYSICAL_FIELDS, "gramPrice", "coinPrice", "parsianPrice", "profitFixed")
+    return {field: document[field] for field in fields if field in document}
 
 
 class StrictModel(BaseModel):
@@ -329,6 +347,7 @@ def make_supplier_invoice(data, partner, payload, identity, connection, *, exist
             for field in ("itemName", "craftedKind", "weight", "ayar", "coinType", "parsianWeight"):
                 if field in source:
                     line[field] = source[field]
+            copy_coin_identity(source, line)
             line["weightMode"] = "unit"
         elif source_id:
             raise HTTPException(422, "خرید همکار نباید به موجودی فروش متصل باشد.")
@@ -345,16 +364,21 @@ def make_supplier_invoice(data, partner, payload, identity, connection, *, exist
         elif category == "melted":
             line.setdefault("meltedAyar", 750)
             line.setdefault("meltedGramPrice", decimal_output(rate))
+        elif is_ordinary_coin(line):
+            line.setdefault("gramPrice", decimal_output(rate))
         if gold_invoice:
             profit_percent = numeric(line.get("profitPercent"), "سود خرید همکار", maximum=Decimal(100), default=7 if category == "crafted" else 0)
             line["profitPercent"] = format(profit_percent, "f")
             if category in {"crafted", "melted"}:
                 # A purchase and its gold conversion must use one frozen rate.
                 line["gramPrice" if category == "crafted" else "meltedGramPrice"] = decimal_output(rate)
+            elif is_ordinary_coin(line):
+                line["gramPrice"] = decimal_output(rate)
         else:
-            if numeric(line.get("profitPercent"), "سود خرید همکار", default=0) != 0:
+            if not is_priced_coin(line) and numeric(line.get("profitPercent"), "سود خرید همکار", default=0) != 0:
                 raise HTTPException(422, "خرید از همکار بدون سود فروش ثبت می‌شود.")
-            line["profitPercent"] = 0
+            if not is_priced_coin(line):
+                line["profitPercent"] = 0
         scale_weight = None
         with localcontext() as context:
             context.prec = 80
@@ -391,17 +415,21 @@ def make_supplier_invoice(data, partner, payload, identity, connection, *, exist
                     weight750=decimal_output(equivalent / quantity(document)), totalWeight750=decimal_output(equivalent), laborGold=decimal_output(labor))
             else:
                 equivalent, labor, line_gold, line_toman = Decimal(0), Decimal(0), Decimal(0), line_value
+                if is_ordinary_coin(document):
+                    scale_weight = quantity(document) * number(document["coinWeight"])
+                    equivalent = scale_weight * number(document["coinAyar"]) / 750
+                    document.update(scaleWeight=decimal_output(scale_weight), totalWeight750=decimal_output(equivalent))
             if gold_invoice:
                 count = quantity(document)
                 if category in {"crafted", "melted"}:
                     principal = equivalent
                 else:
-                    price_field = "currencyRate" if category == "currency" else "parsianPrice" if document.get("coinType") == "پارسیان" else "coinPrice"
-                    principal = count * number(document[price_field]) / rate
+                    price_field = "currencyRate" if category == "currency" else coin_rate_field(document)[0]
+                    principal = (coin_base(document, number(document[price_field])) if category == "coin" else count * number(document[price_field])) / rate
                     labor = Decimal(0) if category == "currency" else principal * number(document.get("wagePercent")) / 100
                 fixed_labor = count * number(document.get("wageFixed")) / rate
                 other_costs = count * number(document.get("otherCosts")) / rate
-                profit = (principal + labor + fixed_labor + other_costs) * profit_percent / 100
+                profit = (principal + labor + fixed_labor + other_costs) * profit_percent / 100 + coin_fixed_profit(document) / rate
                 line_gold, line_toman = principal + labor + fixed_labor + other_costs + profit, Decimal(0)
                 snapshot = {"calculationVersion": 2, "conversionGoldPrice": decimal_output(rate),
                     "principalGold": decimal_output(principal), "laborGold": decimal_output(labor),
@@ -415,7 +443,7 @@ def make_supplier_invoice(data, partner, payload, identity, connection, *, exist
             document["partnerGoldCredit" if selling else "partnerGoldDebit"] = decimal_output(rounded_gold(line_gold))
             document["itemSummary"] = item_summary(document)
             documents.append(document)
-            details.append({**original, **({"weightMode": "unit", **{field: document[field] for field in ("itemName", "weight", "ayar", "craftedKind", "coinType", "parsianWeight") if field in document}} if selling else {}), "documentId": document["id"], "productCode": document["productCode"],
+            details.append({**{key: value for key, value in original.items() if category != "coin" or key not in COIN_PHYSICAL_FIELDS}, **coin_snapshot(document), **({"weightMode": "unit", **{field: document[field] for field in ("itemName", "weight", "ayar", "craftedKind", "coinType", "parsianWeight") if field in document}} if selling else {}), "documentId": document["id"], "productCode": document["productCode"],
                 "scaleWeight": decimal_output(scale_weight) if scale_weight is not None else 0,
                 "weight750": decimal_output(equivalent), "laborGold": decimal_output(labor),
                 "goldDebit": decimal_output(rounded_gold(line_gold)), "tomanDebit": decimal_output(line_toman), "amount": document["amount"], **snapshot})
@@ -497,7 +525,7 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
     documents, details, directions = [], [], set()
     totals = {"goldDebit": Decimal(0), "goldCredit": Decimal(0)}
     draft = {**data, "documents": list(data["documents"])}
-    physical_fields = ("itemName", "craftedKind", "weight", "ayar", "coinType", "parsianWeight",
+    physical_fields = ("itemName", "craftedKind", "weight", "ayar", *COIN_PHYSICAL_FIELDS,
         "meltedWeight", "meltedAyar", "assayCode", "laboratoryName", "currencyType")
     with localcontext() as context:
         context.prec = 80
@@ -548,6 +576,7 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
                 for field in physical_fields:
                     if field in source:
                         line[field] = source[field]
+                copy_coin_identity(source, line)
                 line["weightMode"] = "unit"
             elif source_id:
                 raise HTTPException(422, "خرید همکار نباید به موجودی فروش متصل باشد.")
@@ -565,6 +594,8 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
                 line["meltedGramPrice"] = format(fee / Decimal("4.3318"), "f")
             elif fee is not None:
                 raise HTTPException(422, "فی آب‌شده فقط برای ردیف آب‌شده معتبر است.")
+            if is_ordinary_coin(line):
+                line["gramPrice"] = format(rate, "f")
             profit_percent = numeric(line.get("profitPercent"), "سود همکار", maximum=Decimal(100), default=7 if category == "crafted" else 0)
             line["profitPercent"] = format(profit_percent, "f")
             scale_weight = Decimal(0)
@@ -585,12 +616,16 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
                 document.update(scaleWeight=decimal_output(scale_weight), weightMode=weight_mode,
                     weight750=decimal_output(equivalent / count), totalWeight750=decimal_output(equivalent))
             else:
-                price_field = "currencyRate" if category == "currency" else "parsianPrice" if document.get("coinType") == "پارسیان" else "coinPrice"
-                principal = count * number(document[price_field]) / rate
+                price_field = "currencyRate" if category == "currency" else coin_rate_field(document)[0]
+                principal = (coin_base(document, number(document[price_field])) if category == "coin" else count * number(document[price_field])) / rate
+                if is_ordinary_coin(document):
+                    scale_weight = count * number(document["coinWeight"])
+                    equivalent = scale_weight * number(document["coinAyar"]) / 750
+                    document.update(scaleWeight=decimal_output(scale_weight), totalWeight750=decimal_output(equivalent))
             labor = Decimal(0) if category == "currency" else principal * number(document.get("wagePercent")) / 100
             fixed_labor = Decimal(0) if category == "currency" else count * number(document.get("wageFixed")) / rate
             other_costs = count * number(document.get("otherCosts")) / rate
-            profit = (principal + labor + fixed_labor + other_costs) * profit_percent / 100
+            profit = (principal + labor + fixed_labor + other_costs) * profit_percent / 100 + coin_fixed_profit(document) / rate
             line_gold = principal + labor + fixed_labor + other_costs + profit
             if not rounded_gold(line_gold):
                 raise HTTPException(422, "مقدار ردیف کمتر از دقت مجاز دفتر است.")
@@ -621,7 +656,7 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
             document["itemSummary"] = item_summary(document)
             documents.append(document)
             # Persist authoritative physical fields and derived prices, never client snapshots.
-            details.append({**line, **{field: document[field] for field in physical_fields if field in document},
+            details.append({**line, **coin_snapshot(document), **{field: document[field] for field in physical_fields if field in document},
                 **({"inventorySourceId": source["id"]} if source else {}), "direction": direction,
                 "weightMode": weight_mode, "documentId": document["id"], "productCode": document["productCode"],
                 "scaleWeight": decimal_output(scale_weight), "weight750": decimal_output(equivalent),

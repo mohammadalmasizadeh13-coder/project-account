@@ -2,6 +2,7 @@ import { currencyName, documentBreakdown } from './assets.js';
 import { craftedKind } from './crmAnalytics.js';
 import { stockCategories } from './inventory.js';
 import { normalizeDigits } from './persianDate.js';
+import { coinSpec, isOrdinaryCoin } from './coins.js';
 
 export const defaultVaultFilters = Object.freeze({
   query: '', category: 'all', status: 'available', craftedKind: 'all', coinType: 'all', currencyType: 'all',
@@ -30,6 +31,7 @@ function parseBound(value) {
 }
 
 function itemUnitWeight(item) {
+  if (item.category === 'coin' && isOrdinaryCoin(item)) return coinSpec(item).weight;
   const value = item.category === 'crafted' ? item.weight
     : item.category === 'melted' ? item.meltedWeight
       : item.category === 'coin' && item.coinType === 'پارسیان' ? item.parsianWeight : null;

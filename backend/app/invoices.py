@@ -10,7 +10,10 @@ from sqlalchemy import Column, Index, Integer, Table, case, literal, select, upd
 from .account_profile import stamp_gallery_names
 from .database import LEGACY_ACCOUNT_ID, account_column, metadata, read_gallery_name
 from .customer_details import document_detail_header
-from .inventory import ECONOMIC_FIELDS, STOCK_TYPES, TEXT_FIELDS, discounted_amount, is_sale, is_stock_entry, normalize_misc_purchase, numeric, quantity, validate_item, values_differ
+from .inventory import (COIN_PHYSICAL_FIELDS, ECONOMIC_FIELDS, STOCK_TYPES, TEXT_FIELDS,
+    coin_base, coin_fixed_profit, coin_rate_field, discounted_amount, is_priced_coin,
+    is_sale, is_stock_entry, item_summary, item_weight, normalize_coin_specs, normalize_misc_purchase,
+    numeric, quantity, validate_item, values_differ)
 from .pricing import number
 
 
@@ -64,13 +67,13 @@ def settlement_row_total(row):
         base = count * numeric(row.get(weight), "وزن") * numeric(row.get(purity), "عیار", default=750) / 750
         base *= numeric(row.get(price), "نرخ ثبت‌شدهٔ هر گرم", minimum=Decimal("0.00000001"))
     elif category == "coin":
-        price = "parsianPrice" if row.get("coinType") == "پارسیان" else "coinPrice"
-        base = count * numeric(row.get(price), "نرخ ثبت‌شدهٔ سکه", minimum=Decimal("0.00000001"))
+        price, _ = coin_rate_field(row)
+        base = coin_base(row, numeric(row.get(price), "نرخ ثبت‌شدهٔ سکه", minimum=Decimal("0.00000001")))
     else:
         base = count * numeric(row.get("currencyRate"), "نرخ ثبت‌شدهٔ ارز", minimum=Decimal("0.00000001"))
     wage = Decimal(0) if category == "currency" else base * numeric(row.get("wagePercent"), "اجرت درصدی", default=0) / 100 + count * numeric(row.get("wageFixed"), "اجرت ثابت", default=0)
     costs = count * numeric(row.get("otherCosts"), "هزینه‌های دیگر", default=0)
-    profit = (base + wage + costs) * numeric(row.get("profitPercent"), "سود درصدی", default=0) / 100
+    profit = (base + wage + costs) * numeric(row.get("profitPercent"), "سود درصدی", default=0) / 100 + coin_fixed_profit(row)
     gross = base + wage + costs + profit
     return discounted_amount(row, gross)
 
@@ -155,7 +158,7 @@ def validate_group(rows):
             document_detail_header(row)))
         validate_item(row)
         saved_amount = numeric(row.get("amount"), "مبلغ ردیف", maximum=Decimal(MAX_SAFE_INTEGER))
-        if is_sale(row) and number(row.get("discountPercent")) > 0:
+        if is_priced_coin(row) or is_sale(row) and number(row.get("discountPercent")) > 0:
             with localcontext() as context:
                 context.prec = 80
                 exact = settlement_row_total(row)
@@ -190,6 +193,9 @@ def guard_invoice_stock(incoming, new_rows):
         identity_field = {"coin": "coinType", "currency": "currencyType"}.get(row["category"])
         if identity_field and source.get(identity_field) != row.get(identity_field):
             invoice_error("نوع کالا با موجودی انتخاب‌شده مطابقت ندارد.", 409)
+        if row["category"] == "coin" and (is_priced_coin(source) or is_priced_coin(row)):
+            if any(values_differ(field, source.get(field), row.get(field)) for field in COIN_PHYSICAL_FIELDS):
+                invoice_error("وزن و عیار و گروه سکه باید با موجودی انتخاب‌شده یکسان باشد.", 409)
         if source.get("date") and row["date"] < str(source["date"]):
             invoice_error("تاریخ فروش نمی‌تواند پیش از ورود جنس به صندوق باشد.")
         touched.add(str(identifier))
@@ -238,6 +244,16 @@ def prepare_invoices(previous, incoming, connection, *, allow_single_stock_edit=
             if not allow_single_stock_edit and any(values_differ(field, old.get(field), row.get(field)) for field in protected):
                 invoice_error("مشخصات خرید طلای متفرقه را از بخش اصلاح موجودی تغییر دهید.", 409)
     incoming = [normalize_misc_purchase(row, prices) if str(row["id"]) not in previous_by_id else row for row in incoming]
+    for row in incoming:
+        if str(row["id"]) not in previous_by_id and is_priced_coin(row):
+            normalize_coin_specs(row)
+            row.update(itemWeight=item_weight(row), itemSummary=item_summary(row))
+            with localcontext() as context:
+                context.prec = 80
+                exact = settlement_row_total(row)
+                saved = numeric(row.get("amount"), "مبلغ ردیف", maximum=Decimal(MAX_SAFE_INTEGER))
+                if abs(saved - exact) > max(Decimal("1e-12"), abs(exact) * Decimal("2e-15")) and not rounded_matches(saved, exact, Decimal(1)):
+                    invoice_error("مبلغ سکه با وزن، عیار، نرخ روز و سود ثبت‌شده مطابقت ندارد.")
     incoming_by_id = {str(row["id"]): row for row in incoming}
     existing = invoice_groups(previous)
     groups = invoice_groups(incoming)

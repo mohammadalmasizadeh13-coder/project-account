@@ -7,8 +7,9 @@ import { validateDocument } from './documentValidation.js';
 import { profitPercentInput } from './profitDefaults.js';
 import { isMiscPurchase, miscGoldWeight750, miscGoldDefaults } from './miscGold.js';
 import { expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm } from './jewelrySets.js';
-const dependencies = { isMiscPurchase, miscGoldWeight750, miscGoldDefaults, quantity, documentBreakdown, currencyName, currencyRate, validateDocument, profitPercentInput, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity: quantity, coinPriceFields: Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price])), CircleDollarSign: null };
-const dependencySource = 'const { isMiscPurchase, miscGoldWeight750, miscGoldDefaults, quantity, documentBreakdown, currencyName, currencyRate, validateDocument, profitPercentInput, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity, coinPriceFields, CircleDollarSign } = dependencies;';
+import { coinSpec, coinSummary, isModernCoin, isOrdinaryCoin } from './coins.js';
+const dependencies = { coinSpec, coinSummary, isModernCoin, isOrdinaryCoin, isMiscPurchase, miscGoldWeight750, miscGoldDefaults, quantity, documentBreakdown, currencyName, currencyRate, validateDocument, profitPercentInput, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity: quantity, coinPriceFields: Object.fromEntries(coinCatalog.map(coin => [coin.name, coin.price])), CircleDollarSign: null };
+const dependencySource = 'const { coinSpec, coinSummary, isModernCoin, isOrdinaryCoin, isMiscPurchase, miscGoldWeight750, miscGoldDefaults, quantity, documentBreakdown, currencyName, currencyRate, validateDocument, profitPercentInput, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm, stockQuantity, coinPriceFields, CircleDollarSign } = dependencies;';
 
 // Exercise the existing ledger's financial calculations, not copies of them.
 const source = readFileSync(new URL('./AccountingApp.jsx', import.meta.url), 'utf8');
@@ -55,6 +56,14 @@ test('inclusive seven-day and thirty-day periods use Tehran dates, with empty da
   assert.equal(week.series.length, 7);
   assert.equal(week.series[1].amount, 0);
   assert.equal(salesReport(records, 'month', helpers, today).total, 40);
+});
+
+test('ordinary coin sales report scale weight and price their equivalent 750 weight at the recorded rate', () => {
+  const report = salesReport([{ type: 'coin-sale', category: 'coin', date: today, coinType: 'تمام عادی', coinGroup: 'ordinary',
+    coinPricingVersion: 2, coinCount: 2, coinWeight: 8.133, coinAyar: 900, gramPrice: 1000, profitFixed: 100, profitPercent: 5 }], 'today', helpers, today);
+  assert.ok(Math.abs(report.totalWeight - 16.266) < 1e-10);
+  assert.ok(Math.abs(report.total - (19519.2 * 1.05 + 200)) < 1e-8);
+  assert.equal(report.count, 2);
 });
 
 test('empty reports and zero-valued discounted sales remain valid', () => {

@@ -7,6 +7,8 @@ import { expenseUnits, expenseValue } from './expenses';
 import { invoiceItemName } from './invoices';
 import { invoiceSettlement } from './invoiceSettlement';
 import { isMiscPurchase } from './miscGold';
+import CoinFields from './CoinFields.jsx';
+import { isModernCoin, isOrdinaryCoin } from './coins.js';
 import { validateDocument } from './documentValidation';
 import { customerDocumentDetails, validateCustomerDocumentDetails } from './customerDetails';
 import './document-editor.css';
@@ -22,9 +24,12 @@ function rowFields(row) {
       ? [['itemCount', 'تعداد'], ['meltedWeight', 'وزن هر قطعه (گرم)'], ['meltedAyar', 'عیار'], ['meltedGramPrice', 'قیمت هر گرم طلا (تومان)']]
       : row.category === 'currency'
         ? [['currencyAmount', 'مقدار ارز'], ['currencyRate', 'نرخ هر واحد ارز (تومان)']]
-        : [['coinCount', 'تعداد سکه'], [row.coinType === 'پارسیان' ? 'parsianPrice' : 'coinPrice', 'قیمت هر سکه (تومان)'], ...(row.coinType === 'پارسیان' ? [['parsianWeight', 'وزن هر سکه (گرم)']] : [])];
+        : isModernCoin(row)
+          ? [['coinCount', 'تعداد سکه'], ...(isOrdinaryCoin(row) ? [['coinWeight', 'وزن ترازو هر سکه (گرم)'], ['coinAyar', 'عیار اصلی'], ['gramPrice', 'نرخ طلای ۷۵۰ (تومان)']] : [['coinPrice', 'نرخ تابلو هر سکه (تومان)']]), ['profitFixed', 'سود ثابت هر سکه (تومان)']]
+          : [['coinCount', 'تعداد سکه'], [row.coinType === 'پارسیان' ? 'parsianPrice' : 'coinPrice', 'قیمت هر سکه (تومان)'], ...(row.coinType === 'پارسیان' ? [['parsianWeight', 'وزن هر سکه (گرم)']] : [])];
   return [...fields, ...(row.category !== 'currency' && !isMiscPurchase(row) ? [['wagePercent', 'اجرت (%)'], ['wageFixed', 'اجرت ثابت هر واحد (تومان)']] : []), ...(!isMiscPurchase(row) ? commonNumbers : []), ...(row.type?.endsWith('-sale') ? [['discountPercent', 'تخفیف درصدی (%)']] : [])];
 }
+const economicChange = (row, original) => [...rowFields(row).map(([key]) => key), ...(row.category === 'coin' && isModernCoin(row) ? ['coinType', 'coinGroup'] : [])].some(key => String(row[key] ?? '') !== String(original[key] ?? ''));
 
 export const canManageInvoice = invoice => invoice?.rows?.length > 0 && invoice.rows.every(row => row.source !== 'opening-inventory' && row.counterpartyType !== 'partner' && !row.partnerId);
 
@@ -63,15 +68,18 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
   }
   const total = rows.reduce((sum, row, index) => {
     if (row.type === 'expense') return sum + expenseValue({ ...row, expenseUnit: row.expenseUnit ?? 'toman', expenseAmount: row.expenseAmount ?? row.amount });
-    const economicChange = rowFields(row).some(([key]) => String(row[key] ?? '') !== String(original[index][key] ?? ''));
-    const amount = settled ? Math.round(documentBreakdown(row).total) : !economicChange && row.amount != null ? number(row.amount) : documentBreakdown(row).total;
+    const changed = economicChange(row, original[index]);
+    const amount = settled ? Math.round(documentBreakdown(row).total) : !changed && row.amount != null ? number(row.amount) : documentBreakdown(row).total;
     return sum + amount;
   }, 0);
   const settlement = settled ? invoiceSettlement(rows, header.cashPaid, header.settlementGoldPrice) : null;
   function changes() {
     const customer = customers.find(item => String(item.id) === String(header.customerId));
     return rows.map((row, index) => {
-      const next = Object.fromEntries(Object.entries(row).filter(([key, value]) => String(value ?? '') !== String(original[index][key] ?? '')));
+      const inactiveCoinFields = row.category === 'coin' && isModernCoin(row)
+        ? ['parsianWeight', 'parsianPrice', ...(isOrdinaryCoin(row) ? ['coinPrice'] : ['coinWeight', 'coinAyar', 'coinWeight750', 'gramPrice'])]
+        : [];
+      const next = Object.fromEntries(Object.entries(row).filter(([key, value]) => !inactiveCoinFields.includes(key) && String(value ?? '') !== String(original[index][key] ?? '')));
       if (header.date !== first.date) next.date = header.date;
       if (!expense && !settled && String(header.gold18Price) !== String(first.gold18Price ?? '')) next.gold18Price = header.gold18Price;
       if (!expense) {
@@ -92,11 +100,10 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
     if (!pending.current) {
       if (!deleting) {
         for (const [index, row] of rows.entries()) {
-          if (!row.type?.endsWith('-sale')) continue;
-          const economicChange = rowFields(row).some(([key]) => String(row[key] ?? '') !== String(original[index][key] ?? ''));
-          if (!economicChange) continue;
+          if (!row.type?.endsWith('-sale') && !(row.category === 'coin' && isModernCoin(row))) continue;
+          if (!economicChange(row, original[index])) continue;
           const validation = validateDocument(row, row.category, number);
-          const discountError = validation.discountPercent || validation.discountRial;
+          const discountError = row.category === 'coin' && isModernCoin(row) ? Object.values(validation)[0] : validation.discountPercent || validation.discountRial;
           if (discountError) { setError(`ردیف ${(index + 1).toLocaleString('fa-IR')}: ${discountError}`); return; }
         }
       }
@@ -141,7 +148,8 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
           <div className="document-edit-grid">
             {!expense && <label>نام جنس<input name="itemName" value={row.itemName || ''} maxLength={200} onChange={event => updateRow(index, 'itemName', event.target.value)}/></label>}
             {expense && <><label>دریافت‌کننده<input name="expensePayee" value={row.expensePayee || ''} onChange={event => updateRow(index, 'expensePayee', event.target.value)}/></label><label>واحد هزینه<select name="expenseUnit" value={row.expenseUnit ?? 'toman'} onChange={event => updateRow(index, 'expenseUnit', event.target.value)}>{expenseUnits.map(unit => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</select></label></>}
-            {rowFields(row).map(([name, label]) => numericField(index, name, label))}
+            {row.category === 'coin' && isModernCoin(row) && <CoinFields value={row} prices={{ goldGramPrice: row.gramPrice }} locked={row.type?.endsWith('-sale')} onChange={next => { setRows(previous => previous.map((current, position) => position === index ? next : current)); setError(''); }}/>}
+            {rowFields(row).filter(([name]) => !(row.category === 'coin' && isModernCoin(row)) || !['coinCount', 'coinWeight', 'coinAyar', 'gramPrice', 'coinPrice'].includes(name)).map(([name, label]) => numericField(index, name, label))}
             {expense && row.expenseUnit === 'gold' && numericField(index, 'expenseGoldPurity', 'عیار طلای هزینه')}
             {expense && row.expenseUnit === 'currency' && <label>نوع ارز<select name="expenseCurrency" value={row.expenseCurrency || 'USD'} onChange={event => updateRow(index, 'expenseCurrency', event.target.value)}>{currencyCatalog.map(currency => <option value={currency.code} key={currency.code}>{currency.name}</option>)}</select></label>}
             {expense && ['gold', 'currency'].includes(row.expenseUnit) && numericField(index, 'expenseRate', 'نرخ تبدیل به تومان')}

@@ -24,7 +24,7 @@ from .security import account_request_id, digest, has_permission, require_mutati
 
 
 RATE_FIELDS = {"crafted": {"gramPrice"}, "melted": {"meltedGramPrice"},
-    "coin": {"coinPrice", "parsianPrice"}, "currency": {"currencyRate"}}
+    "coin": {"coinPrice", "parsianPrice", "gramPrice"}, "currency": {"currencyRate"}}
 TRADE_FIELDS = {"date", "customerId", "customerName", "gramDebt", "rialDebt", "gold18Price",
     "profitPercent", "otherCosts", "discountRial", "discountPercent", "cashPaid", "settlementGoldPrice"} | DOCUMENT_DETAIL_FIELDS
 EXPENSE_FIELDS = {"date", "description", "note", "expensePayee", "expenseUnit", "expenseCurrency",
@@ -100,7 +100,7 @@ def normalize_changes(row, changes):
         elif expense and field in {"expenseGoldPurity", "expenseRate"} and value in (None, ""):
             normalized[field] = None
         else:
-            default = 0 if field in {"wagePercent", "wageFixed", "profitPercent", "otherCosts", "discountRial", "discountPercent", "gramDebt", "rialDebt", "cashPaid"} else None
+            default = 0 if field in {"wagePercent", "wageFixed", "profitPercent", "profitFixed", "otherCosts", "discountRial", "discountPercent", "gramDebt", "rialDebt", "cashPaid"} else None
             maximum = Decimal(100) if field == "discountPercent" else Decimal(MAX_SAFE_INTEGER) if field in {"cashPaid", "discountRial", "expenseAmount"} else Decimal("1e12")
             normalized[field] = format(numeric(value, "مقدار واردشده", maximum=maximum, default=default), "f")
     if any(key in normalized for key in ("cashPaid", "settlementGoldPrice")) and row.get("settlementVersion") != 1:
