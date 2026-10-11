@@ -298,6 +298,7 @@ connection.close()`, join(temporary, 'gallery-test.db'), accountId], { windowsHi
   await until(`document.querySelector('.partner-crm .form-message.success')`);
   const remittance = (await workspace()).data.partners[0].entries.at(-1);
   assert.equal(remittance.galleryName, renamedGallery, 'Partner remittances store the account gallery');
+  await ready('[data-partner-document-close]'); await click('[data-partner-document-close]');
   await tool('search'); await click(`[data-invoice-id="${remittance.transactionId}"] [data-invoice-view]`);
   await ready('[data-partner-document-dialog]'); assert.equal(await galleryText(), renamedGallery);
   await evaluate('window.print=()=>{}'); await click('[data-partner-document-dialog] [data-invoice-print]');
