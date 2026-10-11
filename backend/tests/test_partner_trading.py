@@ -262,3 +262,95 @@ def test_group_change_keeps_old_entries_correctable_and_switches_new_workflow(cl
         'revision': changed_back.json()['revision'], 'requestId': str(uuid4())}, headers=headers)
     assert removed.status_code == 200, removed.text
     assert len(removed.json()['data']['partners'][0]['entries']) == 1
+
+
+def test_delivery_row_descriptions_survive_reload_replay_edit_and_clear(client):
+    headers, identifier = setup(client)
+    lines = [
+        {'category': 'toman', 'direction': 'receive', 'quantity': 500000, 'description': '  واریز بانکی  '},
+        {'category': 'toman', 'direction': 'pay', 'quantity': 200000, 'description': 'پرداخت نقدی'},
+    ]
+    result, body = operation(client, headers, identifier, kind='delivery', lines=lines, note='یادداشت کل سند')
+    assert result.status_code == 201, result.text
+    original = result.json()['data']['partners'][0]['entries'][0]
+    assert [line['description'] for line in original['lines']] == ['واریز بانکی', 'پرداخت نقدی']
+    assert original['note'] == 'یادداشت کل سند'
+    assert original['tomanBalance'] == 300000
+    assert client.get('/api/owner/workspace').json()['data']['partners'][0]['entries'][0] == original
+    path = f'/api/owner/partners/{identifier}/operations'
+    replay = client.post(path, json=body, headers=headers)
+    assert replay.status_code == 200 and replay.json()['revision'] == result.json()['revision']
+    altered = {**body, 'lines': [{**lines[0], 'description': 'شرح دیگر'}, lines[1]]}
+    assert client.post(path, json=altered, headers=headers).status_code == 409
+    edited = client.patch(f'{path}/{original["id"]}', json={**altered,
+        'revision': result.json()['revision'], 'requestId': str(uuid4())}, headers=headers)
+    assert edited.status_code == 200, edited.text
+    entry = edited.json()['data']['partners'][0]['entries'][0]
+    assert [line['description'] for line in entry['lines']] == ['شرح دیگر', 'پرداخت نقدی']
+    assert [entry[key] for key in ('id', 'invoiceNumber', 'transactionId', 'createdAt', 'tomanBalance')] == [original[key] for key in ('id', 'invoiceNumber', 'transactionId', 'createdAt', 'tomanBalance')]
+    cleared = client.patch(f'{path}/{original["id"]}', json={**body,
+        'revision': edited.json()['revision'], 'requestId': str(uuid4()),
+        'lines': [{**lines[0], 'description': ''}, lines[1]]}, headers=headers)
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()['data']['partners'][0]['entries'][0]['lines'][0]['description'] == ''
+
+
+def test_stock_delivery_descriptions_are_saved_per_document_and_can_be_changed(client):
+    headers, identifier = setup(client)
+    received, _ = operation(client, headers, identifier, kind='delivery', note='یادداشت دریافت', lines=[
+        {'category': 'currency', 'currencyType': 'IQD', 'direction': 'receive', 'quantity': 1000, 'rate': 70, 'description': 'دینار دریافتی'}])
+    assert received.status_code == 201, received.text
+    source = received.json()['data']['documents'][0]
+    assert source['description'] == 'دینار دریافتی'
+    assert source['note'] == 'یادداشت دریافت'
+    paid, body = operation(client, headers, identifier, kind='delivery', note='یادداشت پرداخت', lines=[
+        {'category': 'currency', 'direction': 'pay', 'quantity': 100, 'inventorySourceId': source['id'], 'description': 'تحویل به نماینده'}])
+    assert paid.status_code == 201, paid.text
+    entry = paid.json()['data']['partners'][0]['entries'][-1]
+    outgoing = next(row for row in paid.json()['data']['documents'] if row['id'] == entry['documentIds'][0])
+    assert outgoing['description'] == entry['lines'][0]['description'] == 'تحویل به نماینده'
+    assert outgoing['note'] == 'یادداشت پرداخت'
+    edited = client.patch(f'/api/owner/partners/{identifier}/operations/{entry["id"]}', json={**body,
+        'revision': paid.json()['revision'], 'requestId': str(uuid4()),
+        'lines': [{**body['lines'][0], 'description': 'شرح اصلاحی'}]}, headers=headers)
+    assert edited.status_code == 200, edited.text
+    documents = edited.json()['data']['documents']
+    assert next(row for row in documents if row['id'] == source['id'])['description'] == 'دینار دریافتی'
+    assert next(row for row in documents if row['id'] == outgoing['id'])['description'] == 'شرح اصلاحی'
+    assert stock_entries(documents)[source['id']]['remaining'] == 900
+
+
+def test_trade_and_simultaneous_cash_have_separate_descriptions(client):
+    headers, identifier = setup(client)
+    result, body = operation(client, headers, identifier, cashAmount=25000000, cashDescription='  واریز بابت خرید  ', lines=[
+        {'category': 'melted', 'direction': 'purchase', 'quantity': 10, 'rate': 43318000, 'description': 'خرید توافقی'}])
+    assert result.status_code == 201, result.text
+    entry = result.json()['data']['partners'][0]['entries'][0]
+    assert [line['description'] for line in entry['lines']] == ['خرید توافقی', 'واریز بابت خرید']
+    assert (entry['goldBalance'], entry['tomanBalance']) == (-10, 75000000)
+    retry = client.post(f'/api/owner/partners/{identifier}/operations', json=body, headers=headers)
+    assert retry.status_code == 200 and retry.json()['revision'] == result.json()['revision']
+    offset, _ = operation(client, headers, identifier, kind='offset', lines=[
+        {'asset': 'gold', 'quantity': 3, 'rate': 11000000, 'description': 'کسر از طلب طلا'},
+        {'asset': 'toman', 'quantity': 33000000, 'rate': 1, 'description': 'کسر از بدهی وجه'}])
+    assert offset.status_code == 201, offset.text
+    assert [line['description'] for line in offset.json()['data']['partners'][0]['entries'][-1]['lines']] == ['کسر از طلب طلا', 'کسر از بدهی وجه']
+
+
+@pytest.mark.parametrize('description', [None, 123, {'text': 'شرح'}, 'الف' * 1667])
+def test_invalid_row_description_does_not_change_accounts(client, description):
+    headers, identifier = setup(client)
+    before = client.get('/api/owner/workspace').json()
+    result, _ = operation(client, headers, identifier, kind='delivery', lines=[
+        {'category': 'toman', 'direction': 'receive', 'quantity': 500000, 'description': description}])
+    assert result.status_code == 422, result.text
+    assert client.get('/api/owner/workspace').json() == before
+
+
+def test_operation_description_defaults_preserve_pre_upgrade_request_hashes():
+    from app.partner_trading import PartnerOperation
+    body = {'revision': 1, 'requestId': str(uuid4()), 'date': '2026-10-11', 'kind': 'delivery',
+        'invoiceTime': '', 'note': '', 'reference': '', 'cashAmount': 0, 'cashDirection': 'pay',
+        'lines': [{'category': 'toman', 'direction': 'pay', 'quantity': 100}]}
+    normalized = PartnerOperation.model_validate(body).model_dump(mode='json')
+    assert normalized == body

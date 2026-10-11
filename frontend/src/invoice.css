@@ -100,8 +100,7 @@
   body.invoice-open .invoice-overlay { display: block; position: static; padding: 0; background: transparent; backdrop-filter: none; }
   body.invoice-open .invoice-dialog { page: invoice-document; display: block; width: 100%; max-height: none; overflow: visible; border-radius: 0; box-shadow: none; }
   body.invoice-open .invoice-controls, body.invoice-open .invoice-print-settings { display: none !important; }
-  /* Preprinted stationery supplies every decoration. These rules also apply
-     when the printer's "background graphics" option is enabled. */
+  /* Print black text and a complete table grid on plain paper. */
   body.invoice-open .invoice-dialog,
   body.invoice-open .invoice-sheet,
   body.invoice-open .invoice-sheet * { color: #000 !important; background: transparent !important; border: 0 !important; box-shadow: none !important; text-shadow: none !important; outline: none !important; }
@@ -120,6 +119,8 @@
   body.invoice-open .invoice-content { padding: 2mm 3mm; }
   body.invoice-open .invoice-table-scroll { overflow: visible; }
   body.invoice-open .invoice-items { min-width: 0; font-size: 7.5pt; }
+  body.invoice-open .invoice-sheet .invoice-items { border-collapse: collapse; border: 1px solid #000 !important; }
+  body.invoice-open .invoice-sheet .invoice-items :is(th, td) { border: 1px solid #000 !important; border-radius: 0; }
   body.invoice-open .invoice-items th { padding: 1.5mm .5mm; }
   body.invoice-open .invoice-items td { padding: 1.5mm .75mm; line-height: 1.5; }
   body.invoice-open .invoice-items small { font-size: 6.5pt; }

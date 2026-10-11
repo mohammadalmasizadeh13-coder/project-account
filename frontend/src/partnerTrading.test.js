@@ -41,6 +41,44 @@ test('editing physical payment uses stock units and strips saved-only fields', (
   assert.deepEqual(payload.lines, [{ category: 'melted', direction: 'pay', quantity: 1, inventorySourceId: 'lot' }]);
 });
 
+test('delivery descriptions stay attached to each cash or stock row through editing', () => {
+  const entry = { type: 'delivery', date: '2026-10-11', note: 'یادداشت کل سند', lines: [
+    { category: 'toman', direction: 'receive', quantity: 500000, amount: 500000, description: 'واریز به حساب بانکی' },
+    { category: 'currency', currencyType: 'IQD', direction: 'pay', quantity: 1000, stockQuantity: 1000, inventorySourceId: 'lot', description: 'تحویل به نماینده' },
+  ] };
+  const draft = operationDraft(entry);
+  assert.deepEqual(draft.lines.map(line => line.description), ['واریز به حساب بانکی', 'تحویل به نماینده']);
+  const payload = operationPayload(draft);
+  assert.deepEqual(payload.lines.map(line => line.description), ['واریز به حساب بانکی', 'تحویل به نماینده']);
+  assert.equal(payload.note, 'یادداشت کل سند');
+  const stock = [{ id: 'lot', category: 'currency', currencyType: 'IQD' }];
+  assert.deepEqual(operationPreview(draft, {}, stock).changes, { toman: 500000, 'currency:IQD': -1000 });
+  draft.lines[0].description = '';
+  assert.equal('description' in operationPayload(draft).lines[0], false);
+});
+
+test('simultaneous payment keeps its description separate from the trade description', () => {
+  const entry = { type: 'trade', date: '2026-10-11', lines: [
+    { category: 'melted', direction: 'purchase', quantity: 10, rate: 43318000, description: 'خرید توافقی' },
+    { category: 'toman', direction: 'pay', quantity: 25000000, simultaneous: true, description: 'بابت بخشی از خرید' },
+  ] };
+  const draft = operationDraft(entry), payload = operationPayload(draft);
+  assert.equal(draft.lines.length, 1);
+  assert.equal(payload.lines[0].description, 'خرید توافقی');
+  assert.equal(payload.cashDescription, 'بابت بخشی از خرید');
+  assert.equal(payload.cashAmount, 25000000);
+  assert.equal('cashDescription' in operationPayload(newOperation()), false);
+  assert.equal(operationDraft({ ...entry, lines: [{ ...entry.lines[0], description: undefined }] }).cashDescription, '');
+});
+
+test('offset descriptions remain in the payload without changing selected balances', () => {
+  const form = { ...newOperation('offset'), lines: [
+    { asset: 'gold', quantity: 3, rate: 11000000, description: 'کسر از طلب طلا' },
+    { asset: 'toman', quantity: 33000000, rate: 1, description: 'کسر از بدهی وجه' },
+  ] };
+  assert.deepEqual(operationPayload(form).lines, form.lines);
+});
+
 test('delivery changes stock once without creating a second sale or profit', () => {
   const lot = { id: 'lot', type: 'currency-purchase', category: 'currency', currencyType: 'IQD', currencyAmount: 10000, currencyRate: 70, amount: 700000, partnerOperation: true, date: '2026-10-11' };
   const paid = { ...lot, id: 'paid', type: 'currency-sale', inventorySourceId: 'lot', currencyAmount: 1000, amount: 70000 };

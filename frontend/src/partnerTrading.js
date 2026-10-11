@@ -30,25 +30,26 @@ export function lineAsset(line) {
   return `coin:${line.coinType}:${spec?.group === 'ordinary' ? num(line.coinWeight || spec.weight) : 0}:${spec?.group === 'ordinary' ? num(line.coinAyar || spec.ayar) : 0}${line.coinType === 'سایر' ? `:${line.itemName?.trim() || ''}` : ''}`;
 }
 export function newOperationLine(kind, category = 'melted') {
-  return kind === 'offset' ? { asset: '', quantity: '', rate: '' } : { category, direction: kind === 'trade' ? 'purchase' : 'receive',
+  return kind === 'offset' ? { asset: '', quantity: '', rate: '', description: '' } : { category, direction: kind === 'trade' ? 'purchase' : 'receive', description: '',
     inputMode: 'quantity', quantity: '', amount: '', rate: '', coinType: coinOptions[0].name, coinWeight: '', coinAyar: '',
     currencyType: 'IQD', itemName: '', meltedWeight: '', meltedAyar: '750', assayCode: '', laboratoryName: '', inventorySourceId: '' };
 }
 export function newOperation(kind = 'trade') {
-  return { kind, date: iranDate(), invoiceTime: invoiceTimeNow(), note: '', reference: '', cashAmount: '', cashDirection: 'pay', lines: [newOperationLine(kind)] };
+  return { kind, date: iranDate(), invoiceTime: invoiceTimeNow(), note: '', reference: '', cashAmount: '', cashDirection: 'pay', cashDescription: '', lines: [newOperationLine(kind)] };
 }
 export function operationDraft(entry) {
   const simultaneous = entry.lines.find(line => line.simultaneous);
   return { ...newOperation(entry.type), date: entry.date, invoiceTime: entry.invoiceTime || '', note: entry.note, reference: entry.reference,
-    cashAmount: simultaneous?.quantity || '', cashDirection: simultaneous?.direction || 'pay',
+    cashAmount: simultaneous?.quantity || '', cashDirection: simultaneous?.direction || 'pay', cashDescription: simultaneous?.description || '',
     lines: entry.lines.filter(line => !line.simultaneous).map(line => ({ ...newOperationLine(entry.type, line.category), ...line,
       ...(entry.type === 'delivery' && line.category !== 'toman' ? { quantity: line.stockQuantity } : {}) })) };
 }
 export function operationPayload(form) {
   const pick = (line, keys) => Object.fromEntries(keys.filter(key => line[key] !== undefined).map(key => [key, line[key]]));
   const lines = form.lines.map(line => {
-    if (form.kind === 'offset') return pick(line, ['asset', 'quantity', 'rate']);
-    const base = ['category', 'direction'];
+    const description = line.description?.trim() ? ['description'] : [];
+    if (form.kind === 'offset') return pick(line, ['asset', 'quantity', 'rate', ...description]);
+    const base = ['category', 'direction', ...description];
     if (line.category === 'coin') base.push('coinType', 'coinWeight', 'coinAyar', 'itemName');
     if (line.category === 'currency') base.push('currencyType');
     if (form.kind === 'trade') return pick(line, [...base, 'quantity', 'rate', 'inputMode', 'amount']);
@@ -56,7 +57,8 @@ export function operationPayload(form) {
       ...(line.category === 'melted' && line.direction === 'receive' ? ['meltedWeight', 'meltedAyar', 'assayCode', 'laboratoryName', 'itemName'] : [])]);
   });
   return { kind: form.kind, date: form.date, invoiceTime: form.invoiceTime, note: form.note, reference: form.reference, lines,
-    cashAmount: form.kind === 'trade' ? form.cashAmount || 0 : 0, cashDirection: form.cashDirection };
+    cashAmount: form.kind === 'trade' ? form.cashAmount || 0 : 0, cashDirection: form.cashDirection,
+    ...(form.kind === 'trade' && form.cashDescription?.trim() ? { cashDescription: form.cashDescription } : {}) };
 }
 export function tradeValue(line) {
   const unit = num(line.rate) / (line.category === 'melted' ? 4.3318 : 1);

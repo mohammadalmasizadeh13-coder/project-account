@@ -70,4 +70,8 @@
   body.partner-print-open .partner-document-dialog .partner-invoice-audit-values>span,
   body.partner-print-open .partner-document-dialog .partner-invoice-lines bdi{white-space:normal;overflow-wrap:anywhere}
   body.partner-print-open .partner-document-dialog .partner-statement :is(svg,img,button){display:none!important}
+  body.partner-print-open .partner-statement table,
+  body.partner-print-open .partner-document-dialog .partner-statement table{border-collapse:collapse;border:1px solid #000!important}
+  body.partner-print-open .partner-statement :is(th,td),
+  body.partner-print-open .partner-document-dialog .partner-statement :is(th,td){border:1px solid #000!important}
 }

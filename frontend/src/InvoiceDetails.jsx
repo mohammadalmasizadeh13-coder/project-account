@@ -100,16 +100,16 @@ export default function InvoiceDetails({ invoice, galleryName, accountId, onClos
   const notes = [...new Set(rows.map(row => String(row.note || '').trim()).filter(Boolean))];
   return createPortal(<div className="invoice-overlay" onClick={event => { if (event.target === event.currentTarget) onClose?.(); }}>
     <section className="invoice-dialog" role="dialog" aria-modal="true" aria-labelledby="invoice-title" tabIndex={-1} ref={dialogRef} dir="rtl">
-      <div className="invoice-controls"><span>مشاهده و چاپ سند</span><div><button type="button" className="button button-primary" data-invoice-print onClick={() => window.print()}><Printer size={17}/> چاپ روی برگهٔ آماده</button><button type="button" className="invoice-close" data-invoice-close aria-label="بستن صورتحساب" onClick={onClose}><X size={21}/></button></div></div>
+      <div className="invoice-controls"><span>مشاهده و چاپ سند</span><div><button type="button" className="button button-primary" data-invoice-print onClick={() => window.print()}><Printer size={17}/> چاپ فاکتور</button><button type="button" className="invoice-close" data-invoice-close aria-label="بستن صورتحساب" onClick={onClose}><X size={21}/></button></div></div>
       {(onEdit || onDelete) && <div className="invoice-controls document-actions">{onEdit && <button type="button" className="button button-ghost" data-invoice-edit onClick={onEdit}>ویرایش سند</button>}{onDelete && <button type="button" className="button button-ghost document-delete-link" data-invoice-delete onClick={onDelete}>حذف سند</button>}</div>}
       <div className="invoice-print-settings">
-        <p id="invoice-print-help">برگهٔ طرح‌دار آماده را در چاپگر بگذارید؛ فقط نوشته‌ها به رنگ مشکی چاپ می‌شوند. رنگ و طرح این پیش‌نمایش چاپ نمی‌شود. کاغذ A5 عمودی، مقیاس ۱۰۰٪ و سربرگ و پابرگ مرورگر خاموش باشد.</p>
+        <p id="invoice-print-help">نوشته‌ها و خطوط کامل جدول روی کاغذ سفید چاپ می‌شوند. کاغذ A5 عمودی، مقیاس ۱۰۰٪ و سربرگ و پابرگ مرورگر خاموش باشد.</p>
         <fieldset aria-describedby="invoice-print-help"><legend>تنظیم جای نوشته‌ها روی کاغذ</legend>
           <label>جابه‌جایی افقی (میلی‌متر)<input type="number" min="-5" max="5" step="0.5" value={printSettings.x} data-invoice-print-offset-x onChange={event => updatePrintSettings({ ...printSettings, x: event.target.value })} onBlur={() => updatePrintSettings(printSettings, true)}/><small>عدد مثبت: به راست</small></label>
           <label>جابه‌جایی عمودی (میلی‌متر)<input type="number" min="-5" max="5" step="0.5" value={printSettings.y} data-invoice-print-offset-y onChange={event => updatePrintSettings({ ...printSettings, y: event.target.value })} onBlur={() => updatePrintSettings(printSettings, true)}/><small>عدد مثبت: به پایین</small></label>
           <button type="button" className="button button-ghost" onClick={() => updatePrintSettings({ x: 0, y: 0 })}>بازنشانی جای نوشته‌ها</button>
         </fieldset>
-        <p>برای هماهنگی با طرح برگه، ابتدا یک نسخهٔ آزمایشی چاپ کنید. این تنظیم فقط روی چاپ اثر دارد.</p>
+        <p>برای بررسی جای نوشته‌ها، ابتدا یک نسخهٔ آزمایشی چاپ کنید. این تنظیم فقط روی چاپ اثر دارد.</p>
       </div>
       <article className="invoice-sheet" style={{ '--invoice-print-x': printOffset(printSettings.x) + 'mm', '--invoice-print-y': printOffset(printSettings.y) + 'mm' }}>
         <header className="invoice-heading">

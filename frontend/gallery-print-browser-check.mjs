@@ -117,6 +117,21 @@ try {
     const shot = await cdp('Page.captureScreenshot', { format: 'png' });
     await writeFile(`artifacts/${name}.png`, Buffer.from(shot.data, 'base64'));
   };
+  const inspectPrintSurface = selector => evaluate(`(() => {
+    const sheet=document.querySelector(${JSON.stringify(selector)});
+    const visible=element=>{if(!element)return false;const style=getComputedStyle(element);return style.display!=='none'&&style.visibility!=='hidden'&&element.getClientRects().length>0;};
+    const elements=[sheet,...sheet.querySelectorAll('*')].filter(visible);
+    const transparent=color=>['rgba(0, 0, 0, 0)','transparent'].includes(color);
+    const sides=['Top','Right','Bottom','Left'];
+    const blackBorder=(style,side)=>parseFloat(style['border'+side+'Width'])>0&&style['border'+side+'Style']==='solid'&&style['border'+side+'Color']==='rgb(0, 0, 0)';
+    const decorated=elements.filter(element=>{const style=getComputedStyle(element);return !transparent(style.backgroundColor)||style.backgroundImage!=='none'||style.boxShadow!=='none'||sides.some(side=>parseFloat(style['border'+side+'Width'])>0&&style['border'+side+'Style']!=='none'&&!transparent(style['border'+side+'Color'])&&(!element.matches('table,th,td')||!blackBorder(style,side)));});
+    const colored=elements.filter(element=>[...element.childNodes].some(node=>node.nodeType===Node.TEXT_NODE&&node.textContent.trim())&&getComputedStyle(element).color!=='rgb(0, 0, 0)');
+    const cells=[...sheet.querySelectorAll('th,td')].filter(visible);
+    const missingGrid=cells.flatMap(element=>sides.filter(side=>!blackBorder(getComputedStyle(element),side)).map(side=>({cell:element.textContent.trim(),side})));
+    return {decorated:decorated.map(element=>element.className||element.tagName),colored:colored.map(element=>element.className||element.tagName),cellCount:cells.length,missingGrid,
+      graphics:[...sheet.querySelectorAll('svg,img,canvas')].filter(visible).length,galleryVisible:visible(sheet.querySelector('[data-invoice-gallery-name]')),
+      totalVisible:visible(sheet.querySelector('[data-invoice-total]')),controlsVisible:[...document.querySelectorAll('.invoice-controls,.partner-screen-only')].some(visible),rows:sheet.querySelectorAll('[data-invoice-detail-line]').length};
+  })()`);
   const seedStock = async suffix => {
     const before = await workspace();
     const ring = { id: `gallery-ring-${suffix}`, category: 'crafted', source: 'opening-inventory', type: 'crafted-purchase', productCode: `NG-GALLERY-${suffix}`, itemName: 'انگشتر آزمون نام گالری', craftedKind: 'انگشتر', itemCount: '5', weight: '1', ayar: '750', wagePercent: '0', wageFixed: '0', profitPercent: '0', gramPrice: '6000000', date: '2026-10-08' };
@@ -177,28 +192,22 @@ try {
   // Test the print media even when the browser is explicitly asked to print backgrounds.
   await cdp('Emulation.setEmulatedMedia', { media: 'print' });
   assert.equal(await evaluate(`getComputedStyle(document.documentElement).backgroundColor`), 'rgba(0, 0, 0, 0)', 'The page canvas adds no background ink');
-  const printState = await evaluate(`(() => {
-    const sheet=document.querySelector('.invoice-sheet');
-    const visible=element=>{const style=getComputedStyle(element);return style.display!=='none'&&style.visibility!=='hidden'&&element.getClientRects().length>0;};
-    const elements=[sheet,...sheet.querySelectorAll('*')].filter(visible);
-    const transparent=color=>['rgba(0, 0, 0, 0)','transparent'].includes(color);
-    const decorated=elements.filter(element=>{const style=getComputedStyle(element);return !transparent(style.backgroundColor)||style.backgroundImage!=='none'||style.boxShadow!=='none'||['Top','Right','Bottom','Left'].some(side=>parseFloat(style['border'+side+'Width'])>0&&style['border'+side+'Style']!=='none'&&!transparent(style['border'+side+'Color']));});
-    const colored=elements.filter(element=>[...element.childNodes].some(node=>node.nodeType===Node.TEXT_NODE&&node.textContent.trim())&&getComputedStyle(element).color!=='rgb(0, 0, 0)');
-    return {decorated:decorated.map(element=>element.className||element.tagName),colored:colored.map(element=>element.className||element.tagName),graphics:[...sheet.querySelectorAll('svg,img,canvas')].filter(visible).length,galleryVisible:visible(sheet.querySelector('[data-invoice-gallery-name]')),totalVisible:visible(sheet.querySelector('[data-invoice-total]')),controlsVisible:visible(document.querySelector('.invoice-controls')),rows:sheet.querySelectorAll('[data-invoice-detail-line]').length};
-  })()`);
-  assert.deepEqual(printState.decorated, [], 'Printed invoice contains no backgrounds, borders or shadows');
+  const printState = await inspectPrintSurface('.invoice-sheet');
+  assert.deepEqual(printState.decorated, [], 'Printed invoice has only black table borders, without backgrounds or decoration');
   assert.deepEqual(printState.colored, [], 'Printed text is black');
-  assert.equal(printState.graphics, 0, 'Preprinted paper receives no decorative graphics');
+  assert.ok(printState.cellCount > 0, 'The customer invoice contains visible table cells');
+  assert.deepEqual(printState.missingGrid, [], 'Every visible customer table cell prints four solid black borders');
+  assert.equal(printState.graphics, 0, 'Plain paper receives no decorative graphics');
   assert.equal(printState.galleryVisible, true); assert.equal(printState.totalVisible, true);
   assert.equal(printState.controlsVisible, false); assert.equal(printState.rows, 4);
   const pdf = Buffer.from((await cdp('Page.printToPDF', { printBackground: true, preferCSSPageSize: true })).data, 'base64');
   await mkdir('artifacts', { recursive: true });
-  await writeFile('artifacts/gallery-text-only-print.pdf', pdf);
+  await writeFile('artifacts/gallery-table-print.pdf', pdf);
   const pdfText = pdf.toString('latin1');
   if ((pdfText.match(/\/Type\s*\/Page\b/g) || []).length !== 1) {
     await cdp('Emulation.setDeviceMetricsOverride', { width: 506, height: 1000, deviceScaleFactor: 1, mobile: false });
     console.error('A5 section dimensions:', await evaluate(`Object.fromEntries(['.invoice-sheet','.invoice-heading','.invoice-customer-details','.invoice-items','.invoice-bottom','.invoice-footer'].map(selector=>{const element=document.querySelector(selector);if(!element)return [selector,null];const rect=element.getBoundingClientRect();return [selector,{top:rect.top,height:rect.height,bottom:rect.bottom}]}))`));
-    await screenshot('gallery-text-only-print-overflow');
+    await screenshot('gallery-table-print-overflow');
   }
   assert.equal((pdfText.match(/\/Type\s*\/Page\b/g) || []).length, 1, 'A four-item invoice fits one A5 page');
   const mediaBox = pdfText.match(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/);
@@ -206,7 +215,7 @@ try {
   assert.ok(Math.abs(Number(mediaBox[1]) - 148 / 25.4 * 72) < 2 && Math.abs(Number(mediaBox[2]) - 210 / 25.4 * 72) < 2, 'Printed pages are A5 portrait (148 × 210 mm)');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 506, height: 900, deviceScaleFactor: 1, mobile: false });
   assert.deepEqual(await evaluate(`(() => { const sheet=document.querySelector('.invoice-sheet').getBoundingClientRect();return [...document.querySelectorAll('.invoice-row-total,[data-invoice-total]')].filter(element=>{const range=document.createRange();range.selectNodeContents(element);return [...range.getClientRects()].some(rect=>rect.left<sheet.left-1||rect.right>sheet.right+1);}).map(element=>element.textContent); })()`), [], 'Every printed numeric total fits inside the A5 sheet');
-  await screenshot('gallery-text-only-print');
+  await screenshot('gallery-table-print');
   await evaluate(`document.querySelector('[data-invoice-gallery-name]').textContent=${JSON.stringify('گالری طلای آفتاب '.repeat(9).slice(0, 120))}`);
   assert.equal(await evaluate(`(() => { const element=document.querySelector('[data-invoice-gallery-name]'),sheet=document.querySelector('.invoice-sheet').getBoundingClientRect(),range=document.createRange();range.selectNodeContents(element);return [...range.getClientRects()].every(rect=>rect.left>=sheet.left-1&&rect.right<=sheet.right+1); })()`), true, 'A maximum-length gallery name wraps inside the A5 sheet');
   await screenshot('gallery-long-name-print');
@@ -304,9 +313,10 @@ connection.close()`, join(temporary, 'gallery-test.db'), accountId], { windowsHi
   await evaluate('window.print=()=>{}'); await click('[data-partner-document-dialog] [data-invoice-print]');
   await cdp('Emulation.setEmulatedMedia', { media: 'print' });
   assert.equal(await evaluate(`getComputedStyle(document.documentElement).backgroundColor`), 'rgba(0, 0, 0, 0)', 'The partner page canvas adds no background ink');
-  const partnerPrint = await evaluate(`(() => { const statement=document.querySelector('.partner-statement'); const visible=element=>getComputedStyle(element).display!=='none'&&getComputedStyle(element).visibility!=='hidden'&&element.getClientRects().length>0; const elements=[statement,...statement.querySelectorAll('*')].filter(visible); const transparent=color=>['rgba(0, 0, 0, 0)','transparent'].includes(color);const bad=elements.filter(element=>{const style=getComputedStyle(element);return style.color!=='rgb(0, 0, 0)'||!transparent(style.backgroundColor)||style.backgroundImage!=='none'||style.boxShadow!=='none'||['Top','Right','Bottom','Left'].some(side=>parseFloat(style['border'+side+'Width'])>0&&style['border'+side+'Style']!=='none'&&!transparent(style['border'+side+'Color']));});return {bad:bad.map(element=>element.className||element.tagName),gallery:visible(statement.querySelector('[data-invoice-gallery-name]')),graphics:[...statement.querySelectorAll('svg,img')].filter(visible).length,controls:[...document.querySelectorAll('.partner-screen-only')].some(visible)}; })()`);
-  assert.deepEqual(partnerPrint.bad, [], 'Partner printed documents contain only plain black text');
-  assert.equal(partnerPrint.gallery, true); assert.equal(partnerPrint.graphics, 0); assert.equal(partnerPrint.controls, false);
+  const partnerPrint = await inspectPrintSurface('.partner-statement');
+  assert.deepEqual(partnerPrint.decorated, [], 'Partner printed documents have only black table borders, without backgrounds or decoration');
+  assert.deepEqual(partnerPrint.colored, [], 'Partner printed text is black');
+  assert.equal(partnerPrint.galleryVisible, true); assert.equal(partnerPrint.graphics, 0); assert.equal(partnerPrint.controlsVisible, false);
   const partnerPdf = Buffer.from((await cdp('Page.printToPDF', { printBackground: true, preferCSSPageSize: true })).data, 'base64');
   await writeFile('artifacts/gallery-partner-remittance-print.pdf', partnerPdf);
   assert.equal((partnerPdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1, 'Partner remittance fits one printed page');
@@ -314,8 +324,37 @@ connection.close()`, join(temporary, 'gallery-test.db'), accountId], { windowsHi
   assert.ok(partnerMediaBox && Math.abs(Number(partnerMediaBox[1]) - 148 / 25.4 * 72) < 2 && Math.abs(Number(partnerMediaBox[2]) - 210 / 25.4 * 72) < 2, `Partner document prints A5 portrait too: ${partnerMediaBox?.[0]}`);
   await cdp('Emulation.setEmulatedMedia', { media: '' });
   await click('[data-partner-document-close]');
+
+  // The legacy remittance above has no table. A delivery exercises the partner table grid.
+  const gridPartner = await browserApi('/api/owner/partners', { method: 'POST', body: {
+    revision: (await workspace()).revision, requestId: await evaluate('crypto.randomUUID()'), name: 'همکار آزمون جدول چاپ', tradeType: 'melted',
+  } });
+  assert.equal(gridPartner.status, 201, JSON.stringify(gridPartner.body));
+  const delivery = await browserApi(`/api/owner/partners/${gridPartner.body.createdId}/operations`, { method: 'POST', body: {
+    revision: gridPartner.body.revision, requestId: await evaluate('crypto.randomUUID()'), kind: 'delivery', date: remittance.date,
+    lines: [{ category: 'toman', direction: 'receive', quantity: 500000, description: 'واریز بانکی برای آزمون چاپ' },
+      { category: 'toman', direction: 'pay', quantity: 200000, description: 'پرداخت نقدی برای آزمون چاپ' }],
+  } });
+  assert.equal(delivery.status, 201, JSON.stringify(delivery.body));
+  const deliveryEntry = delivery.body.data.partners.find(partner => partner.id === gridPartner.body.createdId).entries[0];
+  await go('/account'); await ready('.workspace-page');
+  await tool('search'); await click(`[data-invoice-id="${deliveryEntry.transactionId}"] [data-invoice-view]`);
+  await ready('[data-partner-document-dialog]');
+  await evaluate('window.print=()=>{}'); await click('[data-partner-document-dialog] [data-invoice-print]');
+  await cdp('Emulation.setEmulatedMedia', { media: 'print' });
+  const partnerGrid = await inspectPrintSurface('.partner-statement');
+  assert.ok(partnerGrid.cellCount > 0, 'The partner delivery contains visible table cells');
+  assert.deepEqual(partnerGrid.missingGrid, [], 'Every visible partner table cell prints four solid black borders');
+  assert.deepEqual(partnerGrid.decorated, [], 'The partner grid adds no backgrounds or decoration outside table borders');
+  assert.deepEqual(partnerGrid.colored, [], 'All printed partner table text is black');
+  assert.equal(partnerGrid.graphics, 0); assert.equal(partnerGrid.controlsVisible, false);
+  const partnerGridPdf = Buffer.from((await cdp('Page.printToPDF', { printBackground: true, preferCSSPageSize: true })).data, 'base64');
+  await writeFile('artifacts/gallery-partner-table-print.pdf', partnerGridPdf);
+  assert.equal((partnerGridPdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length, 1, 'A partner delivery with descriptions fits one printed page');
+  await cdp('Emulation.setEmulatedMedia', { media: '' });
+  await click('[data-partner-document-close]');
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
-  console.log('Gallery/print browser checks passed: required signup gallery, persisted account names, owner profile rename, issued snapshots and legacy fallback, account isolation, black text without printed graphics/backgrounds/borders, customer and partner A5 PDFs, long invoice pagination and saved account-specific print calibration.');
+  console.log('Gallery/print browser checks passed: required signup gallery, persisted account names, owner profile rename, issued snapshots and legacy fallback, account isolation, black text and complete table grids without printed graphics or backgrounds, customer and partner A5 PDFs, long invoice pagination and saved account-specific print calibration.');
 } catch (error) {
   if (String(error?.message).includes('CDP timeout')) console.error('Chrome diagnostics:', chromeLog.slice(-5000));
   if (cdp && socket?.readyState === WebSocket.OPEN) {

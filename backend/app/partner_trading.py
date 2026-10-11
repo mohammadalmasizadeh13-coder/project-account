@@ -32,6 +32,8 @@ class PartnerOperation(BaseModel):
     lines: list[dict[str, Any]] = Field(min_length=1, max_length=100)
     cashAmount: Any = 0
     cashDirection: Literal["pay", "receive"] = "pay"
+    # Keep request hashes for requests recorded before row descriptions unchanged.
+    cashDescription: str = Field(default="", max_length=5000, exclude_if=lambda value: not value)
 
     @field_validator("date")
     @classmethod
@@ -110,7 +112,7 @@ def make_operation(data, partner, payload, identity, connection, existing=None, 
     movements, details, documents = {}, [], []
     def move(asset, value):
         movements[asset] = movements.get(asset, Decimal(0)) + value
-    def stock_document(document, index, direction):
+    def stock_document(document, index, direction, description):
         old_ids = existing.get("documentIds", []) if existing else []
         document_id = old_ids[len(documents)] if len(documents) < len(old_ids) else f"document-delivery-{uuid4()}"
         original = next((row for row in previous_documents if row["id"] == document_id), None)
@@ -123,7 +125,7 @@ def make_operation(data, partner, payload, identity, connection, existing=None, 
             typeLabel="دریافت جنس از همکار" if direction == "receive" else "تحویل جنس به همکار",
             direction="دریافت" if direction == "receive" else "تحویل", date=payload.date,
             invoiceTime=payload.invoiceTime, createdAt=created_at, recordedAt=created_at,
-            gramDebt=0, rialDebt=0, note=payload.note, invoiceLine=index + 1)
+            gramDebt=0, rialDebt=0, note=payload.note, description=description, invoiceLine=index + 1)
         for key in ("entryMethod", "invoiceVersion", "invoiceLineCount", "settlementVersion", "cashPaid", "setId", "setMode"):
             document.pop(key, None)
         document["currentAmount"] = document["amount"]
@@ -139,8 +141,12 @@ def make_operation(data, partner, payload, identity, connection, existing=None, 
         offset_used = {}
         for index, raw in enumerate(payload.lines):
             line = deepcopy(raw)
+            if "description" in line:
+                if not isinstance(line["description"], str) or len(line["description"]) > 5000:
+                    raise HTTPException(422, "شرح ردیف باید متن و حداکثر ۵۰۰۰ نویسه باشد.")
+                line["description"] = line["description"].strip()
             if payload.kind == "trade":
-                check_fields(line, ASSET_FIELDS | {"direction", "quantity", "rate", "inputMode", "amount"})
+                check_fields(line, ASSET_FIELDS | {"direction", "quantity", "rate", "inputMode", "amount", "description"})
                 asset, label, spec = asset_spec(line)
                 if asset == "toman" or line.get("direction") not in {"purchase", "sale"}:
                     raise HTTPException(422, "نوع خرید یا فروش را انتخاب کنید.")
@@ -166,7 +172,7 @@ def make_operation(data, partner, payload, identity, connection, existing=None, 
                 details.append({**line, **spec, "asset": asset, "label": label, "quantity": decimal_output(count),
                     "rate": decimal_output(rate), "unitRate": decimal_output(unit_rate), "amount": decimal_output(total)})
             elif payload.kind == "offset":
-                check_fields(line, {"asset", "quantity", "rate"})
+                check_fields(line, {"asset", "quantity", "rate", "description"})
                 asset = line.get("asset")
                 if not isinstance(asset, str) or not original_balances.get(asset):
                     raise HTTPException(422, "برای تهاتر، یکی از مانده‌های غیرصفر همین همکار را انتخاب کنید.")
@@ -185,16 +191,18 @@ def make_operation(data, partner, payload, identity, connection, existing=None, 
                 move(asset, sign * count)
                 offset_total += sign * value
                 details.append({"asset": asset, "quantity": decimal_output(count), "rate": decimal_output(rate),
-                    "amount": decimal_output(value), "direction": "payable" if sign < 0 else "receivable"})
+                    "amount": decimal_output(value), "direction": "payable" if sign < 0 else "receivable",
+                    **({"description": line["description"]} if "description" in line else {})})
             else:
-                check_fields(line, ASSET_FIELDS | {"direction", "quantity", "rate", "inventorySourceId", "meltedWeight", "meltedAyar", "assayCode", "laboratoryName"})
+                check_fields(line, ASSET_FIELDS | {"direction", "quantity", "rate", "inventorySourceId", "meltedWeight", "meltedAyar", "assayCode", "laboratoryName", "description"})
                 direction = line.get("direction")
                 if direction not in {"receive", "pay"}:
                     raise HTTPException(422, "جهت دریافت یا پرداخت را انتخاب کنید.")
                 if line.get("category") == "toman":
                     count = rounded(positive(line.get("quantity"), "مبلغ دریافت / پرداخت"), "0.01")
                     move("toman", count if direction == "receive" else -count)
-                    details.append({"category": "toman", "asset": "toman", "label": "تومان", "quantity": decimal_output(count), "amount": decimal_output(count), "direction": direction})
+                    details.append({"category": "toman", "asset": "toman", "label": "تومان", "quantity": decimal_output(count), "amount": decimal_output(count), "direction": direction,
+                        **({"description": line["description"]} if "description" in line else {})})
                     continue
                 if direction == "pay":
                     source_id = line.get("inventorySourceId")
@@ -245,7 +253,7 @@ def make_operation(data, partner, payload, identity, connection, existing=None, 
                         actual = count
                     received, document_id = create_stock(data, item, identity, require_assay=True)
                     document = next(row for row in received["documents"] if row["id"] == document_id)
-                document_id = stock_document(document, index, direction)
+                document_id = stock_document(document, index, direction, line.get("description", ""))
                 move(asset, actual if direction == "receive" else -actual)
                 details.append({**line, **spec, "category": document["category"], "asset": asset, "label": label,
                     "quantity": decimal_output(actual), "stockQuantity": decimal_output(quantity(document)),
@@ -258,7 +266,8 @@ def make_operation(data, partner, payload, identity, connection, existing=None, 
                 raise HTTPException(422, "پرداخت هم‌زمان فقط همراه معامله ثبت می‌شود.")
             move("toman", cash if payload.cashDirection == "receive" else -cash)
             details.append({"category": "toman", "asset": "toman", "label": "وجه هم‌زمان معامله", "direction": payload.cashDirection,
-                "quantity": decimal_output(cash), "amount": decimal_output(cash), "simultaneous": True})
+                "quantity": decimal_output(cash), "amount": decimal_output(cash), "simultaneous": True,
+                **({"description": payload.cashDescription.strip()} if payload.cashDescription.strip() else {})})
         guard_invoice_stock(data["documents"], [row for row in documents if row.get("inventorySourceId")])
         if existing:
             invoice_number = existing["invoiceNumber"]

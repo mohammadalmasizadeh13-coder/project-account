@@ -1,0 +1,30 @@
+.account-statement-filter{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:14px;align-items:start;margin-bottom:20px}
+.account-statement-filter>button{margin-top:29px}
+.account-statement-heading{text-align:center;border-bottom:2px solid #557362;padding:12px 0;margin-bottom:16px;overflow-wrap:anywhere}
+.account-statement-heading h2{margin:0 0 8px;font-size:22px}.account-statement-heading h3{margin:8px 0}.account-statement-heading p,.account-statement-help,.account-statement-final-wrap>p{font-size:12px;line-height:2}
+.partner-account-statement table{min-width:650px;table-layout:fixed;margin-bottom:20px;border:1px solid #8e9d90}
+.partner-account-statement :is(td,th){border:1px solid #8e9d90;padding:9px 7px;color:#294a39;vertical-align:top;overflow-wrap:anywhere}
+.partner-account-statement td small{color:#586d5c}.partner-account-statement caption{color:#355849;font-weight:600}
+.statement-date-column{width:17%}.statement-description-column{width:35%}
+.account-statement-line{padding-top:7px;margin-top:7px;border-top:1px dotted #abb5a7;line-height:1.9}
+.account-statement-description{white-space:pre-wrap;font-weight:500;overflow-wrap:anywhere;display:block}
+.partner-account-statement .account-statement-balances{min-width:0;table-layout:fixed}.account-statement-totals{font-weight:600}
+.account-statement-final-wrap{padding:14px;border:1px solid #738c76;background:#f3f7ed;border-radius:8px;margin-top:24px}.account-statement-final-wrap table{margin-bottom:8px}.account-statement-final-wrap>p{margin:0}
+@media(max-width:760px){.account-statement-filter{grid-template-columns:1fr 1fr}.account-statement-filter>button{grid-column:1/-1;margin-top:0}.partner-account-statement .account-statement-balances{font-size:10px}.account-statement-final-wrap{padding:8px}}
+@media(max-width:420px){.account-statement-filter{grid-template-columns:1fr}}
+@media print{
+  @page partner-account-statement{size:A4 portrait;margin:10mm}
+  body.partner-account-print-open,body.partner-account-print-open .partner-account-statement{page:partner-account-statement}
+  body.partner-account-print-open .partner-account-statement{padding:0!important;color:#000!important}
+  body.partner-account-print-open .partner-account-statement :is(td,th){border:1px solid #000!important;color:#000!important;background:transparent!important;padding:5px;font-size:8pt}
+  body.partner-account-print-open .partner-account-statement table{border-collapse:collapse;min-width:0!important;width:100%;table-layout:fixed}
+  body.partner-account-print-open .partner-account-statement :is(small,caption,p){color:#000!important}
+  body.partner-account-print-open .account-statement-heading{border-color:#000;color:#000}
+  body.partner-account-print-open .account-statement-line{border-color:#777}
+  body.partner-account-print-open .account-statement-final-wrap{break-inside:avoid;background:transparent;border:1px solid #000;border-radius:0}
+  body.partner-account-print-open .account-statement-balances{break-inside:avoid}
+  body.partner-account-print-open .account-statement-ledger tbody{break-inside:auto}
+  body.partner-account-print-open .account-statement-ledger tr{break-inside:avoid}
+  body.partner-account-print-open .account-statement-totals{break-inside:avoid}
+  body.partner-account-print-open .account-statement-heading h2{font-size:16pt}
+}
