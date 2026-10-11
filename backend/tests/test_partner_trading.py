@@ -14,9 +14,9 @@ def operation(client, headers, identifier, kind="trade", lines=None, **changes):
     return client.post(f'/api/owner/partners/{identifier}/operations', json=body, headers=headers), body
 
 
-def setup(client):
+def setup(client, trade_type='melted'):
     headers = login(client)
-    created, _ = create_partner(client, headers)
+    created, _ = create_partner(client, headers, tradeType=trade_type)
     return headers, created['createdId']
 
 
@@ -201,3 +201,64 @@ def test_iraqi_dinar_customer_invoice_and_vault_support(client):
     received = submit(client, headers, {'category': 'currency', 'currencyType': 'IQD', 'currencyAmount': 1000, 'currencyRate': 70, 'itemName': 'دینار عراق'})
     assert received.status_code == 201, received.text
     assert received.json()['data']['documents'][0]['amount'] == 70000
+
+
+@pytest.mark.parametrize('trade_type', ['wholesaler', 'jeweler', 'other'])
+@pytest.mark.parametrize('kind,lines', [
+    ('trade', [{'category': 'melted', 'direction': 'purchase', 'quantity': 10, 'rate': 43318000}]),
+    ('delivery', [{'category': 'toman', 'direction': 'pay', 'quantity': 1000000}]),
+    ('offset', [{'asset': 'gold', 'quantity': 1, 'rate': 10000000}]),
+])
+def test_account_operations_cannot_be_created_for_other_partner_types(client, trade_type, kind, lines):
+    headers, identifier = setup(client, trade_type)
+    before = client.get('/api/owner/workspace').json()
+    denied, _ = operation(client, headers, identifier, kind=kind, lines=lines)
+    assert denied.status_code == 422, denied.text
+    assert 'آب‌شده‌فروش' in denied.json()['detail']
+    assert client.get('/api/owner/workspace').json() == before
+
+
+def test_melted_partner_rejects_legacy_new_documents_but_other_partners_keep_them(client):
+    from test_partners import post_invoice, settlement_body
+    headers, identifier = setup(client)
+    before = client.get('/api/owner/workspace').json()
+    denied = post_invoice(client, headers, identifier)
+    assert denied.status_code == 422, denied.text
+    assert 'معاملات و تسویه' in denied.json()['detail']
+    denied = client.post(f'/api/owner/partners/{identifier}/settlements', json=settlement_body(client), headers=headers)
+    assert denied.status_code == 422, denied.text
+    assert client.get('/api/owner/workspace').json() == before
+    for trade_type in ('wholesaler', 'jeweler', 'other'):
+        created, _ = create_partner(client, headers, tradeType=trade_type)
+        old_workflow = post_invoice(client, headers, created['createdId'])
+        assert old_workflow.status_code == 201, old_workflow.text
+        settlement = client.post(f'/api/owner/partners/{created["createdId"]}/settlements', json=settlement_body(client), headers=headers)
+        assert settlement.status_code == 201, settlement.text
+
+
+def test_group_change_keeps_old_entries_correctable_and_switches_new_workflow(client):
+    from test_partners import post_invoice, supplier_payload
+    headers, identifier = setup(client, 'wholesaler')
+    invoice_body = supplier_payload(client)
+    legacy = post_invoice(client, headers, identifier, body=invoice_body)
+    assert legacy.status_code == 201
+    path = f'/api/owner/partners/{identifier}'
+    changed = client.patch(path, json={'revision': legacy.json()['revision'], 'requestId': str(uuid4()), 'tradeType': 'melted'}, headers=headers)
+    assert changed.status_code == 200
+    assert changed.json()['data']['partners'][0]['entries'] == legacy.json()['data']['partners'][0]['entries']
+    assert changed.json()['data']['documents'] == legacy.json()['data']['documents']
+    corrected = client.patch(f'{path}/invoices/{legacy.json()["createdId"]}', json={**invoice_body,
+        'revision': changed.json()['revision'], 'requestId': str(uuid4()), 'note': 'اصلاح سند قبلی'}, headers=headers)
+    assert corrected.status_code == 200, corrected.text
+    traded, request = operation(client, headers, identifier)
+    assert traded.status_code == 201, traded.text
+    changed_back = client.patch(path, json={'revision': traded.json()['revision'], 'requestId': str(uuid4()), 'tradeType': 'wholesaler'}, headers=headers)
+    assert changed_back.status_code == 200
+    replay = client.post(f'{path}/operations', json=request, headers=headers)
+    assert replay.status_code == 200 and replay.json()['revision'] == changed_back.json()['revision']
+    denied, _ = operation(client, headers, identifier)
+    assert denied.status_code == 422
+    removed = client.request('DELETE', f'{path}/operations/{traded.json()["createdId"]}', json={
+        'revision': changed_back.json()['revision'], 'requestId': str(uuid4())}, headers=headers)
+    assert removed.status_code == 200, removed.text
+    assert len(removed.json()['data']['partners'][0]['entries']) == 1

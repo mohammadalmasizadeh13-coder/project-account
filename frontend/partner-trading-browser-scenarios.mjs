@@ -5,6 +5,10 @@ import { inventoryReport } from './src/inventory.js';
 export async function checkPartnerTrading({ cdp, evaluate, ready, until, go, fill, click, resize, screenshot, workspace }) {
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const tool = async name => {
+    if (name.startsWith('partner-')) {
+      if (await evaluate(`document.querySelector('.workspace-rail')?.getAttribute('aria-hidden') === 'true'`)) { await click('.workspace-menu-toggle'); await pause(260); }
+      await click('[data-section="entries"]'); await click(`[data-tool="${name}"]`); return;
+    }
     if (name !== 'partners') return navigateWorkspace(name, { click, evaluate, pause });
     if (await evaluate(`document.querySelector('.workspace-rail')?.getAttribute('aria-hidden') === 'true'`)) { await click('.workspace-menu-toggle'); await pause(260); }
     await click('[data-section="crm"]'); await click('[data-crm-group="partners"]');
@@ -14,7 +18,10 @@ export async function checkPartnerTrading({ cdp, evaluate, ready, until, go, fil
   const partner = async () => (await data()).partners[0];
   const form = '[data-operation-form]', first = `${form} [data-operation-line="0"]`, dialog = '[data-partner-document-dialog]';
   const openTrading = async () => {
-    await tool('partners'); await ready('[data-partner-trading-tab]'); await click('[data-partner-trading-tab]'); await ready(form);
+    await tool('partners'); await ready('[data-partner-purchase]'); await click('[data-partner-purchase]'); await ready(form);
+    assert.equal(await evaluate(`document.querySelector('[data-partner-purchase]').textContent.trim()`), 'معاملات و تسویه');
+    assert.equal(await evaluate(`!!document.querySelector('[data-partner-trading-tab]')`), false);
+    assert.equal(await evaluate(`!!document.querySelector('[data-partner-invoice]')`), false);
   };
   const save = async () => {
     const count = (await partner()).entries.length;
@@ -32,7 +39,9 @@ export async function checkPartnerTrading({ cdp, evaluate, ready, until, go, fil
   await fill('#account-gallery-name', 'گالری آزمون معاملات'); await fill('#account-password', 'partner-trading-browser-password');
   await fill('#account-password-confirmation', 'partner-trading-browser-password'); await click('.accounting-submit'); await ready('.workspace-page');
   await tool('partners'); await click('[data-partner-new]'); await fill('[data-partner-profile] [name="name"]', 'همکار معاملات حسابی');
-  await click('[data-partner-save]'); await ready('[data-partner-trading-tab]'); await click('[data-partner-trading-tab]');
+  await fill('[data-partner-profile] [name="tradeType"]', 'melted');
+  await click('[data-partner-save]'); await ready('[data-partner-purchase]'); await click('[data-partner-purchase]');
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('${first} [name="category"] option')].map(option=>option.value)`), ['melted', 'coin', 'currency']);
   await fields(first, { quantity: 10, rate: 43318000 }); await fill(`${form} [name="cashAmount"]`, '25000000');
   await screenshot('partner-trading-partial-cash', '[data-partner-trading]');
   const trade = await save();
@@ -106,5 +115,31 @@ export async function checkPartnerTrading({ cdp, evaluate, ready, until, go, fil
   await click(`${dialog} [data-invoice-delete]`); await click('[data-confirm-partner-delete]'); await until(`!document.querySelector('${dialog}')`);
   assert.equal((await partner()).goldBalance, -8);
   assert.equal((await partner()).assetBalances['coin:گل رز:0.3:999.9'], undefined);
-  console.log('PASS: both gold input modes, fixed rates, partial/full cash, custom coins, IQD, offset, assay receipt, vault deletion/reversal, search, print, reload and mobile.');
+
+  // Partner type chooses the form in both CRM and the generic entry tools.
+  const meltedId = (await partner()).id;
+  await tool('partners'); await click('[data-partner-new]');
+  await fields('[data-partner-profile]', { name: 'بنکدار با روش قبلی', tradeType: 'wholesaler' });
+  await click('[data-partner-save]'); await ready('[data-partner-purchase]');
+  const wholesalerId = (await data()).partners.find(row => row.tradeType === 'wholesaler').id;
+  assert.equal(await evaluate(`document.querySelector('[data-partner-purchase]').textContent.trim()`), 'فاکتور خرید');
+  assert.equal(await evaluate(`!!document.querySelector('[data-partner-trading-tab]')`), false);
+  assert.equal(await evaluate(`!!document.querySelector('[data-partner-settlement]') && !!document.querySelector('[data-partner-remittance]')`), true);
+  await click('[data-partner-purchase]'); await ready('[data-partner-invoice]');
+  assert.equal(await evaluate(`document.querySelector('[data-partner-invoice] [name="category"]').value`), 'crafted');
+  assert.equal(await evaluate(`!!document.querySelector('${form}')`), false);
+  await click(`[data-partner-id="${meltedId}"]`); await ready(form);
+  assert.equal(await evaluate(`!!document.querySelector('[data-partner-invoice]')`), false);
+  assert.equal(await evaluate(`!!document.querySelector('[data-partner-settlement]')`), false);
+  await tool('partner-crafted-purchase'); await ready('[data-partner-select]');
+  await fill('[data-partner-select]', meltedId); await ready(form);
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.partner-document-entry > .document-type-select')).display`), 'none');
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('${first} [name="category"] option')].map(option=>option.value)`), ['melted', 'coin', 'currency']);
+  await fill('[data-partner-select]', wholesalerId); await ready('[data-partner-invoice]');
+  assert.notEqual(await evaluate(`getComputedStyle(document.querySelector('.partner-document-entry > .document-type-select')).display`), 'none');
+  assert.equal(await evaluate(`!!document.querySelector('${form}')`), false);
+  await evaluate(`(() => {const key=Object.keys(localStorage).find(key=>key.endsWith(':partner-workspace')); const saved=JSON.parse(localStorage.getItem(key)); saved.form.view='trading'; saved.form.selectedId=${JSON.stringify(wholesalerId)}; localStorage.setItem(key,JSON.stringify(saved));})()`);
+  await go('/account'); await ready('.workspace-page'); await tool('partners'); await ready('[data-partner-invoice]');
+  assert.equal(await evaluate(`!!document.querySelector('${form}') || !!document.querySelector('[data-partner-trading-tab]')`), false);
+  console.log('PASS: melted-only workflow replaces purchase; other groups keep legacy forms, stale drafts and entry selectors respect group; fixed-rate trades, settlement and deletion still work.');
 }

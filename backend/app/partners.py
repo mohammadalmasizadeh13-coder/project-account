@@ -852,6 +852,12 @@ def register_partner_routes(application, workspace_response, encode_workspace):
                 created_id = partner["id"]
             else:
                 partner = find_partner(data, identifier)
+                # Existing documents remain correctable; the partner's current
+                # trade type controls which workflow may create new documents.
+                if action == "operation" and partner["tradeType"] != "melted":
+                    raise HTTPException(422, "معاملات حسابی و تسویه فقط برای همکار آب‌شده‌فروش فعال است.")
+                if action in {"invoice", "settlement"} and partner["tradeType"] == "melted":
+                    raise HTTPException(422, "برای آب‌شده‌فروش، سند جدید را از بخش معاملات و تسویه ثبت کنید؛ فاکتور کار ساخته مجاز نیست.")
                 if action == "update":
                     if partner["entries"] and any(key in body and number(body[key]) != number(partner[key]) for key in ("openingGoldBalance", "openingTomanBalance")):
                         raise HTTPException(409, "ماندهٔ افتتاحیه پس از ثبت گردش قابل تغییر نیست؛ اصلاح را با ردیف بدهکار یا بستانکار ثبت کنید.")

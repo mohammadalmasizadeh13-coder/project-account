@@ -1,4 +1,5 @@
 .partner-trading { min-width: 0; }
+.partner-document-entry:has([data-partner-trading]) > .document-type-select { display: none; }
 .partner-trading fieldset { border: 0; padding: 0; min-width: 0; }
 .partner-trading .partner-tabs { flex-wrap: wrap; margin-block: 1rem; }
 .partner-asset-balances { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: .75rem; margin-block: 1rem; }
