@@ -54,7 +54,7 @@ def test_custom_coin_weight_and_purity_drive_price_and_can_be_edited(client, kin
 
 @pytest.mark.parametrize("changes", [
     {"coinWeight": None}, {"coinWeight": 0}, {"coinAyar": ""}, {"coinAyar": 1001}, {"profitFixed": -1},
-    {"coinGroup": "bank"}, {"coinGroup": {}}, {"coinPricingVersion": 3},
+    {"coinGroup": "bank"}, {"coinGroup": {}}, {"coinPricingVersion": 4},
 ])
 def test_invalid_coin_specs_reject_without_ledger_change(client, changes):
     headers = login(client)

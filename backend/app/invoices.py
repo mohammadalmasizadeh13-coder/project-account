@@ -13,7 +13,7 @@ from .database import LEGACY_ACCOUNT_ID, account_column, metadata, read_gallery_
 from .customer_details import document_detail_header
 from .inventory import (ECONOMIC_FIELDS, STOCK_TYPES, TEXT_FIELDS,
     coin_base, coin_fixed_profit, coin_rate_field, discounted_amount, is_priced_coin,
-    is_sale, is_stock_entry, item_summary, item_weight, normalize_coin_specs, normalize_misc_purchase,
+    is_sale, is_stock_entry, is_partner_ledger_row, item_summary, item_weight, normalize_coin_specs, normalize_misc_purchase,
     numeric, quantity, validate_item, values_differ)
 from .pricing import number
 
@@ -190,6 +190,10 @@ def guard_invoice_stock(incoming, new_rows):
     touched = set()
     for row in new_rows:
         if not is_sale(row):
+            continue
+        if is_partner_ledger_row(row):
+            if row.get("inventorySourceId"):
+                invoice_error("سند حسابی نباید به موجودی متصل باشد.")
             continue
         identifier = row.get("inventorySourceId")
         if identifier in (None, ""):

@@ -89,7 +89,7 @@ class LedgerEntry(StrictModel):
     documentIds: list[str] = Field(default_factory=list, max_length=100)
     lines: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
     # Persisted v4 ledgers may remain after rolling back the invoice editor.
-    # Read their frozen balances without enabling v4 invoice creation/editing.
+    # Preserve their independent gold and cash balances during reads and edits.
     settlementUnit: Literal["gold", "toman", "mixed"] | None = None
     gold18Price: float | None = Field(default=None, gt=0, le=1e12)
     linkedEntryId: str | None = Field(default=None, max_length=64)
@@ -178,13 +178,13 @@ class PartnerInvoice(PartnerMutation):
     externalInvoiceNumber: str = Field(default="", max_length=200)
     note: str = Field(default="", max_length=5000)
     gold18Price: Any
-    settlementUnit: Literal["gold", "toman"] = "gold"
+    settlementUnit: Literal["gold", "toman", "mixed"] = "gold"
     lines: list[dict[str, Any]] = Field(min_length=1, max_length=100)
     paidGold: Any = 0
     paidToman: Any = 0
     referenceName: str = Field(default="", max_length=200)
     refNumber: str = Field(default="", max_length=200)
-    calculationVersion: Literal[1, 2, 3] = 1
+    calculationVersion: Literal[1, 2, 3, 4] = 1
     # Omit the default so pre-upgrade request receipt hashes remain unchanged.
     goldBalancePurchase: bool = Field(default=False, strict=True, exclude_if=lambda value: not value)
 
@@ -196,8 +196,9 @@ class PartnerInvoice(PartnerMutation):
 
     @model_validator(mode="after")
     def gold_settlement_for_current_version(self):
-        if self.calculationVersion >= 2 and self.settlementUnit != "gold":
-            raise ValueError("تسویهٔ خرید همکار با طلای ۷۵۰ ثبت می‌شود.")
+        allowed = {1: {"gold", "toman"}, 2: {"gold"}, 3: {"gold"}, 4: {"mixed"}}
+        if self.settlementUnit not in allowed[self.calculationVersion]:
+            raise ValueError("واحد تسویه با روش محاسبهٔ سند مطابقت ندارد.")
         return self
 
 
@@ -306,7 +307,7 @@ def mark_gold_balance_purchase(payload, documents, existing_entry=None):
 
 
 def make_supplier_invoice(data, partner, payload, identity, connection, *, existing_entry=None, previous_documents=None):
-    if payload.calculationVersion == 3:
+    if payload.calculationVersion >= 3:
         return make_mixed_partner_invoice(data, partner, payload, identity, connection,
             existing_entry=existing_entry, previous_documents=previous_documents)
     selling = payload.direction == "sale"
@@ -514,6 +515,7 @@ def make_supplier_invoice(data, partner, payload, identity, connection, *, exist
 
 def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, existing_entry=None, previous_documents=None):
     """Freeze each row's direction and prices in one atomic partner posting."""
+    dual = payload.calculationVersion == 4
     rate = numeric(payload.gold18Price, "نرخ طلای ۷۵۰", minimum=Decimal("0.00000001"))
     paid_gold = numeric(payload.paidGold, "پرداخت طلا")
     paid_toman = numeric(payload.paidToman, "پرداخت تومان")
@@ -525,7 +527,7 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
     old_documents = {row["id"]: row for row in previous_documents or [] if existing_entry and row["id"] in existing_entry["documentIds"]}
     used_document_ids = set()
     documents, details, directions = [], [], set()
-    totals = {"goldDebit": Decimal(0), "goldCredit": Decimal(0)}
+    totals = {key: Decimal(0) for key in ("goldDebit", "goldCredit", "tomanDebit", "tomanCredit")}
     draft = {**data, "documents": list(data["documents"])}
     physical_fields = ("itemName", "craftedKind", "weight", "ayar", *COIN_PHYSICAL_FIELDS,
         "meltedWeight", "meltedAyar", "assayCode", "laboratoryName", "currencyType")
@@ -534,23 +536,32 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
         for original in payload.lines:
             line = dict(original)
             category = line.get("category")
+            if not isinstance(category, str) or category not in {"crafted", "melted", "coin", "currency", "remittance"}:
+                raise HTTPException(422, "نوع کالای فاکتور معتبر نیست.")
+            unit = line.pop("settlementUnit", "gold" if category in {"crafted", "melted", "remittance"} or is_ordinary_coin(line) else "toman") if dual else "gold"
+            if not isinstance(unit, str) or unit not in {"gold", "toman"} or (dual and unit == "gold" and (category == "currency" or category == "coin" and not is_ordinary_coin(line))):
+                raise HTTPException(422, "واحد حساب ردیف معتبر نیست.")
+            inventory_mode = line.pop("inventoryMode", "stock") if dual else "stock"
+            ledger_only = dual and category == "melted" and inventory_mode == "ledger"
+            if not isinstance(inventory_mode, str) or inventory_mode not in {"stock", "ledger"} or inventory_mode == "ledger" and not ledger_only:
+                raise HTTPException(422, "روش ثبت موجودی معتبر نیست.")
             if category == "remittance":
-                allowed = {"category", "remittanceDirection", "goldAmount", "counterpartyName", "reference", "note"}
+                allowed = ({"tomanAmount"} if dual else set()) | {"category", "remittanceDirection", "goldAmount", "counterpartyName", "reference", "note"}
                 direction = line.get("remittanceDirection")
                 if set(line) - allowed or not isinstance(direction, str) or direction not in {"debit", "credit"}:
                     raise HTTPException(422, "مشخصات یا جهت حوالهٔ ردیف معتبر نیست.")
-                remittance = rounded_gold(numeric(line.get("goldAmount"), "وزن حواله", minimum=Decimal("0.000001")))
+                remittance = rounded_gold(numeric(line.get("tomanAmount" if unit == "toman" else "goldAmount"), "وزن حواله", minimum=Decimal("0.000001")))
                 for field, limit in (("counterpartyName", 200), ("reference", 200), ("note", 5000)):
                     value = line.get(field, "")
                     if not isinstance(value, str) or len(value) > limit:
                         raise HTTPException(422, "متن حواله معتبر نیست.")
                     line[field] = value.strip()
                 amounts = {"goldDebit": 0, "goldCredit": 0, "tomanDebit": 0, "tomanCredit": 0}
-                field = "goldCredit" if direction == "credit" else "goldDebit"
+                field = ("toman" if unit == "toman" else "gold") + ("Credit" if direction == "credit" else "Debit")
                 amounts[field] = decimal_output(remittance)
                 totals[field] += remittance
-                details.append({**line, "goldAmount": decimal_output(remittance), **amounts,
-                    "amount": decimal_output(remittance * rate), "calculationVersion": 3,
+                details.append({**line, **({"settlementUnit": unit} if dual else {}), "tomanAmount" if unit == "toman" else "goldAmount": decimal_output(remittance), **amounts,
+                    "amount": decimal_output(remittance if unit == "toman" else remittance * rate), "calculationVersion": payload.calculationVersion,
                     "conversionGoldPrice": decimal_output(rate)})
                 directions.add("remittance")
                 continue
@@ -571,7 +582,9 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
             directions.add(direction)
             source_id = line.pop("inventorySourceId", None)
             source = None
-            if direction == "sale":
+            if ledger_only and source_id:
+                raise HTTPException(422, "سند حسابی نباید به موجودی متصل باشد.")
+            if direction == "sale" and not ledger_only:
                 source = find_source(data, str(source_id or ""))
                 if source["category"] != category:
                     raise HTTPException(422, "نوع کالای فروش با موجودی انتخاب‌شده مطابقت ندارد.")
@@ -606,7 +619,9 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
                 count = quantity(line)
                 scale_weight = physical if weight_mode == "total" else physical * count
                 line[field] = format(physical / count if weight_mode == "total" else physical, "f")
-            created, _ = create_stock(draft, line, identity)
+            fixed_profit = numeric(line.get("profitFixed"), "سود ثابت", default=0) if dual else Decimal(0)
+            stock_line = {key: value for key, value in line.items() if not (dual and category != "coin" and key == "profitFixed")}
+            created, _ = create_stock(draft, stock_line, identity, require_assay=not ledger_only)
             document = created["documents"][0]
             count = quantity(document)
             equivalent = Decimal(0)
@@ -628,9 +643,26 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
             other_costs = count * number(document.get("otherCosts")) / rate
             profit = (principal + labor + fixed_labor + other_costs) * profit_percent / 100 + coin_fixed_profit(document) / rate
             line_gold = principal + labor + fixed_labor + other_costs + profit
-            if not rounded_gold(line_gold):
+            if not dual and not rounded_gold(line_gold):
                 raise HTTPException(422, "مقدار ردیف کمتر از دقت مجاز دفتر است.")
-            snapshot = {"calculationVersion": 3, "conversionGoldPrice": decimal_output(rate),
+            line_toman = Decimal(0)
+            if dual:
+                cash_principal = Decimal(0) if unit == "gold" else principal * rate
+                principal = equivalent if unit == "gold" else Decimal(0)
+                labor = principal * number(document.get("wagePercent")) / 100
+                cash_labor = cash_principal * number(document.get("wagePercent")) / 100 if category != "currency" else Decimal(0)
+                cash_costs = count * (number(document.get("wageFixed")) + number(document.get("otherCosts")))
+                profit = (principal + labor) * profit_percent / 100
+                line_gold = principal + labor + profit
+                line_toman = (cash_principal + cash_labor + cash_costs) * (1 + profit_percent / 100) + count * fixed_profit
+                fixed_labor = other_costs = Decimal(0)
+                if not rounded_gold(line_gold) and not rounded_gold(line_toman):
+                    raise HTTPException(422, "مقدار ردیف کمتر از دقت مجاز دفتر است.")
+                document.update(settlementUnit=unit, goldTotal=decimal_output(line_gold), tomanTotal=decimal_output(line_toman), profitFixed=decimal_output(fixed_profit))
+                if ledger_only:
+                    document["inventoryMode"] = "ledger"
+                    document.pop("productCode", None)
+            snapshot = {"calculationVersion": payload.calculationVersion, "conversionGoldPrice": decimal_output(rate),
                 "principalGold": decimal_output(principal), "laborGold": decimal_output(labor),
                 "fixedLaborGold": decimal_output(fixed_labor), "otherCostsGold": decimal_output(other_costs),
                 "profitGold": decimal_output(profit), "profitPercent": decimal_output(profit_percent)}
@@ -642,32 +674,38 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
                 counterpartyType="partner", partnerId=partner["id"], externalInvoiceNumber=payload.externalInvoiceNumber,
                 date=payload.date, invoiceTime=payload.invoiceTime, createdAt=created_at, recordedAt=created_at, invoiceVersion=1,
                 invoiceLine=len(documents) + 1, transactionId=transaction, gold18Price=decimal_output(rate),
-                amount=decimal_output(line_gold * rate), **{key: value for key, value in snapshot.items() if key != "profitPercent"})
+                amount=decimal_output(line_gold * rate + line_toman), **{key: value for key, value in snapshot.items() if key != "profitPercent"})
             if old_document is not None:
                 document.update({field: old_document[field] for field in ("createdAt", "recordedAt") if field in old_document})
             if source is not None:
                 document.update(inventorySourceId=source["id"], productCode=source["productCode"])
-            elif old_document is not None and old_document["type"].endswith("-purchase"):
+            elif not ledger_only and old_document is not None and old_document["type"].endswith("-purchase"):
                 document["productCode"] = old_document["productCode"]
             amounts = {"goldDebit": 0, "goldCredit": 0, "tomanDebit": 0, "tomanCredit": 0}
             field = "goldCredit" if direction == "sale" else "goldDebit"
             amounts[field] = decimal_output(rounded_gold(line_gold))
             totals[field] += line_gold
+            cash_field = "tomanCredit" if direction == "sale" else "tomanDebit"
+            amounts[cash_field] = decimal_output(rounded_gold(line_toman))
+            totals[cash_field] += line_toman
+            document["partnerTomanCredit" if direction == "sale" else "partnerTomanDebit"] = amounts[cash_field]
             document["partnerGoldCredit" if direction == "sale" else "partnerGoldDebit"] = amounts[field]
             document["itemSummary"] = item_summary(document)
             documents.append(document)
             # Persist authoritative physical fields and derived prices, never client snapshots.
-            details.append({**line, **coin_snapshot(document), **{field: document[field] for field in physical_fields if field in document},
+            details.append({**line, **({"settlementUnit": unit, "goldTotal": decimal_output(line_gold), "tomanTotal": decimal_output(line_toman), "profitFixed": decimal_output(fixed_profit), **({"inventoryMode": "ledger"} if ledger_only else {})} if dual else {}), **coin_snapshot(document), **{field: document[field] for field in physical_fields if field in document},
                 **({"inventorySourceId": source["id"]} if source else {}), "direction": direction,
-                "weightMode": weight_mode, "documentId": document["id"], "productCode": document["productCode"],
+                "weightMode": weight_mode, "documentId": document["id"], **({"productCode": document["productCode"]} if "productCode" in document else {}),
                 "scaleWeight": decimal_output(scale_weight), "weight750": decimal_output(equivalent),
                 **amounts, "amount": document["amount"], **snapshot})
             draft["documents"] = [document, *draft["documents"]]
-        converted_cash = paid_toman / rate
+        converted_cash = Decimal(0) if dual else paid_toman / rate
         payment = rounded_gold(paid_gold + converted_cash)
-        if (paid_gold or paid_toman) and not payment:
+        if (paid_gold or paid_toman and not dual) and not payment:
             raise HTTPException(422, "مقدار پرداخت کمتر از دقت مجاز دفتر است.")
         totals["goldDebit" if payload.direction == "sale" else "goldCredit"] += payment
+        if dual:
+            totals["tomanDebit" if payload.direction == "sale" else "tomanCredit"] += paid_toman
         totals = {field: decimal_output(rounded_gold(value)) for field, value in totals.items()}
     balance_purchase = mark_gold_balance_purchase(payload, documents, existing_entry)
     if documents:
@@ -708,8 +746,8 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
     entry = entry_base(payload, type=next(iter(directions)) if len(directions) == 1 and "remittance" not in directions else "mixed",
         direction=payload.direction,
         externalInvoiceNumber=payload.externalInvoiceNumber, invoiceNumber=invoice_number, transactionId=transaction,
-        documentIds=[row["id"] for row in documents], lines=details, settlementUnit="gold", gold18Price=decimal_output(rate),
-        calculationVersion=3, conversionGoldPrice=decimal_output(rate), paidGold=decimal_output(paid_gold),
+        documentIds=[row["id"] for row in documents], lines=details, settlementUnit="mixed" if dual else "gold", gold18Price=decimal_output(rate),
+        calculationVersion=payload.calculationVersion, conversionGoldPrice=decimal_output(rate), paidGold=decimal_output(paid_gold),
         paidToman=decimal_output(paid_toman), convertedPaidTomanGold=decimal_output(converted_cash),
         counterpartyName=payload.referenceName, reference=payload.refNumber, **totals, **balance_purchase)
     if existing_entry:

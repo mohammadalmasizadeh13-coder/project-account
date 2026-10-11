@@ -41,12 +41,13 @@ def test_login_loads_v4_workspace_without_rewriting_saved_records(client):
         assert connection.execute(select(workspaces.c.data).where(workspaces.c.id == 1)).scalar_one() == raw
 
 
-def test_v4_read_support_does_not_enable_unsupported_invoice_writes():
-    with pytest.raises(ValidationError):
-        PartnerInvoice.model_validate({"revision": 0,
+def test_v4_invoice_schema_preserves_the_original_calculation_version():
+    invoice = PartnerInvoice.model_validate({"revision": 0,
             "requestId": "d4bd2675-5cc9-444b-b1cb-8b833d2dc251", "date": "2026-10-09",
             "calculationVersion": 4, "settlementUnit": "mixed", "gold18Price": 100000,
             "lines": [{"category": "crafted"}]})
+    assert invoice.calculationVersion == 4
+    assert invoice.settlementUnit == "mixed"
 
 
 @pytest.mark.parametrize("version", [1, 2, 3])

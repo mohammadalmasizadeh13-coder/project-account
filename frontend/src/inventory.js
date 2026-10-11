@@ -5,8 +5,9 @@ export const stockCategories = { crafted: 'کار ساخته', coin: 'سکه', m
 export const normalizeProductCode = value => normalizeDigits(value).trim().toUpperCase().replace(/\s/g, '');
 export const stockQuantity = quantity;
 export const stockUnit = doc => doc.category === 'currency' ? (doc.currencyType || 'واحد ارز') : 'عدد / قطعه';
-export const isStockEntry = doc => Boolean(stockCategories[doc.category]) && (doc.source === 'opening-inventory' || String(doc.type).endsWith('-purchase'));
-export const isStockSale = doc => String(doc.type).endsWith('-sale');
+const isPartnerLedgerRow = doc => doc.source === 'partner-invoice' && doc.calculationVersion === 4 && doc.category === 'melted' && doc.inventoryMode === 'ledger';
+export const isStockEntry = doc => !isPartnerLedgerRow(doc) && Boolean(stockCategories[doc.category]) && (doc.source === 'opening-inventory' || String(doc.type).endsWith('-purchase'));
+export const isStockSale = doc => !isPartnerLedgerRow(doc) && String(doc.type).endsWith('-sale');
 
 // Codes belong to an incoming lot, not to a name: two rings with the same name
 // but different weights must never share a stock balance. Persist assigned codes.

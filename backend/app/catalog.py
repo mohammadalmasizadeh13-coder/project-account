@@ -7,7 +7,7 @@ from sqlalchemy import select
 from fastapi import HTTPException
 
 from .database import images, products, read_workspace
-from .inventory import is_ordinary_coin, is_priced_coin, normalize_coin_specs
+from .inventory import is_ordinary_coin, is_priced_coin, normalize_coin_specs, is_stock_entry
 from .pricing import DEFAULT_CRAFTED_PROFIT_PERCENT, base_price_breakdown, crafted_profit_or_default, number, parse_timestamp, price_breakdown
 
 
@@ -31,7 +31,7 @@ KIND_CATEGORIES = {"نیم‌ست": "half-sets", "انگشتر": "rings", "گر�
 def stock_entries(documents):
     entries = {}
     for document in documents:
-        if document.get("category") in STOCK_TYPES and (document.get("source") == "opening-inventory" or str(document.get("type", "")).endswith("-purchase")):
+        if is_stock_entry(document):
             field = "currencyAmount" if document["category"] == "currency" else "coinCount" if document["category"] == "coin" else "itemCount"
             count = document.get(field)
             entries[str(document["id"])] = {**document, "remaining": number(1 if count is None and field != "currencyAmount" else count)}

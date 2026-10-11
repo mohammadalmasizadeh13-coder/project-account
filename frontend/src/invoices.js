@@ -29,7 +29,9 @@ export function partnerDocumentRows(documents = [], partners = []) {
   const byId = new Map(documents.map(row => [String(row.id), row]));
   const projected = new Map();
   for (const partner of partners) for (const entry of partner.entries || []) {
-    if (entry.type === 'settlement' && entry.paymentMethod === 'remittance' && !entry.linkedEntryId) {
+    if (entry.type === 'settlement' && !entry.linkedEntryId) {
+      const remittance = entry.paymentMethod === 'remittance';
+      const title = remittance ? 'حواله همکار' : 'دریافت / پرداخت همکار';
       const totals = Object.fromEntries(['goldDebit', 'goldCredit', 'tomanDebit', 'tomanCredit'].map(field => [field, roundLedger(number(entry[field]))]));
       totals.netGold = roundLedger(totals.goldDebit - totals.goldCredit);
       totals.netToman = roundLedger(totals.tomanDebit - totals.tomanCredit);
@@ -42,18 +44,30 @@ export function partnerDocumentRows(documents = [], partners = []) {
         id: `partner-remittance-${entry.id}`, transactionId, invoiceNumber: entry.invoiceNumber,
         galleryName: entry.galleryName,
         invoiceLine: 1, invoiceLineCount: 1, date: entry.date, invoiceTime: entry.invoiceTime, createdAt: entry.createdAt, recordedAt: entry.createdAt,
-        category: 'remittance', type: 'partner-remittance', typeLabel: 'حواله همکار',
+        category: 'remittance', type: remittance ? 'partner-remittance' : 'partner-settlement', typeLabel: title,
         direction: remittanceDirection === 'debit' ? 'بدهکار' : 'بستانکار', remittanceDirection,
         goldAmount, tomanAmount, amount: tomanAmount,
-        itemName: entry.note || 'حواله همکار', note: entry.note || '', reference: entry.reference || '', counterpartyName: entry.counterpartyName || '',
+        itemName: entry.note || title, note: entry.note || '', reference: entry.reference || '', counterpartyName: entry.counterpartyName || '',
         itemSummary: [entry.counterpartyName, entry.reference, goldAmount ? `${format(goldAmount)} گرم طلای ۷۵۰` : '', tomanAmount ? `${format(tomanAmount)} تومان` : ''].filter(Boolean).join(' · '),
         counterpartyType: 'partner', partnerId: partner.id, customerId: partner.id, customerName: partner.name,
         partnerEntryId: entry.id, partnerEntry: entry, partnerLedgerTotals: totals,
-        partnerDisplayOnly: true, partnerRemittance: true,
+        partnerDisplayOnly: true, partnerRemittance: remittance,
       }]);
       continue;
     }
-    if (entry.calculationVersion !== 3 || !entry.transactionId || !entry.lines?.length || entry.type === 'settlement') continue;
+    if (entry.type === 'settlement') continue;
+    if (![3, 4].includes(entry.calculationVersion)) {
+      const originals = documents.filter(row => (entry.documentIds || []).includes(row.id) || entry.transactionId && row.transactionId === entry.transactionId);
+      if (!originals.length) continue;
+      const ledger = [entry, ...(partner.entries || []).filter(row => row.linkedEntryId === entry.id)];
+      const totals = Object.fromEntries(['goldDebit', 'goldCredit', 'tomanDebit', 'tomanCredit'].map(key => [key, roundLedger(ledger.reduce((sum, row) => sum + number(row[key]), 0))]));
+      totals.netGold = roundLedger(totals.goldDebit - totals.goldCredit);
+      totals.netToman = roundLedger(totals.tomanDebit - totals.tomanCredit);
+      totals.amount = originals.reduce((sum, row) => sum + invoiceRowAmount(row), 0);
+      for (const row of originals) byId.set(String(row.id), { ...row, partnerId: partner.id, partnerEntryId: entry.id, partnerEntry: entry, partnerLedgerTotals: totals });
+      continue;
+    }
+    if (!entry.transactionId || !entry.lines?.length) continue;
     const linked = (partner.entries || []).filter(payment => payment.linkedEntryId === entry.id);
     const ledger = [entry, ...linked];
     const totals = Object.fromEntries(['goldDebit', 'goldCredit', 'tomanDebit', 'tomanCredit'].map(field =>
@@ -69,6 +83,7 @@ export function partnerDocumentRows(documents = [], partners = []) {
     const paymentAmount = (number(entry.paidGold) * rate + number(entry.paidToman)) * (entry.direction === 'sale' ? 1 : -1);
     totals.amount = linesAmount + paymentAmount + linked.reduce((sum, payment) => sum +
       (number(payment.goldDebit) - number(payment.goldCredit)) * rate + number(payment.tomanDebit) - number(payment.tomanCredit), 0);
+    if (entry.calculationVersion === 4) totals.amount = totals.netGold * rate + totals.netToman;
     projected.set(String(entry.transactionId), entry.lines.map((line, index) => {
       const original = byId.get(String(line.documentId));
       const remittance = line.category === 'remittance';
@@ -81,17 +96,17 @@ export function partnerDocumentRows(documents = [], partners = []) {
         invoiceLineCount: entry.lines.length, date: entry.date, invoiceTime: entry.invoiceTime, createdAt: entry.createdAt, recordedAt: original?.recordedAt || entry.createdAt,
         counterpartyType: 'partner', partnerId: partner.id, customerId: partner.id, customerName: partner.name,
         partnerEntryId: entry.id, partnerEntry: entry, partnerLedgerTotals: totals,
-        externalInvoiceNumber: entry.externalInvoiceNumber, calculationVersion: 3,
+        externalInvoiceNumber: entry.externalInvoiceNumber, calculationVersion: entry.calculationVersion,
         ...(remittance ? { category: 'remittance', type: 'partner-remittance', typeLabel: 'حواله همکار',
           direction: line.remittanceDirection === 'debit' ? 'بدهکار' : 'بستانکار', itemName: line.note || 'حواله طلای ۷۵۰',
-          itemSummary: [line.counterpartyName, line.reference].filter(Boolean).join(' · '), amount: line.amount ?? number(line.goldAmount) * rate } : {}),
+          itemSummary: [line.counterpartyName, line.reference].filter(Boolean).join(' · '), amount: line.amount ?? (line.settlementUnit === 'toman' ? number(line.tomanAmount) : number(line.goldAmount) * rate) } : {}),
       };
     }));
   }
   const emitted = new Set();
   const rows = documents.flatMap(row => {
     const key = String(row.transactionId);
-    if (!projected.has(key)) return [row];
+    if (!projected.has(key)) return [byId.get(String(row.id)) || row];
     if (emitted.has(key)) return [];
     emitted.add(key);
     return projected.get(key);
@@ -143,8 +158,8 @@ export function groupInvoices(documents = []) {
       ...(mixedCustomer ? { saleTotal, purchaseTotal } : {}),
       rialDebt: rows.reduce((sum, row) => sum + number(row.rialDebt), 0),
       gramDebt: rows.reduce((sum, row) => sum + number(row.gramDebt), 0),
-      ...((partnerEntry?.calculationVersion === 3 || first.partnerRemittance) && partnerTotals ? {
-        typeLabel: first.partnerRemittance ? 'حواله همکار' : 'سند همکار',
+      ...(partnerEntry && partnerTotals ? {
+        typeLabel: partnerEntry.type === 'settlement' ? first.typeLabel : 'سند همکار',
         direction: first.partnerRemittance ? first.direction : partnerEntry.type === 'mixed' ? 'ترکیبی' : partnerEntry.type === 'sale' ? 'فروش' : 'خرید',
         partnerId: first.partnerId, partnerEntryId: partnerEntry.id, partnerEntry,
         ...(first.partnerRemittance ? { partnerRemittance: true, remittanceDirection: first.remittanceDirection } : {}),

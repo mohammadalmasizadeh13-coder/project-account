@@ -67,7 +67,13 @@ def values_differ(field, previous, current):
 
 
 def is_stock_entry(document):
+    if is_partner_ledger_row(document):
+        return False
     return document.get("category") in STOCK_TYPES and (document.get("source") == "opening-inventory" or str(document.get("type", "")).endswith("-purchase"))
+
+
+def is_partner_ledger_row(document):
+    return document.get("source") == "partner-invoice" and document.get("calculationVersion") == 4 and document.get("category") == "melted" and document.get("inventoryMode") == "ledger"
 
 
 def is_sale(document):
@@ -140,7 +146,7 @@ def decimal_output(value):
 
 
 def is_priced_coin(document):
-    return document.get("category") == "coin" and number(document.get("coinPricingVersion")) == 2
+    return document.get("category") == "coin" and number(document.get("coinPricingVersion")) in (2, 3)
 
 
 def is_ordinary_coin(document):
@@ -155,9 +161,9 @@ def normalize_coin_specs(document):
         if isinstance(document.get("coinType"), str) and document["coinType"] in ORDINARY_COINS - {"پارسیان"}:
             raise HTTPException(422, "نسخهٔ محاسبه و گروه سکه را مشخص کنید.")
         return document
-    if number(document.get("coinPricingVersion")) != 2:
+    if number(document.get("coinPricingVersion")) not in (2, 3):
         raise HTTPException(422, "نسخهٔ محاسبهٔ سکه معتبر نیست.")
-    document["coinPricingVersion"] = 2
+    document["coinPricingVersion"] = int(number(document["coinPricingVersion"]))
     group, kind = document.get("coinGroup"), document.get("coinType")
     if not isinstance(kind, str) or not isinstance(group, str) or group not in {"bank", "ordinary"} or kind not in (BANK_COINS if group == "bank" else ORDINARY_COINS):
         raise HTTPException(422, "گروه و نوع سکه با هم مطابقت ندارند.")
@@ -388,7 +394,7 @@ def next_product_code(documents):
             return code
 
 
-def create_stock(data, item, identity):
+def create_stock(data, item, identity, *, require_assay=True):
     if not has_permission(identity, "documents.write"):
         raise HTTPException(403, "اجازهٔ افزودن جنس به صندوق ندارید.")
     category = item.get("category")
@@ -428,7 +434,7 @@ def create_stock(data, item, identity):
     validate_stock_identity(document)
     if category == "currency":
         numeric(document.get("currencyAmount"), "مقدار ارز", minimum=Decimal("0.00000001"))
-    if category == "melted" and (not document.get("assayCode") or not document.get("laboratoryName")):
+    if require_assay and category == "melted" and (not document.get("assayCode") or not document.get("laboratoryName")):
         raise HTTPException(422, "شمارهٔ انگ و نام آزمایشگاه آب‌شده را وارد کنید.")
     validate_item(document)
     if category == "crafted":

@@ -204,6 +204,54 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   assert.equal((await partner()).entries.length, legacyCreated.body.data.partners[0].entries.length);
   await close();
 
+  // Persisted v4 documents must open, edit and print from both entry points.
+  const v4Workspace = await workspace();
+  const v4Created = await api(`/api/owner/partners/${v4Workspace.data.partners[0].id}/invoices`, {
+    method: 'POST', body: { revision: v4Workspace.revision, requestId: await evaluate('crypto.randomUUID()'),
+      date: '2026-10-09', calculationVersion: 4, settlementUnit: 'mixed', gold18Price: 100000,
+      paidGold: 0.1, paidToman: 10,
+      lines: [{ category: 'crafted', itemName: 'سند قدیمی دو حسابی', craftedKind: 'النگو', itemCount: 2, weight: 2, ayar: 750,
+        wagePercent: 10, wageFixed: 100, otherCosts: 50, profitPercent: 5, profitFixed: 1000, settlementUnit: 'gold' },
+      { category: 'remittance', remittanceDirection: 'credit', settlementUnit: 'toman', tomanAmount: 200 }] },
+  });
+  assert.equal(v4Created.status, 201, JSON.stringify(v4Created.body));
+  const v4 = v4Created.body.data.partners[0].entries.at(-1);
+  await go('/account'); await ready('.workspace-page'); await statement();
+  await click(`${row(v4.id)} [data-partner-entry-edit]`); await ready(invoice);
+  await fields(`${invoice} [data-partner-line="0"]`, { weight: '3' });
+  await click(`${invoice} [data-partner-invoice-save]`); await preview();
+  sameIdentity(await entry(v4.id), v4);
+  assert.equal((await entry(v4.id)).goldDebit, 3.465);
+  assert.equal((await entry(v4.id)).tomanDebit, 2315);
+  assert.equal((await entry(v4.id)).tomanCredit, 210);
+  await evaluate("document.body.classList.add('partner-print-open')");
+  await cdp('Emulation.setEmulatedMedia', { media: 'print' });
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('#root')).display`), 'none');
+  assert.equal(await evaluate(`document.querySelector('${dialog} table').getBoundingClientRect().height > 0`), true);
+  const printed = await cdp('Page.printToPDF', { preferCSSPageSize: true, printBackground: false });
+  assert.ok(Buffer.from(printed.data, 'base64').length > 1000, 'The partner document produces a nonempty PDF');
+  await cdp('Emulation.setEmulatedMedia', { media: 'screen' });
+  await evaluate("document.body.classList.remove('partner-print-open')");
+  await print(); await close();
+  await click('[data-section="reports"]');
+  await click('[data-tool="search"]');
+  const card = `[data-invoice-id="${v4.transactionId}"]`;
+  await click(`${card} [data-invoice-view]`); await preview(); await print(); await close();
+  await click(`${card} [data-invoice-edit]`); await ready(invoice);
+  await fields(`${invoice} [data-partner-line="1"]`, { tomanAmount: '300' });
+  await click(`${invoice} [data-partner-invoice-save]`); await preview();
+  assert.equal((await entry(v4.id)).goldDebit, 3.465);
+  assert.equal((await entry(v4.id)).tomanCredit, 310);
+  sameIdentity(await entry(v4.id), v4);
+  await print(); await close();
+  for (const document of [legacy, cash, gold]) {
+    await click(`[data-invoice-id="${document.transactionId}"] [data-invoice-view]`);
+    await preview(); await print(); await close();
+    await click(`[data-invoice-id="${document.transactionId}"] [data-invoice-edit]`);
+    await ready(document.type === 'settlement' ? settlement : invoice);
+    await close();
+  }
+
   const saved = await data();
   await go('/account'); await ready('.workspace-page'); await statement();
   assert.deepEqual((await data()).partners, saved.partners, 'All edits survive a full reload');

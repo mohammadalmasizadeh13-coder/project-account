@@ -572,3 +572,52 @@ test('balance purchase marker survives draft storage and invoice edit reconstruc
   const { goldBalancePurchase, ...ordinary } = form;
   assert.equal(Object.hasOwn(preparePartnerInvoice(ordinary), 'goldBalancePurchase'), false);
 });
+test('persisted v4 invoices retain independent payments and editable line units', () => {
+  const entry = { id: 'v4', type: 'mixed', calculationVersion: 4, settlementUnit: 'mixed', date: '2026-10-09',
+    gold18Price: 100000, paidGold: 0.1, paidToman: 10, lines: [
+      { category: 'crafted', documentId: 'stock', itemName: 'Saved item', weight: 1, scaleWeight: 2, itemCount: 2, ayar: 750,
+        wagePercent: 10, wageFixed: 100, otherCosts: 50, profitPercent: 5, profitFixed: 1000, settlementUnit: 'gold' },
+      { category: 'remittance', remittanceDirection: 'credit', settlementUnit: 'toman', tomanAmount: 200 },
+    ] };
+  const draft = partnerInvoiceDraftFromEntry(entry);
+  const prepared = preparePartnerInvoice(draft);
+  assert.equal(prepared.calculationVersion, 4);
+  assert.equal(prepared.settlementUnit, 'mixed');
+  assert.equal(prepared.lines[0].weight, 2);
+  assert.equal(prepared.lines[0].profitFixed, 1000);
+  assert.equal(prepared.lines[1].tomanAmount, 200);
+  assert.equal(Object.hasOwn(prepared.lines[1], 'goldAmount'), false);
+  const totals = partnerInvoiceTotals(draft);
+  assert.equal(totals.goldDebit, 2.31);
+  assert.equal(totals.goldCredit, 0.1);
+  assert.equal(totals.tomanDebit, 2315);
+  assert.equal(totals.tomanCredit, 210);
+  assert.equal(totals.convertedPaidTomanGold, 0);
+  draft.lines[0].weight = 3;
+  const edited = partnerInvoiceTotals(draft);
+  assert.equal(edited.goldDebit, 3.465);
+  assert.equal(edited.tomanDebit, 2315);
+});
+
+test('v4 ledger melted sales keep inventory mode without requiring a stock selection', () => {
+  const entry = { type: 'sale', calculationVersion: 4, settlementUnit: 'mixed', date: '2026-10-09', gold18Price: 100000,
+    lines: [{ category: 'melted', direction: 'sale', inventoryMode: 'ledger', settlementUnit: 'gold',
+      documentId: 'ledger-row', itemName: 'Ledger gold', meltedWeight: 5, meltedAyar: 600, meltedFee: 433180, profitPercent: 0 }] };
+  const draft = partnerInvoiceDraftFromEntry(entry);
+  const prepared = preparePartnerInvoice(draft);
+  assert.equal(prepared.lines[0].inventoryMode, 'ledger');
+  assert.equal(Object.hasOwn(prepared.lines[0], 'inventorySourceId'), false);
+  assert.equal(partnerInvoiceTotals(draft).goldCredit, 4);
+  assert.equal(partnerInvoiceTotals(draft).tomanCredit, 0);
+});
+
+test('v4 saved weight-based coins preserve version three and independent costs', () => {
+  const entry = { type: 'purchase', calculationVersion: 4, settlementUnit: 'mixed', date: '2026-10-09', gold18Price: 100000,
+    lines: [{ category: 'coin', coinType: 'پارسیان', coinGroup: 'ordinary', coinPricingVersion: 3, itemName: 'Coin',
+      coinCount: 2, coinWeight: 1, coinAyar: 750, gramPrice: 100000, wagePercent: 10, wageFixed: 1000,
+      otherCosts: 100, profitPercent: 5, profitFixed: 10000, settlementUnit: 'gold' }] };
+  const draft = partnerInvoiceDraftFromEntry(entry);
+  assert.equal(preparePartnerInvoice(draft).lines[0].coinPricingVersion, 3);
+  assert.equal(partnerInvoiceTotals(draft).goldDebit, 2.31);
+  assert.equal(partnerInvoiceTotals(draft).tomanDebit, 22310);
+});

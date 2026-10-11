@@ -24,7 +24,7 @@ export const legacyCoinOptions = [
   { name: 'نیم', price: 'halfCoinPrice' },
   { name: 'ربع', price: 'quarterCoinPrice' },
 ];
-export const isModernCoin = row => Number(row?.coinPricingVersion) === 2;
+export const isModernCoin = row => [2, 3].includes(Number(row?.coinPricingVersion));
 export const isOrdinaryCoin = row => isModernCoin(row) && coinOptions.some(coin => coin.name === row.coinType && coin.group === 'ordinary');
 export const coinOptionsFor = row => {
   const legacy = legacyCoinOptions.find(coin => coin.name === row?.coinType);

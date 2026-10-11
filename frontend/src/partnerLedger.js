@@ -90,7 +90,7 @@ export function partnerSettlementDraftFromEntry(entry) {
 }
 
 export function upgradePartnerInvoiceDraft(invoice) {
-  if (!invoice || invoice.calculationVersion === 3) return invoice;
+  if (!invoice || invoice.calculationVersion >= 3) return invoice;
   return { ...invoice, calculationVersion: 3, settlementUnit: 'gold',
     lines: (invoice.lines || []).map(line => ({ ...line, direction: line.direction || invoice.direction || 'purchase',
       meltedFee: line.meltedFee ?? String((savedNumber(invoice.calculationVersion === 2 ? invoice.gold18Price : line.meltedGramPrice) || savedNumber(invoice.gold18Price)) * MELTED_FEE_DIVISOR || ''),
@@ -102,7 +102,7 @@ export function upgradePartnerInvoiceDraft(invoice) {
 // total weight. Restore editable inputs from the recorded row snapshot only.
 export function partnerInvoiceDraftFromEntry(entry, documents = [], payment = {}) {
   const calculationVersion = entry?.calculationVersion || 1;
-  if (!['purchase', 'sale', 'mixed'].includes(entry?.type) || ![1, 2, 3].includes(calculationVersion)) throw new Error('نوع سند همکار برای ویرایش معتبر نیست.');
+  if (!['purchase', 'sale', 'mixed'].includes(entry?.type) || ![1, 2, 3, 4].includes(calculationVersion)) throw new Error('نوع سند همکار برای ویرایش معتبر نیست.');
   const docById = new Map(documents.map(document => [String(document.id), document]));
   const direction = entry.direction === 'sale' || (!entry.direction && entry.type === 'sale') ? 'sale' : 'purchase';
   const savedPayment = calculationVersion < 3 && payment.linkedEntryId ? payment : entry;
@@ -120,6 +120,11 @@ export function partnerInvoiceDraftFromEntry(entry, documents = [], payment = {}
       for (const key of ['coinPricingVersion', 'coinGroup', 'coinWeight', 'coinAyar', 'coinWeight750', 'profitFixed']) form[key] = '';
     }
     form.direction = rowDirection;
+    if (calculationVersion === 4) {
+      form.settlementUnit = record.settlementUnit || (['crafted', 'melted', 'remittance'].includes(record.category) || isOrdinaryCoin(record) ? 'gold' : 'toman');
+      form.tomanAmount = record.tomanAmount ?? '';
+      if (record.inventoryMode) form.inventoryMode = record.inventoryMode;
+    }
     form.wageFixedUnit = 'toman';
     if (record.category === 'remittance') return form;
     if (row.documentId) form.documentId = row.documentId;
@@ -144,8 +149,19 @@ export function partnerInvoiceDraftFromEntry(entry, documents = [], payment = {}
 }
 
 export function preparePartnerLine(form, rate, calculationVersion = 2, invoiceDirection = 'purchase') {
+  if (calculationVersion === 4) {
+    const unit = form.settlementUnit || (['crafted', 'melted', 'remittance'].includes(form.category) || isOrdinaryCoin(form) ? 'gold' : 'toman');
+    if (!['gold', 'toman'].includes(unit) || unit === 'gold' && (form.category === 'currency' || form.category === 'coin' && !isOrdinaryCoin(form))) throw new Error('واحد حساب ردیف معتبر نیست.');
+    const prepared = preparePartnerLine({ ...form, ...(form.category === 'remittance' && unit === 'toman' ? { goldAmount: form.tomanAmount } : {}) }, rate, 3, invoiceDirection);
+    prepared.settlementUnit = unit;
+    if (form.category === 'remittance' && unit === 'toman') { prepared.tomanAmount = prepared.goldAmount; delete prepared.goldAmount; }
+    if (form.category !== 'remittance') prepared.profitFixed = numeric(form.profitFixed, 'سود ثابت', { optional: true });
+    if (form.inventoryMode) prepared.inventoryMode = form.inventoryMode;
+    return prepared;
+  }
+
   const category = form.category;
-  if (calculationVersion === 3 && category === 'remittance') {
+  if (calculationVersion >= 3 && category === 'remittance') {
     const remittanceDirection = form.remittanceDirection || 'credit';
     if (!['debit', 'credit'].includes(remittanceDirection)) throw new Error('جهت حواله را انتخاب کنید.');
     return { category, remittanceDirection, goldAmount: numeric(form.goldAmount, 'مقدار حواله طلای ۷۵۰', { positive: true }),
@@ -154,7 +170,7 @@ export function preparePartnerLine(form, rate, calculationVersion = 2, invoiceDi
   if (!partnerStockTypes[category]) throw new Error('نوع کالای ردیف را انتخاب کنید.');
   if (!text(form.itemName)) throw new Error('نام جنس هر ردیف را وارد کنید.');
   const line = { category, itemName: text(form.itemName), otherCosts: numeric(form.otherCosts, 'هزینه‌های دیگر', { optional: true }) };
-  if (calculationVersion === 3) {
+  if (calculationVersion >= 3) {
     line.direction = form.direction || invoiceDirection;
     if (!['purchase', 'sale'].includes(line.direction)) throw new Error('نوع خرید یا فروش ردیف را انتخاب کنید.');
   }
@@ -169,7 +185,7 @@ export function preparePartnerLine(form, rate, calculationVersion = 2, invoiceDi
     line[weightKey] = numeric(form[weightKey], 'وزن واقعی', { positive: true, max: 1e5 });
     line[purityKey] = numeric(form[purityKey], 'عیار واقعی', { positive: true, max: 1000 });
     if (line[purityKey] < 1) throw new Error('عیار باید بین ۱ و ۱۰۰۰ باشد.');
-    if (calculationVersion === 3 && category === 'melted') {
+    if (calculationVersion >= 3 && category === 'melted') {
       line.meltedFee = numeric(form.meltedFee, 'فی آبشده (تومان)', { positive: true });
       line.meltedGramPrice = line.meltedFee / MELTED_FEE_DIVISOR;
     } else line[priceKey] = calculationVersion >= 2 ? rate : text(form[priceKey]) ? numeric(form[priceKey], 'نرخ هر گرم ۷۵۰', { positive: true }) : rate;
@@ -178,7 +194,7 @@ export function preparePartnerLine(form, rate, calculationVersion = 2, invoiceDi
     line.wageFixed = numeric(form.wageFixed, 'اجرت پولی هر عدد', { optional: true }) / (calculationVersion >= 2 && form.wageFixedUnit === 'rial' ? 10 : 1);
     if (category === 'crafted') line.craftedKind = form.craftedKind || 'سایر';
     else {
-      if (!text(form.assayCode) || !text(form.laboratoryName)) throw new Error('شماره انگ و آزمایشگاه طلای آبشده را وارد کنید.');
+      if (form.inventoryMode !== 'ledger' && (!text(form.assayCode) || !text(form.laboratoryName))) throw new Error('شماره انگ و آزمایشگاه طلای آبشده را وارد کنید.');
       line.assayCode = text(form.assayCode); line.laboratoryName = text(form.laboratoryName);
     }
   } else if (category === 'coin') {
@@ -191,7 +207,7 @@ export function preparePartnerLine(form, rate, calculationVersion = 2, invoiceDi
     if (isModernCoin(form)) {
       const definition = coinOptions.find(coin => coin.name === form.coinType);
       if (!definition || form.coinGroup !== definition.group) throw new Error('نوع و گروه سکه معتبر را انتخاب کنید.');
-      line.coinPricingVersion = 2; line.coinGroup = definition.group;
+      line.coinPricingVersion = Number(form.coinPricingVersion); line.coinGroup = definition.group;
       line.profitFixed = numeric(form.profitFixed, 'سود پولی هر سکه', { optional: true });
       if (isOrdinaryCoin(form)) {
         line.coinWeight = numeric(form.coinWeight ?? definition.weight, 'وزن ترازو هر سکه', { positive: true, max: 1e5 });
@@ -258,8 +274,27 @@ function mixedPartnerLineTotals(line, goldPrice, invoiceDirection) {
     goldDebit: credit ? 0 : goldAmount, goldCredit: credit ? goldAmount : 0, netGold: credit ? -goldAmount : goldAmount,
     tomanDebit: 0, tomanCredit: 0 };
 }
+function independentPartnerLineTotals(line, goldPrice, invoiceDirection) {
+  const base = mixedPartnerLineTotals(line, goldPrice, invoiceDirection);
+  const remittance = line.category === 'remittance';
+  const unit = line.settlementUnit || (['crafted', 'melted', 'remittance'].includes(line.category) || isOrdinaryCoin(line) ? 'gold' : 'toman');
+  const principalGold = unit === 'gold' ? remittance ? savedNumber(line.goldAmount) : base.weight750 : 0;
+  const principalToman = unit === 'toman' ? remittance ? savedNumber(line.tomanAmount) : base.baseAmount : 0;
+  const wage = remittance || line.category === 'currency' ? 0 : savedNumber(line.wagePercent) / 100;
+  const laborGold = principalGold * wage;
+  const cashCosts = remittance ? 0 : base.count * (savedNumber(line.wageFixed) / (line.wageFixedUnit === 'rial' ? 10 : 1) + savedNumber(line.otherCosts));
+  const profitGold = (principalGold + laborGold) * base.profitPercent / 100;
+  const goldAmount = principalGold + laborGold + profitGold;
+  const tomanAmount = (principalToman * (1 + wage) + cashCosts) * (1 + base.profitPercent / 100) + (remittance ? 0 : base.count * savedNumber(line.profitFixed));
+  const credit = remittance ? (line.remittanceDirection || 'credit') === 'credit' : base.direction === 'sale';
+  return { ...base, principalGold, laborGold, profitGold, fixedLaborGold: 0, otherCostsGold: 0, goldAmount, tomanAmount,
+    amount: goldAmount * savedNumber(goldPrice) + tomanAmount,
+    goldDebit: credit ? 0 : goldAmount, goldCredit: credit ? goldAmount : 0,
+    tomanDebit: credit ? 0 : tomanAmount, tomanCredit: credit ? tomanAmount : 0, netGold: credit ? -goldAmount : goldAmount };
+}
 export function partnerLineTotals(line, goldPrice = 0, calculationVersion = 1, invoiceDirection = 'purchase') {
-  if (calculationVersion === 3) return mixedPartnerLineTotals(line, goldPrice, invoiceDirection);
+  if (calculationVersion === 4) return independentPartnerLineTotals(line, goldPrice, invoiceDirection);
+  if (calculationVersion >= 3) return mixedPartnerLineTotals(line, goldPrice, invoiceDirection);
   const metal = ['crafted', 'melted'].includes(line.category);
   const count = savedNumber(line.category === 'currency' ? line.currencyAmount : line.category === 'coin' ? line.coinCount : line.itemCount) || (line.category === 'currency' ? 0 : 1);
   const conversionGoldPrice = savedNumber(goldPrice);
@@ -311,23 +346,23 @@ export function savedPartnerLineTotals(line, document = {}, entry = {}) {
     record.weightMode = hasOriginalWeight ? line.weightMode || 'total' : 'unit';
     record[purityKey] = firstNumber(line[purityKey], document[purityKey], 750);
   }
-  const calculationVersion = entry.calculationVersion === 3 ? 3 : entry.calculationVersion === 2 ? 2 : 1;
+  const calculationVersion = [2, 3, 4].includes(entry.calculationVersion) ? entry.calculationVersion : 1;
   const fallback = partnerLineTotals(record, entry.gold18Price, calculationVersion, entry.direction || entry.type);
   const actualWeight = metal ? firstNumber(line.scaleWeight, document.scaleWeight, fallback.actualWeight) : fallback.actualWeight;
   const weight750 = metal ? firstNumber(line.weight750, document.totalWeight750, fallback.weight750) : record.category === 'coin' && isOrdinaryCoin(record) ? fallback.weight750 : 0;
   const wagePercent = firstNumber(line.wagePercent, document.wagePercent, 0);
   const laborGold = metal || (calculationVersion >= 2 && record.category === 'coin')
-    ? firstNumber(line.laborGold, document.laborGold, calculationVersion === 3 || record.category === 'coin' ? fallback.laborGold : weight750 * wagePercent / 100) : 0;
+    ? firstNumber(line.laborGold, document.laborGold, calculationVersion >= 3 || record.category === 'coin' ? fallback.laborGold : weight750 * wagePercent / 100) : 0;
   const goldDebit = firstNumber(line.goldDebit, entry.settlementUnit !== 'toman' ? document.partnerGoldDebit : undefined,
     calculationVersion >= 2 ? roundPartnerAmount(fallback.goldDebit) : metal && entry.settlementUnit !== 'toman' ? roundPartnerAmount(weight750 + laborGold) : 0);
-  const fiatFallback = calculationVersion >= 2 ? 0 : !metal || entry.settlementUnit === 'toman'
+  const fiatFallback = calculationVersion === 4 ? fallback.tomanDebit : calculationVersion >= 2 ? 0 : !metal || entry.settlementUnit === 'toman'
     ? firstNumber(document.amount, fallback.tomanDebit + (metal ? (weight750 + laborGold) * fallback.rate : 0))
     : fallback.tomanDebit;
   const tomanDebit = firstNumber(line.tomanDebit, fiatFallback, 0);
-  const goldCredit = calculationVersion === 3 ? firstNumber(line.goldCredit, document.partnerGoldCredit, roundPartnerAmount(fallback.goldCredit), 0) : undefined;
+  const goldCredit = calculationVersion >= 3 ? firstNumber(line.goldCredit, document.partnerGoldCredit, roundPartnerAmount(fallback.goldCredit), 0) : undefined;
   return { ...fallback, actualWeight, weight750, laborGold, goldDebit, tomanDebit, wagePercent,
-    ...(calculationVersion === 3 ? { goldCredit, netGold: roundPartnerAmount(goldDebit - goldCredit),
-      tomanCredit: firstNumber(line.tomanCredit, 0),
+    ...(calculationVersion >= 3 ? { goldCredit, netGold: roundPartnerAmount(goldDebit - goldCredit),
+      tomanCredit: firstNumber(line.tomanCredit, fallback.tomanCredit, 0),
       principalGold: firstNumber(line.principalGold, document.principalGold, fallback.principalGold, 0),
       amount: firstNumber(line.amount, document.amount, fallback.amount, 0),
       meltedFee: firstNumber(line.meltedFee, document.meltedFee, fallback.meltedFee, 0),
@@ -342,13 +377,14 @@ export function savedPartnerLineTotals(line, document = {}, entry = {}) {
   };
 }
 export function partnerInvoiceTotals(form) {
-  const calculationVersion = form.calculationVersion === 3 ? 3 : form.calculationVersion === 2 ? 2 : 1;
+  const calculationVersion = [2, 3, 4].includes(form.calculationVersion) ? form.calculationVersion : 1;
   const lines = (form.lines || []).map(line => partnerLineTotals(line, form.gold18Price, calculationVersion, form.direction));
-  if (calculationVersion === 3) {
+  if (calculationVersion >= 3) {
     const keys = ['actualWeight', 'weight750', 'laborGold', 'fixedLaborGold', 'otherCostsGold', 'profitGold', 'principalGold', 'goldDebit', 'goldCredit', 'tomanDebit', 'tomanCredit', 'amount'];
     const totals = Object.fromEntries(keys.map(key => [key, lines.reduce((sum, row) => sum + (row[key] || 0), 0)]));
-    const convertedPaidTomanGold = savedNumber(form.gold18Price) > 0 ? savedNumber(form.paidToman) / savedNumber(form.gold18Price) : 0;
+    const convertedPaidTomanGold = calculationVersion !== 4 && savedNumber(form.gold18Price) > 0 ? savedNumber(form.paidToman) / savedNumber(form.gold18Price) : 0;
     totals[form.direction === 'sale' ? 'goldDebit' : 'goldCredit'] += roundPartnerAmount(savedNumber(form.paidGold) + convertedPaidTomanGold);
+    if (calculationVersion === 4) totals[form.direction === 'sale' ? 'tomanDebit' : 'tomanCredit'] += savedNumber(form.paidToman);
     return { ...Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, roundPartnerAmount(value)])),
       cashGoldCredit: form.direction === 'sale' ? 0 : roundPartnerAmount(convertedPaidTomanGold),
       cashGoldDebit: form.direction === 'sale' ? roundPartnerAmount(convertedPaidTomanGold) : 0,
@@ -367,7 +403,7 @@ export function partnerInvoiceTotals(form) {
     goldCredit: roundPartnerAmount(savedNumber(form.paidGold) + cashGoldCredit), tomanCredit: calculationVersion === 2 ? 0 : roundPartnerAmount(savedNumber(form.paidToman)), lines };
 }
 export function preparePartnerInvoice(form) {
-  const calculationVersion = form.calculationVersion === 3 ? 3 : form.calculationVersion === 2 ? 2 : 1;
+  const calculationVersion = [2, 3, 4].includes(form.calculationVersion) ? form.calculationVersion : 1;
   const gold18Price = numeric(form.gold18Price, 'نرخ طلای ۷۵۰ هنگام ثبت', { positive: true });
   if (!Array.isArray(form.lines) || form.lines.length < 1 || form.lines.length > 100) throw new Error('فاکتور باید بین یک تا صد ردیف داشته باشد.');
   if (form.direction && !['purchase', 'sale'].includes(form.direction)) throw new Error('نوع فاکتور همکار معتبر نیست.');
@@ -375,10 +411,11 @@ export function preparePartnerInvoice(form) {
     ...(form.goldBalancePurchase === true ? { goldBalancePurchase: true } : {}),
     ...(form.direction === 'sale' ? { direction: 'sale' } : {}),
     ...(calculationVersion >= 2 ? { calculationVersion } : {}),
-    settlementUnit: calculationVersion === 1 ? form.settlementUnit || 'gold' : 'gold', lines: form.lines.map(line => {
+    settlementUnit: calculationVersion === 4 ? 'mixed' : calculationVersion === 1 ? form.settlementUnit || 'gold' : 'gold', lines: form.lines.map(line => {
       const prepared = preparePartnerLine(line, gold18Price, calculationVersion, form.direction || 'purchase');
       if (prepared.category !== 'remittance' && text(line.documentId)) prepared.documentId = text(line.documentId);
-      if (prepared.category !== 'remittance' && (calculationVersion === 3 ? prepared.direction === 'sale' : form.direction === 'sale')) {
+      if (prepared.category !== 'remittance' && (calculationVersion >= 3 ? prepared.direction === 'sale' : form.direction === 'sale')) {
+        if (calculationVersion === 4 && line.category === 'melted' && line.inventoryMode === 'ledger') return prepared;
         if (!text(line.inventorySourceId)) throw new Error('کالای موجود در صندوق را برای هر ردیف فروش انتخاب کنید.');
         prepared.inventorySourceId = text(line.inventorySourceId);
       }

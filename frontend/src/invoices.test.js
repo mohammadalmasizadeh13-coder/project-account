@@ -143,11 +143,12 @@ test('remittance-only partner invoices remain visible with zero net and include 
   assert.equal(invoiceItemName(invoice.rows[0]), 'حواله طلای ۷۵۰');
 });
 
-test('legacy partner documents remain unchanged by mixed document projection', () => {
+test('legacy partner documents preserve saved amounts and route to their partner editor', () => {
   const old = { id: 'old', transactionId: 'legacy-partner', type: 'crafted-purchase', partnerId: 'partner', amount: 20 };
   const partner = { id: 'partner', entries: [{ id: 'old-entry', transactionId: 'legacy-partner', calculationVersion: 2, lines: [{ documentId: 'old' }] }] };
   const rows = partnerDocumentRows([old], [partner]);
-  assert.equal(rows[0], old);
+  for (const key of Object.keys(old)) assert.equal(rows[0][key], old[key]);
+  assert.equal(groupInvoices(rows)[0].partnerEntryId, 'old-entry');
   assert.equal(groupInvoices(rows)[0].amount, 20);
 });
 
@@ -208,5 +209,20 @@ test('linked remittance invoice payments are never duplicated as standalone docu
     { id: 'gold', type: 'settlement', paymentMethod: 'gold', goldCredit: 4 },
   ];
   const rows = partnerDocumentRows([], [{ id: 'partner', entries }]);
-  assert.deepEqual(rows.map(row => row.partnerEntryId), ['standalone']);
+  assert.deepEqual(rows.map(row => row.partnerEntryId), ['gold', 'cash', 'standalone']);
+});
+test('v4 mixed documents use saved independent balances and retain partner editor routing', () => {
+  const entry = { id: 'v4', type: 'mixed', calculationVersion: 4, transactionId: 'v4-transaction', invoiceNumber: 41,
+    gold18Price: 100000, goldDebit: 2.31, goldCredit: 0.1, tomanDebit: 2315, tomanCredit: 210,
+    lines: [{ category: 'crafted', itemName: 'Gold', amount: 233315 },
+      { category: 'remittance', settlementUnit: 'toman', tomanAmount: 200, remittanceDirection: 'credit' }] };
+  const before = structuredClone(entry);
+  const [invoice] = groupInvoices(partnerDocumentRows([], [{ id: 'supplier', entries: [entry] }]));
+  assert.equal(invoice.partnerEntryId, 'v4');
+  assert.equal(invoice.partnerId, 'supplier');
+  assert.equal(invoice.rows.length, 2);
+  assert.equal(invoice.gramDebt, 2.21);
+  assert.equal(invoice.rialDebt, 2105);
+  assert.equal(invoice.amount, 223105);
+  assert.deepEqual(entry, before);
 });
