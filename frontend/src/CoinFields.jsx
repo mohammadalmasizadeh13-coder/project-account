@@ -1,6 +1,6 @@
 import React from 'react';
 import NumberInput from './NumberInput.jsx';
-import { coinOptions, coinSpec, isModernCoin, isOrdinaryCoin, selectCoin } from './coins.js';
+import { coinOptions, legacyCoinOptions, coinSpec, isModernCoin, isOrdinaryCoin, selectCoin } from './coins.js';
 
 const format = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 6 }).format(value);
 
@@ -11,20 +11,24 @@ export default function CoinFields({ value, onChange, prices = {}, locked = fals
   const spec = coinSpec(value);
   const change = (key, nextValue) => {
     const next = { ...value, [key]: nextValue };
-    if (ordinary) next.coinWeight750 = coinSpec(next).weight750;
+    if (modern) next.coinWeight750 = coinSpec(next).weight750;
     onChange(next);
   };
   const choose = type => onChange({ ...value, ...selectCoin(type, prices) });
-  const field = (name, label, fieldValue = value[name], readOnly = false) => <label key={name}>{label}<NumberInput name={name} value={fieldValue ?? ''} required inputMode="decimal" readOnly={readOnly} aria-invalid={!!errors[name]} onChange={event => change(name, event.target.value)}/>{errors[name] && <small className="field-error" role="alert">{errors[name]}</small>}</label>;
+  const field = (name, label, fieldValue = value[name], readOnly = false) => <label key={name}>{label}<NumberInput name={name} value={fieldValue ?? ''} required={!['coinWeight', 'coinAyar'].includes(name) || ordinary || !!value.coinWeight || !!value.coinAyar} inputMode="decimal" readOnly={readOnly} aria-invalid={!!errors[name]} onChange={event => change(name, event.target.value)}/>{errors[name] && <small className="field-error" role="alert">{errors[name]}</small>}</label>;
   return <>
     {modern ? <>
       <label>گروه سکه<select name="coinGroup" value={ordinary ? 'ordinary' : 'bank'} disabled={locked || groupLocked} onChange={event => choose(coinOptions.find(coin => coin.group === event.target.value).name)}><option value="bank">بانکی</option><option value="ordinary">عادی و وزنی</option></select></label>
       <label>نوع سکه<select name="coinType" value={value.coinType} disabled={locked} aria-invalid={!!errors.coinType} onChange={event => choose(event.target.value)}>{coinOptions.filter(coin => coin.group === (ordinary ? 'ordinary' : 'bank')).map(coin => <option key={coin.name} value={coin.name}>{coin.name}</option>)}</select>{errors.coinType && <small className="field-error" role="alert">{errors.coinType}</small>}</label>
-    </> : <label>نوع سکه<input name="coinType" value={value.coinType || ''} readOnly/></label>}
+    </> : <label>نوع سکه<select name="coinType" value={value.coinType || ''} disabled={locked} onChange={event => {
+      const type = event.target.value;
+      const legacy = legacyCoinOptions.find(coin => coin.name === type);
+      onChange({ ...value, coinType: type, ...(legacy ? { coinPrice: String(prices[legacy.price] || value.coinPrice || '') } : {}) });
+    }}>{[...legacyCoinOptions.map(coin => coin.name), 'پارسیان', ...(value.coinType && ![...legacyCoinOptions.map(coin => coin.name), 'پارسیان'].includes(value.coinType) ? [value.coinType] : [])].map(type => <option key={type}>{type}</option>)}</select></label>}
     {showCount && field('coinCount', 'تعداد سکه')}
-    {ordinary && <>
-      {field('coinWeight', 'وزن ترازو هر سکه (گرم)', definition?.custom ? value.coinWeight : spec.weight, locked || !definition?.custom)}
-      {field('coinAyar', 'عیار اصلی سکه', definition?.custom ? value.coinAyar : spec.ayar, locked || !definition?.custom)}
+    {modern && <>
+      {field('coinWeight', 'وزن ترازو هر سکه (گرم)', value.coinWeight ?? definition?.weight ?? '', locked)}
+      {field('coinAyar', 'عیار اصلی سکه', value.coinAyar ?? definition?.ayar ?? '', locked)}
       <label>وزن هر سکه با عیار ۷۵۰ (گرم)<input name="coinWeight750" value={format(spec.weight750)} readOnly data-coin-weight750/><small>وزن ترازو × عیار اصلی ÷ ۷۵۰</small></label>
     </>}
     {!modern && value.coinType === 'پارسیان' && field('parsianWeight', 'وزن ترازو هر سکه پارسیان (گرم)', value.parsianWeight, locked)}

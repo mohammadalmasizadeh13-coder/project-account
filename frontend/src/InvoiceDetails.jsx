@@ -14,15 +14,15 @@ const debtGrams = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigit
 const money = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(number(value));
 const categories = { crafted: 'کار ساخته', melted: 'طلای آبشده', coin: 'سکه', currency: 'ارز', expense: 'هزینه' };
 const rowWeight = row => {
-  const unitWeight = row.category === 'crafted' ? number(row.weight) : row.category === 'melted' ? number(row.meltedWeight) : row.category === 'coin' && isOrdinaryCoin(row) ? coinSpec(row).weight : row.category === 'coin' && row.coinType === 'پارسیان' ? number(row.parsianWeight) : null;
+  const unitWeight = row.category === 'crafted' ? number(row.weight) : row.category === 'melted' ? number(row.meltedWeight) : row.category === 'coin' && isModernCoin(row) && coinSpec(row).weight ? coinSpec(row).weight : row.category === 'coin' && row.coinType === 'پارسیان' ? number(row.parsianWeight) : null;
   return unitWeight == null ? null : unitWeight * quantity(row);
 };
-const rowPurity = row => row.category === 'crafted' ? (row.ayar || 750) : row.category === 'melted' ? (row.meltedAyar || 750) : row.category === 'coin' && isOrdinaryCoin(row) ? coinSpec(row).ayar : null;
+const rowPurity = row => row.category === 'crafted' ? (row.ayar || 750) : row.category === 'melted' ? (row.meltedAyar || 750) : row.category === 'coin' && isModernCoin(row) && coinSpec(row).ayar ? coinSpec(row).ayar : null;
 const rowRate = row => row.category === 'crafted' ? row.gramPrice : row.category === 'melted' ? row.meltedGramPrice : row.category === 'coin' ? (isOrdinaryCoin(row) ? row.gramPrice : !isModernCoin(row) && row.coinType === 'پارسیان' ? row.parsianPrice : row.coinPrice) : row.category === 'currency' ? row.currencyRate : null;
 
 function CoinDetails({ row }) {
   if (row.category !== 'coin' || !isModernCoin(row)) return null;
-  return <><small data-invoice-coin-spec>{coinSummary(row)}</small><small data-invoice-coin-profit>سود: {decimal(row.profitPercent)}٪ + {money(row.profitFixed)} تومان برای هر سکه</small>{isOrdinaryCoin(row) && <small>وزن کل عیار ۷۵۰: {debtGrams(coinSpec(row).weight750 * quantity(row))} گرم</small>}</>;
+  return <><small data-invoice-coin-spec>{coinSummary(row)}</small><small data-invoice-coin-profit>سود: {decimal(row.profitPercent)}٪ + {money(row.profitFixed)} تومان برای هر سکه</small>{coinSpec(row).weight > 0 && <small>وزن کل عیار ۷۵۰: {debtGrams(coinSpec(row).weight750 * quantity(row))} گرم</small>}</>;
 }
 
 const printOffset = value => Math.max(-5, Math.min(5, Number(value) || 0));

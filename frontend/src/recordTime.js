@@ -1,4 +1,21 @@
-import { formatPersianDate, isoToPersian, todayInTehran } from './persianDate.js';
+import { formatPersianDate, isoToPersian, todayInTehran, normalizeDigits } from './persianDate.js';
+
+export function invoiceTimeNow(now = new Date()) {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
+}
+
+export function validInvoiceTime(value) {
+  const time = normalizeDigits(value ?? '').trim();
+  if (time && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error('ساعت فاکتور را به صورت ساعت و دقیقه وارد کنید.');
+  return time;
+}
+
+export function ledgerClock(entry) {
+  if (entry.invoiceTime) return entry.invoiceTime;
+  const created = new Date(entry.createdAt);
+  if (!Number.isFinite(created.getTime())) return '';
+  return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3, hourCycle: 'h23' }).format(created);
+}
 
 const tehranTime = new Intl.DateTimeFormat('fa-IR', {
   timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
@@ -26,6 +43,7 @@ export function formatRecordTimestamp(record) {
 export function formatRecordDate(record, dateField = 'date') {
   const businessDate = record?.[dateField];
   const dateLabel = formatPersianDate(businessDate);
+  if (record?.invoiceTime && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(record.invoiceTime)) return `${dateLabel}، ساعت ${record.invoiceTime.replace(/\d/g, digit => '۰۱۲۳۴۵۶۷۸۹'[digit])}`;
   const registered = registrationDate(record);
   if (!registered) return dateLabel;
   if (businessDate === todayInTehran(registered)) return `${dateLabel}، ساعت ${tehranTime.format(registered)}`;

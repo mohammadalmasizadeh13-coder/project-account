@@ -5,10 +5,12 @@ import { craftedKinds } from './crmAnalytics.js';
 import { profitPercentInput } from './profitDefaults.js';
 import { isMiscPurchase } from './miscGold.js';
 import { coinOptions, coinSpec, isModernCoin, isOrdinaryCoin } from './coins.js';
+import { validInvoiceTime } from './recordTime.js';
 
 export function validateDocument(form, category, parseNumber) {
   form = { ...form, profitPercent: profitPercentInput(form.profitPercent, category, form) };
   const errors = {};
+  try { validInvoiceTime(form.invoiceTime); } catch (cause) { errors.invoiceTime = cause.message; }
   const required = (name, label) => { if (!String(form[name] || '').trim()) errors[name] = `${label} را وارد کنید.`; };
   const numeric = (name, label, allowZero = false, optional = false) => {
     const raw = String(form[name] ?? '').trim();
@@ -38,13 +40,12 @@ export function validateDocument(form, category, parseNumber) {
     if (isModernCoin(form)) {
       const definition = coinOptions.find(coin => coin.name === form.coinType);
       if (!definition || form.coinGroup !== definition.group) errors.coinType = 'نوع و گروه سکه معتبر را انتخاب کنید.';
-      if (isOrdinaryCoin(form)) {
-        if (definition.custom) {
-          numeric('coinWeight', 'وزن ترازو هر سکه'); numeric('coinAyar', 'عیار اصلی سکه');
-          if (!errors.coinAyar && (coinSpec(form).ayar < 1 || coinSpec(form).ayar > 1000)) errors.coinAyar = 'عیار سکه باید بین ۱ و ۱۰۰۰ باشد.';
-        }
-        numeric('gramPrice', 'نرخ هر گرم طلای ۷۵۰');
-      } else numeric('coinPrice', 'نرخ تابلو هر سکه');
+      if (isOrdinaryCoin(form) || form.coinWeight || form.coinAyar) {
+        numeric('coinWeight', 'وزن ترازو هر سکه'); numeric('coinAyar', 'عیار اصلی سکه');
+        if (!errors.coinAyar && (coinSpec(form).ayar < 1 || coinSpec(form).ayar > 1000)) errors.coinAyar = 'عیار سکه باید بین ۱ و ۱۰۰۰ باشد.';
+      }
+      if (isOrdinaryCoin(form)) numeric('gramPrice', 'نرخ هر گرم طلای ۷۵۰');
+      else numeric('coinPrice', 'نرخ تابلو هر سکه');
       numeric('profitFixed', 'سود پولی هر سکه', true, true);
     } else if (form.coinType === 'پارسیان') {
       numeric('parsianWeight', 'وزن پارسیان'); numeric('parsianPrice', 'قیمت پارسیان');

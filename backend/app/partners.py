@@ -19,6 +19,7 @@ from .inventory import (COIN_PHYSICAL_FIELDS, amount, coin_base, coin_fixed_prof
     is_priced_coin, item_summary, numeric, quantity)
 from .invoices import guard_invoice_stock, prepare_invoices, reserve_invoice_numbers, validate_group
 from .pricing import iso_now, number
+from .invoice_time import validate_invoice_time, ledger_clock
 from .security import account_request_id, digest, get_user, has_permission, require_mutation
 
 
@@ -28,15 +29,6 @@ partner_requests = Table("noor_partner_requests", metadata,
     Column("revision", Integer, nullable=False), Column("created_id", String(64), nullable=False),
     Column("created_at", Float, nullable=False))
 MAX_BALANCE = Decimal("9007199254740991")
-
-
-def copy_coin_identity(source, line):
-    if source.get("category") == "coin":
-        for field in COIN_PHYSICAL_FIELDS:
-            if field in source:
-                line[field] = source[field]
-            else:
-                line.pop(field, None)
 
 
 def coin_snapshot(document):
@@ -78,6 +70,8 @@ class LedgerEntry(StrictModel):
     type: Literal["purchase", "sale", "mixed", "settlement"]
     direction: Literal["purchase", "sale"] | None = None
     date: str = Field(min_length=10, max_length=10)
+    invoiceTime: str = Field(default="", exclude_if=lambda value: not value)
+    _valid_invoice_time = field_validator("invoiceTime")(validate_invoice_time)
     createdAt: str = Field(min_length=1, max_length=60)
     goldDebit: float = Field(default=0, ge=0, le=float(MAX_BALANCE))
     goldCredit: float = Field(default=0, ge=0, le=float(MAX_BALANCE))
@@ -179,6 +173,8 @@ class PartnerPatch(PartnerMutation):
 class PartnerInvoice(PartnerMutation):
     direction: Literal["purchase", "sale"] = "purchase"
     date: str = Field(min_length=10, max_length=10)
+    invoiceTime: str = Field(default="", exclude_if=lambda value: not value)
+    _valid_invoice_time = field_validator("invoiceTime")(validate_invoice_time)
     externalInvoiceNumber: str = Field(default="", max_length=200)
     note: str = Field(default="", max_length=5000)
     gold18Price: Any
@@ -207,6 +203,8 @@ class PartnerInvoice(PartnerMutation):
 
 class PartnerSettlement(PartnerMutation):
     date: str = Field(min_length=10, max_length=10)
+    invoiceTime: str = Field(default="", exclude_if=lambda value: not value)
+    _valid_invoice_time = field_validator("invoiceTime")(validate_invoice_time)
     direction: Literal["debit", "credit"] = "credit"
     goldAmount: Any = 0
     tomanAmount: Any = 0
@@ -230,7 +228,7 @@ def rounded_gold(value):
 
 def recalculate_partner(partner):
     gold, toman = number(partner.get("openingGoldBalance")), number(partner.get("openingTomanBalance"))
-    chronological = sorted(enumerate(partner.get("entries", [])), key=lambda pair: (pair[1]["date"], datetime.fromisoformat(pair[1]["createdAt"].replace("Z", "+00:00")), pair[0]))
+    chronological = sorted(enumerate(partner.get("entries", [])), key=lambda pair: (pair[1]["date"], ledger_clock(pair[1]), datetime.fromisoformat(pair[1]["createdAt"].replace("Z", "+00:00")), pair[0]))
     for _, entry in chronological:
         gold += number(entry.get("goldDebit")) - number(entry.get("goldCredit"))
         toman += number(entry.get("tomanDebit")) - number(entry.get("tomanCredit"))
@@ -289,6 +287,7 @@ def find_partner(data, identifier):
 
 def entry_base(payload, **values):
     return {"id": secrets.token_hex(16), "date": payload.date, "createdAt": iso_now(),
+        **({"invoiceTime": payload.invoiceTime} if payload.invoiceTime else {}),
         "goldDebit": 0, "goldCredit": 0, "tomanDebit": 0, "tomanCredit": 0,
         "goldBalance": 0, "tomanBalance": 0, "note": payload.note, "reference": "", "counterpartyName": "",
         "paymentMethod": "gold", **values}
@@ -347,12 +346,11 @@ def make_supplier_invoice(data, partner, payload, identity, connection, *, exist
             source = find_source(data, str(source_id or ""))
             if source["category"] not in {"crafted", "coin"} or source["category"] != line.get("category"):
                 raise HTTPException(422, "نوع کالای فروش همکار با موجودی ساخته یا سکه مطابقت ندارد.")
-            # Physical identity belongs to the selected lot; only quantity and sale rates are editable.
-            for field in ("itemName", "craftedKind", "weight", "ayar", "coinType", "parsianWeight"):
+            # Use stock values only for omitted inputs; preserve the invoice snapshot.
+            for field in ("itemName", "craftedKind", "weight", "ayar", *COIN_PHYSICAL_FIELDS):
                 if field in source:
-                    line[field] = source[field]
-            copy_coin_identity(source, line)
-            line["weightMode"] = "unit"
+                    line.setdefault(field, source[field])
+            line.setdefault("weightMode", "unit")
         elif source_id:
             raise HTTPException(422, "خرید همکار نباید به موجودی فروش متصل باشد.")
         weight_mode = line.pop("weightMode", "total")
@@ -377,7 +375,7 @@ def make_supplier_invoice(data, partner, payload, identity, connection, *, exist
                 # A purchase and its gold conversion must use one frozen rate.
                 line["gramPrice" if category == "crafted" else "meltedGramPrice"] = decimal_output(rate)
             elif is_ordinary_coin(line):
-                line["gramPrice"] = decimal_output(rate)
+                line.setdefault("gramPrice", decimal_output(rate))
         else:
             if not is_priced_coin(line) and numeric(line.get("profitPercent"), "سود خرید همکار", default=0) != 0:
                 raise HTTPException(422, "خرید از همکار بدون سود فروش ثبت می‌شود.")
@@ -397,7 +395,7 @@ def make_supplier_invoice(data, partner, payload, identity, connection, *, exist
             document.update(id=document_id or f"document-partner-{uuid4()}", source="partner-invoice", entryMethod="supplier-invoice",
                 type=f"{category}-{'sale' if selling else 'purchase'}", typeLabel="فروش به همکار" if selling else "خرید از همکار", direction="فروش" if selling else "خرید", customerId=partner["id"],
                 customerName=partner["name"], counterpartyType="partner", partnerId=partner["id"],
-                externalInvoiceNumber=payload.externalInvoiceNumber, date=payload.date, createdAt=created_at, recordedAt=created_at,
+                externalInvoiceNumber=payload.externalInvoiceNumber, date=payload.date, invoiceTime=payload.invoiceTime, createdAt=created_at, recordedAt=created_at,
                 invoiceVersion=1, invoiceLine=position + 1, invoiceLineCount=len(payload.lines), transactionId=transaction,
                 gold18Price=decimal_output(rate))
             if old_document is not None:
@@ -579,9 +577,8 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
                     raise HTTPException(422, "نوع کالای فروش با موجودی انتخاب‌شده مطابقت ندارد.")
                 for field in physical_fields:
                     if field in source:
-                        line[field] = source[field]
-                copy_coin_identity(source, line)
-                line["weightMode"] = "unit"
+                        line.setdefault(field, source[field])
+                line.setdefault("weightMode", "unit")
             elif source_id:
                 raise HTTPException(422, "خرید همکار نباید به موجودی فروش متصل باشد.")
             weight_mode = line.pop("weightMode", "total")
@@ -599,7 +596,7 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
             elif fee is not None:
                 raise HTTPException(422, "فی آب‌شده فقط برای ردیف آب‌شده معتبر است.")
             if is_ordinary_coin(line):
-                line["gramPrice"] = format(rate, "f")
+                line.setdefault("gramPrice", format(rate, "f"))
             profit_percent = numeric(line.get("profitPercent"), "سود همکار", maximum=Decimal(100), default=7 if category == "crafted" else 0)
             line["profitPercent"] = format(profit_percent, "f")
             scale_weight = Decimal(0)
@@ -643,7 +640,7 @@ def make_mixed_partner_invoice(data, partner, payload, identity, connection, *, 
                 type=f"{category}-{direction}", typeLabel="فروش به همکار" if direction == "sale" else "خرید از همکار",
                 direction="فروش" if direction == "sale" else "خرید", customerId=partner["id"], customerName=partner["name"],
                 counterpartyType="partner", partnerId=partner["id"], externalInvoiceNumber=payload.externalInvoiceNumber,
-                date=payload.date, createdAt=created_at, recordedAt=created_at, invoiceVersion=1,
+                date=payload.date, invoiceTime=payload.invoiceTime, createdAt=created_at, recordedAt=created_at, invoiceVersion=1,
                 invoiceLine=len(documents) + 1, transactionId=transaction, gold18Price=decimal_output(rate),
                 amount=decimal_output(line_gold * rate), **{key: value for key, value in snapshot.items() if key != "profitPercent"})
             if old_document is not None:

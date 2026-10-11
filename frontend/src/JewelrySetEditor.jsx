@@ -76,7 +76,7 @@ export default function JewelrySetEditor({ parts = [], onChange, errors = {}, sa
         const title = part.itemName || part.craftedKind || `قطعه ${formatNumber(index + 1)}`;
         const errorFor = field => errors[`setParts.${part.id}.${field}`];
         const field = (name, label, options = {}) => <PartField key={name} id={id} part={part} field={name} label={label} error={errorFor(name)} required={options.required}>
-          <NumberInput inputMode={options.inputMode || 'decimal'} value={part[name] ?? ''} placeholder={options.placeholder ?? '۰'} readOnly={sale && Boolean(options.identity)} disabled={!selected} onChange={event => changePart(part.id, name, event.target.value)}/>
+          <NumberInput inputMode={options.inputMode || 'decimal'} value={part[name] ?? ''} placeholder={options.placeholder ?? '۰'} disabled={!selected} onChange={event => changePart(part.id, name, event.target.value)}/>
         </PartField>;
 
         return <fieldset key={part.id} data-set-part={part.id} className={`jewelry-set-part${selected ? '' : ' jewelry-set-part-unselected'}`}>
@@ -93,13 +93,13 @@ export default function JewelrySetEditor({ parts = [], onChange, errors = {}, sa
 
           <div className="jewelry-set-fields">
             <PartField id={id} part={part} field="craftedKind" label="نوع قطعه" error={errorFor('craftedKind')} required>
-              <select value={part.craftedKind || ''} disabled={!selected || (sale && partKinds.includes(source?.craftedKind))} onChange={event => changePart(part.id, 'craftedKind', event.target.value)}>
+              <select value={part.craftedKind || ''} disabled={!selected} onChange={event => changePart(part.id, 'craftedKind', event.target.value)}>
                 <option value="">انتخاب نوع قطعه</option>
                 {partKinds.map(kind => <option key={kind} value={kind}>{kind}</option>)}
               </select>
             </PartField>
             <PartField id={id} part={part} field="itemName" label="نام یا مدل قطعه" error={errorFor('itemName')} required>
-              <input value={part.itemName || ''} readOnly={sale && Boolean(String(source?.itemName || '').trim())} disabled={!selected} placeholder="نام یا مدل قطعه را وارد کنید" onChange={event => changePart(part.id, 'itemName', event.target.value)}/>
+              <input value={part.itemName || ''} disabled={!selected} placeholder="نام یا مدل قطعه را وارد کنید" onChange={event => changePart(part.id, 'itemName', event.target.value)}/>
             </PartField>
             {field('itemCount', sale ? 'تعداد فروش' : 'تعداد این قطعه', { required: true, inputMode: 'numeric', placeholder: '۱' })}
             {field('weight', 'وزن هر عدد (گرم)', { required: true, identity: true, placeholder: 'مثلاً ۵٫۲' })}

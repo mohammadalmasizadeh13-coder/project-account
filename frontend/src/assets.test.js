@@ -74,7 +74,7 @@ test('foreign currencies retain separate fractional stock and historical rates a
   const sale = { ...usd, source: undefined, id: 'sold-usd', type: 'currency-sale', currencyAmount: '۲۰٫۲۵', currencyRate: 15, inventorySourceId: usd.id };
   const docs = assignProductCodes([usd, sale, { ...usd, id: 'eur', currencyType: 'EUR', currencyAmount: 5, currencyRate: 30 }]);
   assert.equal(validateStockSale(sale, docs), '');
-  assert.ok(validateStockSale({ ...sale, currencyType: 'EUR' }, docs));
+  assert.equal(validateStockSale({ ...sale, currencyType: 'EUR' }, docs), '', 'Invoice currency is an editable snapshot');
   assert.ok(validateStockSale({ ...sale, currencyAmount: 101 }, docs));
   const stock = inventoryReport(docs);
   const report = assetReport(stock, { usdPrice: 20, eurPrice: 40 });

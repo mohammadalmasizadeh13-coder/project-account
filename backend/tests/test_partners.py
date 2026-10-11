@@ -74,9 +74,9 @@ def test_partner_sale_credits_claim_links_stock_and_receipt_debits_it(client, ca
     assert purchase.status_code == 201, purchase.text
     stock = purchase.json()["data"]["documents"][0]
     sale_line = {**line, "inventorySourceId": stock["id"], "itemCount" if category == "crafted" else "coinCount": 1}
-    # Crafted weight is taken from the original lot, even with a tampered input.
+    # Prefill the sale from the selected lot; submitted invoice values remain editable.
     if category == "crafted":
-        sale_line.update(weight=999, ayar=999)
+        sale_line.update(weight=2, ayar=750, weightMode="unit")
     body = supplier_payload(client, direction="sale", calculationVersion=2, lines=[sale_line], paidGold=0.5, paidToman=50000)
     response = post_invoice(client, headers, identifier, body=body)
     assert response.status_code == 201, response.text
@@ -667,7 +667,7 @@ def test_mixed_remittances_and_payments_allow_net_zero_in_one_entry(client, dire
 
 
 @pytest.mark.parametrize("category", ["melted", "currency"])
-def test_v3_sale_uses_authoritative_melted_or_currency_lot_identity(client, category):
+def test_v3_sale_keeps_editable_melted_or_currency_snapshot(client, category):
     headers = login(client)
     created, _ = create_partner(client, headers)
     purchase = ({"category": "melted", "itemName": "آب‌شده", "meltedWeight": 8, "meltedAyar": 600, "itemCount": 2,
@@ -678,7 +678,7 @@ def test_v3_sale_uses_authoritative_melted_or_currency_lot_identity(client, cate
     stock = bought.json()["data"]["documents"][0]
     line = {**purchase, "direction": "sale", "inventorySourceId": stock["id"]}
     if category == "melted":
-        line.update(itemCount=1, meltedWeight=999, meltedAyar=999, assayCode="tampered", laboratoryName="tampered", meltedFee=216590)
+        line.update(itemCount=1, meltedWeight=5, meltedAyar=600, assayCode="updated", laboratoryName="updated", meltedFee=216590)
     else:
         line.update(currencyAmount=3, currencyType="EUR", currencyRate=80000)
     sold = post_invoice(client, headers, created["createdId"], calculationVersion=3, lines=[line])
@@ -687,10 +687,10 @@ def test_v3_sale_uses_authoritative_melted_or_currency_lot_identity(client, cate
     doc = sold.json()["data"]["documents"][0]
     assert entry["type"] == "sale" and entry["goldDebit"] == entry["lines"][0]["goldDebit"] == 0
     if category == "melted":
-        assert entry["goldCredit"] == 1.6 and doc["totalWeight750"] == 3.2
-        assert doc["meltedWeight"] == "4" and doc["meltedAyar"] == "600" and doc["assayCode"] == "123"
+        assert entry["goldCredit"] == 2 and doc["totalWeight750"] == 4
+        assert doc["meltedWeight"] == "5" and doc["meltedAyar"] == "600" and doc["assayCode"] == "updated"
     else:
-        assert entry["goldCredit"] == 2.4 and doc["currencyType"] == "USD"
+        assert entry["goldCredit"] == 2.4 and doc["currencyType"] == "EUR"
 
 
 def test_v3_melted_fee_prices_purity_labor_and_profit_using_monetary_base(client):

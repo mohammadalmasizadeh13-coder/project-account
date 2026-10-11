@@ -13,7 +13,7 @@ import PartnerCRM, { PartnerDocumentDialog } from './PartnerCRM';
 import ChequeManager, { ChequeAlerts } from './ChequeManager';
 import { getChequeReminders } from './checks';
 import PersianDateInput from './PersianDateInput';
-import { formatRecordDate, newRecordTimestamp } from './recordTime';
+import { formatRecordDate, newRecordTimestamp, invoiceTimeNow } from './recordTime';
 import { isTradeDocument, tradeGoldPriceSummary } from './tradeGoldPrice';
 import { expenseRateSummary, expenseSummary, expenseUnitLabel, expenseUnits, expenseValue, normalizeExpense } from './expenses';
 import { validateDocument } from './documentValidation';
@@ -34,7 +34,7 @@ import StockNameField from './StockNameField';
 import { exactStockName, findStockMatches } from './stockSearch';
 import JewelrySetEditor, { SetModePicker } from './JewelrySetEditor';
 import { createSetPart, expandSetForm, isJewelrySetKind, isSeparateSetForm, validateSetForm } from './jewelrySets';
-import { assignProductCodes, inventoryReport, isStockSale, linkHistoricalSale, normalizeProductCode, saveLedgerRecords, stockIdentityFields, stockQuantity, stockSaleForm, validateStockSale, validateStockSales } from './inventory';
+import { assignProductCodes, inventoryReport, isStockSale, linkHistoricalSale, normalizeProductCode, saveLedgerRecords, stockQuantity, stockSaleForm, validateStockSale, validateStockSales } from './inventory';
 import { iranDate } from './sales';
 import { assetReport, coinCatalog, currencyCatalog, currencyName, currencyRate, documentBreakdown, marketPriceFields, quantity } from './assets';
 import { craftedKinds } from './crmAnalytics';
@@ -93,6 +93,7 @@ function createEmptyDocumentForm(type = 'crafted-sale') {
   return {
     type,
     date: iranDate(),
+    invoiceTime: invoiceTimeNow(),
     customerName: '',
     customerId: '',
     ...customerDocumentDetails(),
@@ -276,7 +277,7 @@ const getLiveDocumentAmount = (document, prices) => document.type === 'expense' 
 function getDocumentWeight(document) {
   if (isMiscPurchase(document)) return getDocumentQuantity(document) * miscGoldWeight750(document);
   if (document.category === 'crafted') return getDocumentQuantity(document) * toNumber(document.weight);
-  if (document.category === 'coin' && isOrdinaryCoin(document)) return getDocumentQuantity(document) * coinSpec(document).weight;
+  if (document.category === 'coin' && isModernCoin(document)) return getDocumentQuantity(document) * coinSpec(document).weight;
   if (document.category === 'coin' && document.coinType === 'پارسیان') return getDocumentQuantity(document) * toNumber(document.parsianWeight);
   if (document.category === 'melted') return getDocumentQuantity(document) * getMeltedWeight750(document);
   return 0;
@@ -385,7 +386,7 @@ function createOpeningDocumentFromItem(item, prices, index) {
       coinPrice: item.coinType === 'پارسیان' ? item.parsianPrice : String(getCoinPrice(item.coinType, prices) || item.coinPrice || ''),
       parsianWeight: item.parsianWeight,
       parsianPrice: item.parsianPrice,
-      ...(isModernCoin(item) ? { coinPricingVersion: 2, coinGroup: item.coinGroup, coinWeight: coinSpec(item).weight, coinAyar: coinSpec(item).ayar, coinWeight750: coinSpec(item).weight750, gramPrice: item.gramPrice || prices.goldGramPrice, coinPrice: item.coinPrice || String(getCoinPrice(item.coinType, prices) || ''), profitFixed: item.profitFixed || '0' } : {}),
+      ...(isModernCoin(item) ? { coinPricingVersion: 2, coinGroup: item.coinGroup, ...(coinSpec(item).weight ? { coinWeight: coinSpec(item).weight, coinAyar: coinSpec(item).ayar, coinWeight750: coinSpec(item).weight750 } : {}), gramPrice: item.gramPrice || prices.goldGramPrice, coinPrice: item.coinPrice || String(getCoinPrice(item.coinType, prices) || ''), profitFixed: item.profitFixed || '0' } : {}),
     };
   }
 
@@ -1080,9 +1081,8 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     if (documentSaving || documentLocked || documentOperation.current) return true;
     const match = exactStockName(stock.available, value);
     if (match) { chooseStock(match); return true; }
-    // Editing a selected name starts a new selection; old weight, code and
-    // charges must not stay attached to a different (or ambiguous) name.
-    if (selectedStock && !String(selectedStock.itemName || '').trim()) {
+    // The invoice name is editable; the selected lot still controls stock quantity.
+    if (selectedStock) {
       setDocumentForm(current => ({ ...current, itemName: value, invoiceCurrentEmpty: false }));
     } else {
       setStockQuery('');
@@ -1173,7 +1173,6 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       setDocumentForm(current => ({ ...current, invoiceCurrentEmpty: false, setMode: value, setParts: value === 'separate' && !current.setParts.length ? [createSetPart({ gramPrice: savedPrices.goldGramPrice }), createSetPart({ gramPrice: savedPrices.goldGramPrice })] : current.setParts }));
       setDocumentErrors({}); setFormMessage(null); return;
     }
-    if (saleMode && selectedStock && stockIdentityFields.includes(name) && String(selectedStock[name] || '').trim() && (name !== 'craftedKind' || craftedKinds.includes(selectedStock.craftedKind))) return;
     setDocumentForm(currentForm => updateFormWithMarketPrice(currentForm, name, value));
     setFormMessage(null);
   };
@@ -1316,7 +1315,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       const expense = {
         ...normalizeExpense(documentForm),
         id: `document-${crypto.randomUUID()}`, type: 'expense', category: 'expense', direction: 'هزینه', typeLabel: 'هزینه فروشگاه',
-        date: documentForm.date, description: documentForm.description.trim(), note: documentForm.note.trim(),
+        date: documentForm.date, invoiceTime: documentForm.invoiceTime, description: documentForm.description.trim(), note: documentForm.note.trim(),
         expensePayee: documentForm.expensePayee.trim(), itemSummary: documentForm.description.trim(),
         customerName: '', customerId: '', gramDebt: 0, rialDebt: 0, createdAt: recordedAt, recordedAt,
       };
@@ -1486,7 +1485,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                     <DocumentField name="expenseRate" label={documentForm.expenseUnit === 'gold' ? 'نرخ هر گرم طلای ۷۵۰ (تومان)' : 'نرخ هر واحد ارز (تومان)'} error={documentErrors.expenseRate} required><NumberInput name="expenseRate" inputMode="decimal" value={documentForm.expenseRate} onChange={updateDocumentField} placeholder="نرخ زمان پرداخت"/></DocumentField>
                     <p className="document-required-note wide">نرخ پیشنهادی را بررسی کنید؛ مقدار و نرخ این هزینه پس از ثبت ثابت می‌مانند.</p>
                   </>}
-                  <DocumentField name="date" label="تاریخ هزینه" error={documentErrors.date} required><PersianDateInput name="date" required value={documentForm.date} onChange={updateDocumentField}/></DocumentField>
+                  <DocumentField name="invoiceTime" label="ساعت فاکتور" error={documentErrors.invoiceTime}><input type="time" name="invoiceTime" value={documentForm.invoiceTime ?? ''} onChange={updateDocumentField}/></DocumentField><DocumentField name="date" label="تاریخ هزینه" error={documentErrors.date} required><PersianDateInput name="date" required value={documentForm.date} onChange={updateDocumentField}/></DocumentField>
                   <DocumentField className="wide" name="expensePayee" label="پرداخت به (اختیاری)"><input name="expensePayee" value={documentForm.expensePayee} onChange={updateDocumentField} placeholder="نام دریافت‌کننده"/></DocumentField>
                   <DocumentField className="wide" name="note" label="یادداشت"><input name="note" value={documentForm.note} onChange={updateDocumentField} placeholder="توضیح تکمیلی"/></DocumentField>
                 </fieldset>
@@ -1494,14 +1493,14 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
               <p className="document-required-note">فیلدهای ستاره‌دار الزامی هستند. مبلغ‌ها به تومان و تاریخ‌ها شمسی‌اند.</p>
               <fieldset className="document-section"><legend>مشخصات مشتری</legend>
                 <DocumentField name="customerId" label="انتخاب مشتری" error={documentErrors.customerId}><select name="customerId" value={documentForm.customerId} onChange={updateDocumentField}><option value="">مشتری جدید / ورود نام</option>{customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` — ${customer.phone}` : ''}</option>)}</select></DocumentField>
-                <DocumentField name="customerName" label="نام مشتری" error={documentErrors.customerName} required><input name="customerName" value={documentForm.customerName} readOnly={Boolean(documentForm.customerId)} onChange={updateDocumentField} placeholder="نام مشتری جدید"/></DocumentField>
+                <DocumentField name="customerName" label="نام مشتری" error={documentErrors.customerName} required><input name="customerName" value={documentForm.customerName} onChange={updateDocumentField} placeholder="نام مشتری جدید"/></DocumentField>
                 <DocumentField name="customerPhone" label="شماره تماس" error={documentErrors.customerPhone}><input name="customerPhone" type="tel" maxLength={100} value={documentForm.customerPhone ?? ''} onChange={updateDocumentField} placeholder="۰۹۱۲…"/></DocumentField>
                 <DocumentField name="customerBirthDate" label="تاریخ تولد (شمسی)" error={documentErrors.customerBirthDate}><PersianDateInput name="customerBirthDate" max={today} value={documentForm.customerBirthDate ?? ''} onChange={updateDocumentField}/></DocumentField>
                 <DocumentField name="customerNationalId" label="کد ملی" error={documentErrors.customerNationalId}><input name="customerNationalId" inputMode="numeric" maxLength={10} dir="ltr" value={documentForm.customerNationalId ?? ''} onChange={updateDocumentField} placeholder="کد ملی ۱۰ رقمی"/></DocumentField>
                 <DocumentField className="wide" name="customerAddress" label="آدرس" error={documentErrors.customerAddress}><textarea name="customerAddress" rows={2} maxLength={5000} value={documentForm.customerAddress ?? ''} onChange={updateDocumentField} placeholder="آدرس مشتری"/></DocumentField>
               </fieldset>
               <fieldset className="document-section"><legend>مشخصات مشترک سند</legend>
-                <DocumentField name="date" label="تاریخ سند" error={documentErrors.date} required><PersianDateInput name="date" required value={documentForm.date} onChange={updateDocumentField}/></DocumentField>
+                <DocumentField name="invoiceTime" label="ساعت فاکتور" error={documentErrors.invoiceTime}><input type="time" name="invoiceTime" value={documentForm.invoiceTime ?? ''} onChange={updateDocumentField}/></DocumentField><DocumentField name="date" label="تاریخ سند" error={documentErrors.date} required><PersianDateInput name="date" required value={documentForm.date} onChange={updateDocumentField}/></DocumentField>
                 <DocumentField name="gold18Price" label="قیمت هر گرم طلای ۱۸ عیار هنگام ثبت (تومان)" error={documentErrors.gold18Price} required><NumberInput name="gold18Price" inputMode="decimal" value={documentForm.gold18Price ?? savedPrices.goldGramPrice ?? ''} onChange={updateDocumentField} placeholder="نرخ طلای ۱۸ عیار"/></DocumentField>
                 {!saleMode && <>
                 <DocumentField name="gramDebt" label="بدهی گرمی ما به مشتری" error={documentErrors.gramDebt}><NumberInput name="gramDebt" inputMode="decimal" value={documentForm.gramDebt} onChange={updateDocumentField} placeholder="گرم"/></DocumentField>
@@ -1528,36 +1527,36 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
               {miscMode && <p className="document-required-note">برای خرید کار ساختهٔ دست‌دوم یا طلای کم‌عیار، وزن ترازو و عیار واقعی را وارد کنید. وزن معادل ۷۵۰ خودکار محاسبه می‌شود و مبنای مبلغ خرید است. اجرت و سود خرید متفرقه صفر است.</p>}
               <fieldset className="document-section"><legend>{miscMode ? 'مشخصات طلای متفرقه و تبدیل عیار' : 'مشخصات جنس و آزمایشگاه'}</legend>
-                {saleMode && !separateSetMode ? <StockNameField value={documentForm.itemName} items={stock.available} selectedId={documentForm.inventorySourceId} error={documentErrors.itemName} onChange={findStockName} onSelect={chooseStock}/> : <DocumentField className="wide" name="itemName" label={separateSetMode ? 'نام مجموعه' : 'نام جنس'} error={documentErrors.itemName} required><input readOnly={saleMode && (separateSetMode || Boolean(String(selectedStock?.itemName || '').trim()))} name="itemName" value={documentForm.itemName} onChange={updateDocumentField} placeholder="مثلاً النگو، زنجیر یا پلاک؛ برای گزارش فروش هر جنس"/></DocumentField>}
+                {saleMode && !separateSetMode ? <StockNameField value={documentForm.itemName} items={stock.available} selectedId={documentForm.inventorySourceId} error={documentErrors.itemName} onChange={findStockName} onSelect={chooseStock}/> : <DocumentField className="wide" name="itemName" label={separateSetMode ? 'نام مجموعه' : 'نام جنس'} error={documentErrors.itemName} required><input name="itemName" value={documentForm.itemName} onChange={updateDocumentField} placeholder="مثلاً النگو، زنجیر یا پلاک؛ برای گزارش فروش هر جنس"/></DocumentField>}
                 <DocumentField className="wide" name="description" label="شرح سند" error={documentErrors.description}><input name="description" value={documentForm.description} onChange={updateDocumentField} placeholder="مثلاً خرید النگو یا فروش آبشده"/></DocumentField>
 
                 {selectedDocumentType.category === 'currency' && <>
-                  <DocumentField name="currencyType" label="نوع ارز" error={documentErrors.currencyType} required><select name="currencyType" disabled={saleMode && Boolean(selectedStock)} value={documentForm.currencyType} onChange={updateDocumentField}>{currencyCatalog.map(currency => <option key={currency.code} value={currency.code}>{currency.name} ({currency.code})</option>)}</select></DocumentField>
+                  <DocumentField name="currencyType" label="نوع ارز" error={documentErrors.currencyType} required><select name="currencyType" value={documentForm.currencyType} onChange={updateDocumentField}>{currencyCatalog.map(currency => <option key={currency.code} value={currency.code}>{currency.name} ({currency.code})</option>)}</select></DocumentField>
                   <DocumentField name="currencyRate" label="قیمت لحظه‌ای هر واحد ارز (تومان)" error={documentErrors.currencyRate} required><NumberInput name="currencyRate" inputMode="decimal" value={documentForm.currencyRate} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
                   <DocumentField name="currencyAmount" label="مقدار ارز" error={documentErrors.currencyAmount} required><NumberInput name="currencyAmount" inputMode="decimal" value={documentForm.currencyAmount} onChange={updateDocumentField} placeholder="مثلاً ۱۰۰٫۵۰"/></DocumentField>
                 </>}
                 {selectedDocumentType.category === 'crafted' && <>
-                  <DocumentField name="craftedKind" label="نوع کار ساخته" error={documentErrors.craftedKind} required><select name="craftedKind" value={documentForm.craftedKind || ''} disabled={saleMode && (separateSetMode || craftedKinds.includes(selectedStock?.craftedKind))} onChange={updateDocumentField}><option value="">نوع کار را انتخاب کنید</option>{craftedKinds.map(kind => <option key={kind}>{kind}</option>)}</select></DocumentField>
+                  <DocumentField name="craftedKind" label="نوع کار ساخته" error={documentErrors.craftedKind} required><select name="craftedKind" value={documentForm.craftedKind || ''} onChange={updateDocumentField}><option value="">نوع کار را انتخاب کنید</option>{craftedKinds.map(kind => <option key={kind}>{kind}</option>)}</select></DocumentField>
                   {!saleMode && !miscMode && isJewelrySetKind(documentForm.craftedKind) && <div className="wide"><SetModePicker kind={documentForm.craftedKind} value={documentForm.setMode} onChange={value => updateDocumentField({ target: { name: 'setMode', value } })}/></div>}
                   {!separateSetMode && <>
                   <DocumentField name="itemCount" label="تعداد" error={documentErrors.itemCount} required><NumberInput name="itemCount" inputMode="decimal" value={documentForm.itemCount} onChange={updateDocumentField} placeholder="مثلاً ۱۰"/></DocumentField>
-                  <DocumentField name="weight" label={miscMode ? 'وزن ترازو هر قطعه (گرم)' : 'وزن هر عدد'} error={documentErrors.weight} required><NumberInput readOnly={saleMode && Boolean(selectedStock?.weight)} name="weight" inputMode="decimal" value={documentForm.weight} onChange={updateDocumentField} placeholder="مثلاً ۱۲.۵"/></DocumentField>
+                  <DocumentField name="weight" label={miscMode ? 'وزن ترازو هر قطعه (گرم)' : 'وزن هر عدد'} error={documentErrors.weight} required><NumberInput name="weight" inputMode="decimal" value={documentForm.weight} onChange={updateDocumentField} placeholder="مثلاً ۱۲.۵"/></DocumentField>
                   <DocumentField name="gramPrice" label={miscMode ? 'قیمت خرید هر گرم طلای ۷۵۰ (تومان)' : 'قیمت هر گرم'} error={documentErrors.gramPrice} required><NumberInput name="gramPrice" inputMode="numeric" value={documentForm.gramPrice} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
-                  <DocumentField name="ayar" label={miscMode ? 'عیار واقعی خرید' : 'عیار'} error={documentErrors.ayar} required><NumberInput readOnly={saleMode && Boolean(selectedStock?.ayar)} name="ayar" inputMode="decimal" value={documentForm.ayar} onChange={updateDocumentField} placeholder={miscMode ? 'مثلاً ۷۴۰' : 'مثلاً 750'}/></DocumentField>
+                  <DocumentField name="ayar" label={miscMode ? 'عیار واقعی خرید' : 'عیار'} error={documentErrors.ayar} required><NumberInput name="ayar" inputMode="decimal" value={documentForm.ayar} onChange={updateDocumentField} placeholder={miscMode ? 'مثلاً ۷۴۰' : 'مثلاً 750'}/></DocumentField>
                   {miscMode ? <><label>وزن معادل ۷۵۰ هر قطعه (گرم)<input data-misc-weight750 value={formatDebtGrams(miscGoldWeight750(documentPreview))} readOnly/></label><div className="document-required-note wide" role="status" data-misc-conversion>وزن ترازو × عیار واقعی ÷ ۷۵۰ = وزن معادل ۷۵۰<br/>جمع معادل ۷۵۰ برای {formatDecimal(toNumber(documentForm.itemCount))} قطعه: <strong>{formatDebtGrams(getDocumentWeight(documentPreview))} گرم</strong></div></> : <DocumentField name="wagePercent" label="اجرت درصدی" error={documentErrors.wagePercent} required><NumberInput name="wagePercent" inputMode="decimal" value={documentForm.wagePercent} onChange={updateDocumentField} placeholder="مثلاً ۷"/></DocumentField>}
                   </>}
                 </>}
 
-                {selectedDocumentType.category === 'coin' && <CoinFields value={documentForm} prices={savedPrices} locked={saleMode && Boolean(selectedStock)} errors={documentErrors} onChange={next => { setDocumentForm({ ...next, invoiceCurrentEmpty: false }); setDocumentErrors({}); setFormMessage(null); }}/>}
+                {selectedDocumentType.category === 'coin' && <CoinFields value={documentForm} prices={savedPrices} errors={documentErrors} onChange={next => { setDocumentForm({ ...next, invoiceCurrentEmpty: false }); setDocumentErrors({}); setFormMessage(null); }}/>}
 
                 {selectedDocumentType.category === 'melted' && <>
                   <DocumentField name="itemCount" label="تعداد قطعه" error={documentErrors.itemCount} required><NumberInput name="itemCount" inputMode="decimal" value={documentForm.itemCount} onChange={updateDocumentField} placeholder="مثلاً ۳"/></DocumentField>
-                  <DocumentField name="meltedWeight" label="وزن ترازو هر قطعه" error={documentErrors.meltedWeight} required><NumberInput readOnly={saleMode && Boolean(selectedStock?.meltedWeight)} name="meltedWeight" inputMode="decimal" value={documentForm.meltedWeight} onChange={updateDocumentField} placeholder="گرم"/></DocumentField>
-                  <DocumentField name="meltedAyar" label="عیار خریداری" error={documentErrors.meltedAyar} required><NumberInput readOnly={saleMode && Boolean(selectedStock?.meltedAyar)} name="meltedAyar" inputMode="numeric" value={documentForm.meltedAyar} onChange={updateDocumentField} placeholder="مثلاً ۷۸۰"/></DocumentField>
+                  <DocumentField name="meltedWeight" label="وزن ترازو هر قطعه" error={documentErrors.meltedWeight} required><NumberInput name="meltedWeight" inputMode="decimal" value={documentForm.meltedWeight} onChange={updateDocumentField} placeholder="گرم"/></DocumentField>
+                  <DocumentField name="meltedAyar" label="عیار خریداری" error={documentErrors.meltedAyar} required><NumberInput name="meltedAyar" inputMode="numeric" value={documentForm.meltedAyar} onChange={updateDocumentField} placeholder="مثلاً ۷۸۰"/></DocumentField>
                   <label>گرم معادل ۷۵۰<input value={formatDecimal(getMeltedWeight750(documentPreview))} readOnly/></label>
                   <DocumentField name="meltedGramPrice" label="قیمت هر گرم" error={documentErrors.meltedGramPrice} required><NumberInput name="meltedGramPrice" inputMode="numeric" value={documentForm.meltedGramPrice} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
-                  <DocumentField name="assayCode" label="شماره انگ آبشده" error={documentErrors.assayCode} required><input readOnly={saleMode && Boolean(selectedStock?.assayCode)} name="assayCode" value={documentForm.assayCode} onChange={updateDocumentField} placeholder="شماره انگ"/></DocumentField>
-                  <DocumentField name="laboratoryName" label="نام آزمایشگاه" error={documentErrors.laboratoryName} required><input readOnly={saleMode && Boolean(selectedStock?.laboratoryName)} name="laboratoryName" value={documentForm.laboratoryName} onChange={updateDocumentField} placeholder="نام آزمایشگاه ری‌گیری"/></DocumentField>
+                  <DocumentField name="assayCode" label="شماره انگ آبشده" error={documentErrors.assayCode} required><input name="assayCode" value={documentForm.assayCode} onChange={updateDocumentField} placeholder="شماره انگ"/></DocumentField>
+                  <DocumentField name="laboratoryName" label="نام آزمایشگاه" error={documentErrors.laboratoryName} required><input name="laboratoryName" value={documentForm.laboratoryName} onChange={updateDocumentField} placeholder="نام آزمایشگاه ری‌گیری"/></DocumentField>
                 </>}
 
               </fieldset>

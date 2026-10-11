@@ -1,6 +1,7 @@
 """Keep multi-item invoices complete while retaining the existing flat ledger."""
 from collections import defaultdict
 from datetime import date, datetime
+from .invoice_time import validate_invoice_time
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 from uuid import UUID
 
@@ -10,7 +11,7 @@ from sqlalchemy import Column, Index, Integer, Table, case, literal, select, upd
 from .account_profile import stamp_gallery_names
 from .database import LEGACY_ACCOUNT_ID, account_column, metadata, read_gallery_name
 from .customer_details import document_detail_header
-from .inventory import (COIN_PHYSICAL_FIELDS, ECONOMIC_FIELDS, STOCK_TYPES, TEXT_FIELDS,
+from .inventory import (ECONOMIC_FIELDS, STOCK_TYPES, TEXT_FIELDS,
     coin_base, coin_fixed_profit, coin_rate_field, discounted_amount, is_priced_coin,
     is_sale, is_stock_entry, item_summary, item_weight, normalize_coin_specs, normalize_misc_purchase,
     numeric, quantity, validate_item, values_differ)
@@ -138,6 +139,7 @@ def validate_group(rows):
             if not isinstance(recorded_date, str) or len(recorded_date) != 10:
                 raise ValueError()
             date.fromisoformat(recorded_date)
+            validate_invoice_time(row.get("invoiceTime", ""))
             if not isinstance(created_at, str) or len(created_at) > 50 or datetime.fromisoformat(created_at.replace("Z", "+00:00")).tzinfo is None:
                 raise ValueError()
         except ValueError:
@@ -155,7 +157,7 @@ def validate_group(rows):
         # Keep ordinary customer invoices subject to their single-direction contract.
         group_direction = ("partner-v3", row["partnerId"]) if row.get("calculationVersion") == 3 and row.get("counterpartyType") == "partner" and row.get("partnerId") == customer else direction
         headers.append((customer, name.strip(), recorded_date, created_at, row.get("recordedAt"), group_direction,
-            document_detail_header(row)))
+            document_detail_header(row), row.get("invoiceTime", "")))
         validate_item(row)
         saved_amount = numeric(row.get("amount"), "مبلغ ردیف", maximum=Decimal(MAX_SAFE_INTEGER))
         if is_priced_coin(row) or is_sale(row) and number(row.get("discountPercent")) > 0:
@@ -190,12 +192,6 @@ def guard_invoice_stock(incoming, new_rows):
         source = sources.get(str(identifier))
         if source is None or source["category"] != row["category"]:
             invoice_error("کد جنس موجود در صندوق با ردیف فروش مطابقت ندارد.", 409)
-        identity_field = {"coin": "coinType", "currency": "currencyType"}.get(row["category"])
-        if identity_field and source.get(identity_field) != row.get(identity_field):
-            invoice_error("نوع کالا با موجودی انتخاب‌شده مطابقت ندارد.", 409)
-        if row["category"] == "coin" and (is_priced_coin(source) or is_priced_coin(row)):
-            if any(values_differ(field, source.get(field), row.get(field)) for field in COIN_PHYSICAL_FIELDS):
-                invoice_error("وزن و عیار و گروه سکه باید با موجودی انتخاب‌شده یکسان باشد.", 409)
         if source.get("date") and row["date"] < str(source["date"]):
             invoice_error("تاریخ فروش نمی‌تواند پیش از ورود جنس به صندوق باشد.")
         touched.add(str(identifier))

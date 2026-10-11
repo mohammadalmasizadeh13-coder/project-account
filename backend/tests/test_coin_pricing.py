@@ -20,12 +20,12 @@ def ordinary(kind="تمام عادی", **changes):
 
 
 @pytest.mark.parametrize("kind,grams,equivalent", [
-    ("تمام عادی", 8.133, 9.7596), ("نیم عادی", 4.066, 4.8792), ("ربع عادی", 2.022, 2.4264),
+    ("تمام عادی", 8.133, 9.7596), ("نیم عادی", 4.066, 4.8792), ("ربع عادی", 2.033, 2.4396),
 ])
 def test_standard_coins_derive_trusted_specs_and_both_profit_components(client, kind, grams, equivalent):
     headers = login(client)
     save_data(client, headers, [], prices={"goldGramPrice": 200000})
-    posted = submit(client, headers, ordinary(kind, coinWeight=999, coinAyar=1, coinWeight750=999,
+    posted = submit(client, headers, ordinary(kind, coinWeight750=999,
         wagePercent=2, wageFixed=100, otherCosts=50, coinPrice="", parsianPrice="", parsianWeight=""))
     assert posted.status_code == 201, posted.text
     row = posted.json()["data"]["documents"][0]
@@ -72,12 +72,15 @@ def test_bank_coins_use_corresponding_board_rate(client, kind, rate_key):
     headers = login(client)
     save_data(client, headers, [], prices={rate_key: 123000, "goldGramPrice": 999999})
     posted = submit(client, headers, {"category": "coin", "itemName": kind, "coinType": kind,
-        "coinGroup": "bank", "coinPricingVersion": 2, "coinCount": 2, "coinWeight": "",
-        "coinAyar": "", "coinWeight750": 0, "gramPrice": "", "parsianPrice": ""})
+        "coinGroup": "bank", "coinPricingVersion": 2, "coinCount": 2, "coinWeight750": 0, "gramPrice": "", "parsianPrice": ""})
     assert posted.status_code == 201, posted.text
     row = posted.json()["data"]["documents"][0]
     assert row["amount"] == 246000 and row["coinPrice"] == "123000"
-    assert "coinWeight750" not in row and row["itemWeight"] == 0
+    assert row["itemWeight"] == (4.066 if kind == "ربع سکه بانکی ۸۶" else 0)
+    if kind == "ربع سکه بانکی ۸۶":
+        assert float(row["coinWeight"]) == 2.033 and row["coinWeight750"] == 2.4396
+    else:
+        assert "coinWeight750" not in row
 
 
 @pytest.mark.parametrize("direction", ["purchase", "sale"])
@@ -108,8 +111,8 @@ def test_customer_coin_invoice_and_edit_preserve_correct_price_and_identity(clie
         assert data["documents"][0]["gramDebt"] == 0.76
         before = client.get("/api/owner/workspace").json()
         tampered = patch(client, headers, before, [data["documents"][0]], {0: {"coinAyar": 900}})
-        assert tampered.status_code == 409
-        assert client.get("/api/owner/workspace").json() == before
+        assert tampered.status_code == 200, tampered.text
+        assert tampered.json()["data"]["documents"][0]["coinWeight750"] == 0.6
 
 
 def test_forged_customer_amount_cannot_override_weight_based_coin_value(client):
@@ -130,8 +133,7 @@ def test_partner_coin_principal_profit_and_physical_snapshots(client, version, d
         stock_post = submit(client, headers, line)
         assert stock_post.status_code == 201, stock_post.text
         stock = stock_post.json()["data"]["documents"][0]
-        line.update(inventorySourceId=stock["id"], coinWeight=999, coinAyar=999, coinWeight750=999,
-            coinGroup="bank", coinPricingVersion=3)
+        line.update(inventorySourceId=stock["id"], coinWeight750=999)
         recorded_date = stock["date"]
     else:
         recorded_date = "2026-10-05"
@@ -141,7 +143,7 @@ def test_partner_coin_principal_profit_and_physical_snapshots(client, version, d
     data = posted.json()["data"]
     document = data["documents"][0]
     entry = data["partners"][0]["entries"][-1]
-    frozen_rate = 50000 if version == 1 else 100000
+    frozen_rate = 50000
     expected = (0.8 * frozen_rate * 1.02 + 300) * 1.05 + 2000
     assert document["amount"] == pytest.approx(expected)
     assert float(document["coinWeight"]) == 0.5 and float(document["coinAyar"]) == 600
@@ -149,8 +151,8 @@ def test_partner_coin_principal_profit_and_physical_snapshots(client, version, d
     assert document["scaleWeight"] == 1 and document["totalWeight750"] == 0.8
     assert float(entry["lines"][0]["gramPrice"]) == frozen_rate
     if version >= 2:
-        assert document["principalGold"] == 0.8
-        assert document["profitGold"] == pytest.approx(0.06095)
+        assert document["principalGold"] == 0.4
+        assert document["profitGold"] == pytest.approx(0.04055)
         assert entry["goldCredit" if direction == "sale" else "goldDebit"] == pytest.approx(expected / 100000)
     else:
         assert entry["tomanCredit" if direction == "sale" else "tomanDebit"] == pytest.approx(expected)

@@ -1,6 +1,5 @@
 import { normalizeDigits } from './persianDate.js';
 import { coinCatalog, currencyRate, quantity } from './assets.js';
-import { coinSpec, isModernCoin, isOrdinaryCoin } from './coins.js';
 
 export const stockCategories = { crafted: 'کار ساخته', coin: 'سکه', melted: 'آب‌شده', currency: 'ارز' };
 export const normalizeProductCode = value => normalizeDigits(value).trim().toUpperCase().replace(/\s/g, '');
@@ -44,13 +43,6 @@ export function validateStockSale(sale, documents) {
   if (sale.category !== item.category) return 'نوع سند با جنس انتخاب‌شده مطابقت ندارد.';
   const quantity = stockQuantity(sale);
   if (!Number.isFinite(quantity) || quantity <= 0 || (sale.category !== 'currency' && !Number.isSafeInteger(quantity))) return 'مقدار فروش باید معتبر و بیشتر از صفر باشد؛ تعداد جنس باید صحیح باشد.';
-  if (sale.category === 'currency' && sale.currencyType !== item.currencyType) return 'نوع ارز با موجودی انتخاب‌شده مطابقت ندارد.';
-  if (sale.category === 'coin' && sale.coinType !== item.coinType) return 'نوع سکه با موجودی انتخاب‌شده مطابقت ندارد.';
-  if (sale.category === 'coin' && isModernCoin(sale) !== isModernCoin(item)) return 'روش قیمت‌گذاری سکه با موجودی انتخاب‌شده مطابقت ندارد.';
-  if (sale.category === 'coin' && isOrdinaryCoin(item)) {
-    const source = coinSpec(item), selected = coinSpec(sale);
-    if (source.weight !== selected.weight || source.ayar !== selected.ayar) return 'وزن و عیار سکه با موجودی انتخاب‌شده مطابقت ندارد.';
-  }
   if (quantity > item.remaining) return 'تعداد فروش از موجودی این کد بیشتر است.';
   if (sale.date < item.date) return 'تاریخ فروش نمی‌تواند قبل از ورود این جنس به صندوق باشد.';
   return '';

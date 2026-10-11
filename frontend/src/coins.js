@@ -9,11 +9,11 @@ const number = value => {
 export const coinOptions = [
   { name: 'امامی بانکی ۸۶', group: 'bank', price: 'bankEmami86Price' },
   { name: 'نیم سکه بانکی ۸۶', group: 'bank', price: 'bankHalf86Price' },
-  { name: 'ربع سکه بانکی ۸۶', group: 'bank', price: 'bankQuarter86Price' },
+  { name: 'ربع سکه بانکی ۸۶', group: 'bank', price: 'bankQuarter86Price', weight: 2.033, ayar: 900 },
   { name: 'سکه یک گرمی بانکی ۸۶', group: 'bank', price: 'bankOneGram86Price' },
   { name: 'تمام عادی', group: 'ordinary', weight: 8.133, ayar: 900 },
   { name: 'نیم عادی', group: 'ordinary', weight: 4.066, ayar: 900 },
-  { name: 'ربع عادی', group: 'ordinary', weight: 2.022, ayar: 900 },
+  { name: 'ربع عادی', group: 'ordinary', weight: 2.033, ayar: 900 },
   { name: 'پارسیان', group: 'ordinary', custom: true },
   { name: 'گل رز', group: 'ordinary', custom: true },
   { name: 'سایر', group: 'ordinary', custom: true },
@@ -32,10 +32,10 @@ export const coinOptionsFor = row => {
 };
 
 export function coinSpec(row) {
-  if (!isOrdinaryCoin(row)) return { weight: 0, ayar: 0, weight750: 0 };
+  if (!isModernCoin(row)) return { weight: 0, ayar: 0, weight750: 0 };
   const definition = coinOptions.find(coin => coin.name === row.coinType);
-  const weight = definition.custom ? number(row.coinWeight) : definition.weight;
-  const ayar = definition.custom ? number(row.coinAyar) : definition.ayar;
+  const weight = number(row.coinWeight ?? definition?.weight);
+  const ayar = number(row.coinAyar ?? definition?.ayar);
   return { weight, ayar, weight750: weight * ayar / 750 };
 }
 
@@ -51,7 +51,7 @@ export function selectCoin(type, prices = {}) {
 }
 
 export function coinSummary(row) {
-  if (!isOrdinaryCoin(row)) return row?.coinType || '';
+  if (!isModernCoin(row) || !coinSpec(row).weight) return row?.coinType || '';
   const { weight, ayar, weight750 } = coinSpec(row);
   const format = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 6 }).format(value);
   return `${row.coinType} · ترازو ${format(weight)} گرم · عیار ${format(ayar)} · معادل ۷۵۰: ${format(weight750)} گرم`;

@@ -169,7 +169,11 @@ try {
   assert.equal(seeded.status, 200, JSON.stringify(seeded.body));
   await go('/account'); await ready('.workspace-page'); await tool('register');
   for (const [key, supplied] of Object.entries(identity)) await fill(field(key), key === 'customerBirthDate' ? birthDateInput : key === 'customerNationalId' ? '۰۰۱۲۳۴۵۶۷۸' : supplied);
+  await fill(field('date'), '۱۴۰۵/۰۷/۱۷');
+  await fill(field('invoiceTime'), '09:45');
   await fill(field('productCode'), ring.productCode);
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(field('weight'))}).readOnly`), false);
+  await fill(field('weight'), '1.3');
   await fill(field('profitPercent'), '0');
   await fill(field('gold18Price'), '6000000');
   await fill(field('customerBirthDate'), '1370/13/40');
@@ -204,6 +208,9 @@ try {
   const saved = await workspace();
   const rows = saved.data.documents.filter(row => row.customerName === identity.customerName).sort((a, b) => a.invoiceLine - b.invoiceLine);
   assert.equal(rows.length, 2, 'Both rows save together');
+  assert.equal(Number(rows[0].weight), 1.3, 'Entered sale weight persists');
+  assert.ok((await text('.invoice-sheet')).includes('۰۹:۴۵'), 'Print uses the selected invoice time');
+  for (const row of rows) { assert.equal(row.invoiceTime, '09:45'); assert.equal(row.date, persianToIso('۱۴۰۵/۰۷/۱۷')); }
   for (const row of rows) {
     for (const [key, expected] of Object.entries(identity)) assert.equal(row[key], expected, `Each saved row retains ${key}`);
     assert.equal(row.paymentMethod, paymentMethod);
@@ -261,6 +268,10 @@ try {
   assert.equal(await evaluate(`document.querySelector('.document-form [name="paymentMethod"]').tagName`), 'TEXTAREA', 'Purchase also has a free text payment field');
   await fill(field('paymentMethod'), purchasePayment);
   await fill(field('itemName'), 'سکه آزمون مشخصات خرید');
+  await fill(field('coinType'), 'ربع سکه بانکی ۸۶');
+  assert.equal(await value(field('coinWeight')), '2.033');
+  await fill(field('coinWeight'), '2.1');
+  await fill(field('coinAyar'), '850');
   await fill(field('coinCount'), '1'); await fill(field('coinPrice'), '200000');
   await fill(field('gold18Price'), '6000000');
   await click('.document-form button[type="submit"]');
@@ -268,6 +279,9 @@ try {
   const purchased = await workspace();
   const purchase = purchased.data.documents.find(row => row.customerName === purchaseCustomer.customerName);
   assert.ok(purchase, 'A purchase with a new customer saves');
+  assert.equal(Number(purchase.coinWeight), 2.1);
+  assert.equal(Number(purchase.coinAyar), 850);
+  assert.equal(purchase.coinWeight750, 2.38);
   assert.equal(purchase.paymentMethod, purchasePayment);
   for (const [key, supplied] of Object.entries(purchaseCustomer)) assert.equal(purchase[key], supplied);
   await tool('search');

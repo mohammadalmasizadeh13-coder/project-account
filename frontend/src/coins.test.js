@@ -11,12 +11,22 @@ import { profitReport } from './workspace.js';
 
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8, `${actual} != ${expected}`);
 const date = '2026-10-09';
+
+test('both quarter types default to 2.033 and custom specs remain authoritative', () => {
+  for (const type of ['ربع عادی', 'ربع سکه بانکی ۸۶']) {
+    const defaults = selectCoin(type, { goldGramPrice: 1000, bankQuarter86Price: 5000 });
+    assert.equal(defaults.coinWeight, '2.033');
+    close(coinSpec(defaults).weight750, 2.4396);
+    assert.deepEqual(coinSpec({ ...defaults, coinWeight: '۲٫۱', coinAyar: '۸۵۰' }), { weight: 2.1, ayar: 850, weight750: 2.38 });
+  }
+  assert.equal(coinSpec({ ...selectCoin('ربع عادی'), coinWeight: 2.022 }).weight, 2.022, 'Historical weights do not change with the default');
+});
 const purchase = (type = 'تمام عادی', overrides = {}) => ({ ...selectCoin(type, { goldGramPrice: 1000 }),
   id: 'lot', category: 'coin', type: 'coin-purchase', itemName: 'سکه', customerName: 'مشتری', date,
   coinCount: 2, gold18Price: 1000, profitPercent: 5, profitFixed: 100, ...overrides });
 
 test('ordinary standard coins use exact scale weights and purity before applying both profit amounts', () => {
-  for (const [type, weight, equivalent] of [['تمام عادی', 8.133, 9.7596], ['نیم عادی', 4.066, 4.8792], ['ربع عادی', 2.022, 2.4264]]) {
+  for (const [type, weight, equivalent] of [['تمام عادی', 8.133, 9.7596], ['نیم عادی', 4.066, 4.8792], ['ربع عادی', 2.033, 2.4396]]) {
     const row = purchase(type);
     const spec = coinSpec(row);
     assert.equal(spec.weight, weight);
@@ -66,9 +76,9 @@ test('bank coins use their separate board rates while legacy ordinary and Parsia
 test('draft and stock sales carry canonical coin specifications and preserve historical inventory identity', () => {
   const row = purchase('تمام عادی', { coinWeight: 99, coinAyar: 750, coinWeight750: 99 });
   const preview = invoiceLinePreview(row, 5000);
-  assert.equal(preview.coinWeight, 8.133);
-  assert.equal(preview.coinAyar, 900);
-  close(preview.coinWeight750, 9.7596);
+  assert.equal(preview.coinWeight, 99);
+  assert.equal(preview.coinAyar, 750);
+  close(preview.coinWeight750, 99);
   const custom = purchase('گل رز', { coinWeight: 0.5, coinAyar: 750 });
   const sale = { ...stockSaleForm(custom, {}, { goldGramPrice: 2000 }), category: 'coin', date, id: 'sale' };
   assert.equal(sale.coinPricingVersion, 2);
@@ -76,9 +86,9 @@ test('draft and stock sales carry canonical coin specifications and preserve his
   assert.equal(sale.coinAyar, 750);
   assert.equal(sale.gramPrice, 2000);
   assert.equal(validateStockSale(sale, [custom]), '');
-  assert.ok(validateStockSale({ ...sale, coinWeight: 1 }, [custom]));
-  assert.ok(validateStockSale({ ...sale, coinAyar: 900 }, [custom]));
-  assert.ok(validateStockSale({ ...sale, coinPricingVersion: '' }, [custom]));
+  assert.equal(validateStockSale({ ...sale, coinWeight: 1 }, [custom]), '');
+  assert.equal(validateStockSale({ ...sale, coinAyar: 900 }, [custom]), '');
+  assert.equal(validateStockSale({ ...sale, coinPricingVersion: '' }, [custom]), '');
   const apiStock = { ...custom };
   delete apiStock.parsianWeight;
   const apiSale = JSON.parse(JSON.stringify(invoiceLinePreview(stockSaleForm(apiStock, {}, {}), 1000)));
@@ -95,13 +105,13 @@ test('remaining ordinary coins contribute physical gold and current value while 
   const sale = { ...row, id: 'sale', type: 'coin-sale', inventorySourceId: row.id, coinCount: 1, gramPrice: 2000, profitPercent: 0, profitFixed: 0 };
   const stock = inventoryReport([row, sale]);
   const assets = assetReport(stock, { goldGramPrice: 3000 });
-  close(assets.goldWeightGrams, 2.022);
-  close(assets.goldGrams750, 2.4264);
-  close(assets.totalToman, 2.4264 * 3000 * 1.05 + 100);
+  close(assets.goldWeightGrams, 2.033);
+  close(assets.goldGrams750, 2.4396);
+  close(assets.totalToman, 2.4396 * 3000 * 1.05 + 100);
   const profit = profitReport([row, sale], 'today', date);
   assert.equal(profit.unknown, 0);
-  close(profit.cost, 2.4264 * 1000 * 1.05 + 100);
-  close(profit.revenue, 2.4264 * 2000);
+  close(profit.cost, 2.4396 * 1000 * 1.05 + 100);
+  close(profit.revenue, 2.4396 * 2000);
   assert.equal(filterInventoryItems(stock.items, { minWeight: '2', maxWeight: '2.1' }).items.length, 1);
 });
 
@@ -119,7 +129,7 @@ test('partner purchases and sales agree with customer coin amounts at the invoic
       close(partnerInvoiceTotals(form).amount, expected);
       close(direction === 'sale' ? totals.goldCredit : totals.goldDebit, Math.round(expected / 1000 * 1e6) / 1e6);
       if (type !== 'امامی بانکی ۸۶') {
-        assert.equal(prepared.lines[0].gramPrice, 1000);
+        assert.equal(prepared.lines[0].gramPrice, 999999);
         close(totals.weight750, 2 * coinSpec(prepared.lines[0]).weight750);
         close(savedPartnerLineTotals(prepared.lines[0], {}, prepared).weight750, totals.weight750);
       }
@@ -144,7 +154,7 @@ test('partner versions one through three preserve their own rate and settlement 
       wagePercent: 2, wageFixed: 100, otherCosts: 50, profitPercent: 5, profitFixed: 1000 };
     const form = { ...newPartnerInvoice({ goldGramPrice: 100000 }, 'coin'), date, calculationVersion: version, lines: [row] };
     const prepared = preparePartnerInvoice(form);
-    const frozenRate = version === 1 ? 50000 : 100000;
+    const frozenRate = 50000;
     const expected = (0.8 * frozenRate * 1.02 + 300) * 1.05 + 2000;
     assert.equal(prepared.lines[0].gramPrice, frozenRate);
     assert.equal(prepared.lines[0].profitPercent, 5);

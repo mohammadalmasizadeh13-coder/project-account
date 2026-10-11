@@ -29,7 +29,7 @@ function rowFields(row) {
           : [['coinCount', 'تعداد سکه'], [row.coinType === 'پارسیان' ? 'parsianPrice' : 'coinPrice', 'قیمت هر سکه (تومان)'], ...(row.coinType === 'پارسیان' ? [['parsianWeight', 'وزن هر سکه (گرم)']] : [])];
   return [...fields, ...(row.category !== 'currency' && !isMiscPurchase(row) ? [['wagePercent', 'اجرت (%)'], ['wageFixed', 'اجرت ثابت هر واحد (تومان)']] : []), ...(!isMiscPurchase(row) ? commonNumbers : []), ...(row.type?.endsWith('-sale') ? [['discountPercent', 'تخفیف درصدی (%)']] : [])];
 }
-const economicChange = (row, original) => [...rowFields(row).map(([key]) => key), ...(row.category === 'coin' && isModernCoin(row) ? ['coinType', 'coinGroup'] : [])].some(key => String(row[key] ?? '') !== String(original[key] ?? ''));
+const economicChange = (row, original) => [...rowFields(row).map(([key]) => key), ...(row.category === 'coin' ? ['coinType', 'coinGroup', 'coinWeight', 'coinAyar'] : [])].some(key => String(row[key] ?? '') !== String(original[key] ?? ''));
 
 export const canManageInvoice = invoice => invoice?.rows?.length > 0 && invoice.rows.every(row => row.source !== 'opening-inventory' && row.counterpartyType !== 'partner' && !row.partnerId);
 
@@ -43,7 +43,7 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
   const expense = first.type === 'expense';
   const settled = first.settlementVersion === 1;
   const [rows, setRows] = useState(() => original.map(row => ({ ...row })));
-  const [header, setHeader] = useState({ date: first.date || '', customerId: first.customerId || '', ...Object.fromEntries(documentMetadataFields.map(key => [key, first[key] ?? ''])), cashPaid: first.cashPaid ?? '', settlementGoldPrice: first.settlementGoldPrice ?? '', gold18Price: first.gold18Price ?? '', gramDebt: invoice.gramDebt, rialDebt: invoice.rialDebt });
+  const [header, setHeader] = useState({ date: first.date || '', invoiceTime: first.invoiceTime || '', customerId: first.customerId || '', ...Object.fromEntries(documentMetadataFields.map(key => [key, first[key] ?? ''])), cashPaid: first.cashPaid ?? '', settlementGoldPrice: first.settlementGoldPrice ?? '', gold18Price: first.gold18Price ?? '', gramDebt: invoice.gramDebt, rialDebt: invoice.rialDebt });
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [error, setError] = useState('');
@@ -77,10 +77,11 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
     const customer = customers.find(item => String(item.id) === String(header.customerId));
     return rows.map((row, index) => {
       const inactiveCoinFields = row.category === 'coin' && isModernCoin(row)
-        ? ['parsianWeight', 'parsianPrice', ...(isOrdinaryCoin(row) ? ['coinPrice'] : ['coinWeight', 'coinAyar', 'coinWeight750', 'gramPrice'])]
+        ? ['parsianWeight', 'parsianPrice', ...(isOrdinaryCoin(row) ? ['coinPrice'] : ['gramPrice'])]
         : [];
       const next = Object.fromEntries(Object.entries(row).filter(([key, value]) => !inactiveCoinFields.includes(key) && String(value ?? '') !== String(original[index][key] ?? '')));
       if (header.date !== first.date) next.date = header.date;
+      if (header.invoiceTime !== (first.invoiceTime || '')) next.invoiceTime = header.invoiceTime;
       if (!expense && !settled && String(header.gold18Price) !== String(first.gold18Price ?? '')) next.gold18Price = header.gold18Price;
       if (!expense) {
         if (String(header.customerId) !== String(original[index].customerId ?? '')) next.customerId = customer?.id ?? header.customerId;
@@ -132,7 +133,7 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
     <form onSubmit={submit} aria-busy={busy}>
       {deleting ? <div className="document-delete-message"><p>با تأیید، تمام ردیف‌های این سند حذف می‌شود و موجودی صندوق و ماندهٔ طرف حساب دوباره محاسبه می‌شود.</p><p>از حذف این سند مطمئن هستید؟</p></div> : <fieldset disabled={busy || uncertain} className="document-edit-fields">
         <div className="document-edit-grid">
-          <label>تاریخ سند<PersianDateInput name="date" value={header.date} required onChange={event => updateHeader('date', event.target.value)}/></label>
+          <label>ساعت فاکتور<input type="time" name="invoiceTime" value={header.invoiceTime} onChange={event => updateHeader('invoiceTime', event.target.value)}/></label><label>تاریخ سند<PersianDateInput name="date" value={header.date} required onChange={event => updateHeader('date', event.target.value)}/></label>
           {!expense && <label>طرف حساب<select name="customerId" value={header.customerId} onChange={event => updateHeader('customerId', event.target.value)}><option value="">{first.customerName || 'انتخاب کنید'}</option>{!customers.some(customer => String(customer.id) === String(header.customerId)) && header.customerId && <option value={header.customerId}>{first.customerName}</option>}{customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>}
           {!expense && !settled && <label>نرخ طلای ۱۸ عیار هنگام معامله (تومان)<NumberInput name="gold18Price" value={header.gold18Price} onChange={event => updateHeader('gold18Price', event.target.value)}/></label>}
         </div>
@@ -148,8 +149,8 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
           <div className="document-edit-grid">
             {!expense && <label>نام جنس<input name="itemName" value={row.itemName || ''} maxLength={200} onChange={event => updateRow(index, 'itemName', event.target.value)}/></label>}
             {expense && <><label>دریافت‌کننده<input name="expensePayee" value={row.expensePayee || ''} onChange={event => updateRow(index, 'expensePayee', event.target.value)}/></label><label>واحد هزینه<select name="expenseUnit" value={row.expenseUnit ?? 'toman'} onChange={event => updateRow(index, 'expenseUnit', event.target.value)}>{expenseUnits.map(unit => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</select></label></>}
-            {row.category === 'coin' && isModernCoin(row) && <CoinFields value={row} prices={{ goldGramPrice: row.gramPrice }} locked={row.type?.endsWith('-sale')} onChange={next => { setRows(previous => previous.map((current, position) => position === index ? next : current)); setError(''); }}/>}
-            {rowFields(row).filter(([name]) => !(row.category === 'coin' && isModernCoin(row)) || !['coinCount', 'coinWeight', 'coinAyar', 'gramPrice', 'coinPrice'].includes(name)).map(([name, label]) => numericField(index, name, label))}
+            {row.category === 'coin' && <CoinFields value={row} prices={{ goldGramPrice: row.gramPrice }} onChange={next => { setRows(previous => previous.map((current, position) => position === index ? next : current)); setError(''); }}/>}
+            {rowFields(row).filter(([name]) => row.category !== 'coin' || !['coinCount', 'coinWeight', 'coinAyar', 'gramPrice', 'coinPrice', 'parsianPrice', 'parsianWeight'].includes(name)).map(([name, label]) => numericField(index, name, label))}
             {expense && row.expenseUnit === 'gold' && numericField(index, 'expenseGoldPurity', 'عیار طلای هزینه')}
             {expense && row.expenseUnit === 'currency' && <label>نوع ارز<select name="expenseCurrency" value={row.expenseCurrency || 'USD'} onChange={event => updateRow(index, 'expenseCurrency', event.target.value)}>{currencyCatalog.map(currency => <option value={currency.code} key={currency.code}>{currency.name}</option>)}</select></label>}
             {expense && ['gold', 'currency'].includes(row.expenseUnit) && numericField(index, 'expenseRate', 'نرخ تبدیل به تومان')}

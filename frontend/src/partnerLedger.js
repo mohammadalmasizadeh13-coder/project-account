@@ -1,3 +1,4 @@
+import { invoiceTimeNow, validInvoiceTime, ledgerClock } from './recordTime.js';
 import { coinCatalog, currencyCatalog } from './assets.js';
 import { normalizeDigits } from './persianDate.js';
 import { iranDate } from './sales.js';
@@ -64,11 +65,11 @@ export function newPartnerLine(prices = {}, category = 'crafted', direction = 'p
     remittanceDirection: 'credit', goldAmount: '', counterpartyName: '', reference: '', note: '',
   };
 }
-export const newPartnerInvoice = (prices = {}, category = 'crafted', direction = 'purchase') => ({ date: iranDate(), externalInvoiceNumber: '', note: '', calculationVersion: 3,
+export const newPartnerInvoice = (prices = {}, category = 'crafted', direction = 'purchase') => ({ date: iranDate(), invoiceTime: invoiceTimeNow(), externalInvoiceNumber: '', note: '', calculationVersion: 3,
   direction, gold18Price: String(prices.goldGramPrice || ''), settlementUnit: 'gold', lines: [newPartnerLine(prices, category, direction)],
   paidGold: '', paidToman: '', referenceName: '', refNumber: '',
 });
-export const newPartnerSettlement = () => ({ date: iranDate(), direction: 'credit', goldAmount: '', tomanAmount: '',
+export const newPartnerSettlement = () => ({ date: iranDate(), invoiceTime: invoiceTimeNow(), direction: 'credit', goldAmount: '', tomanAmount: '',
   paymentMethod: 'gold', counterpartyName: '', reference: '', note: '',
 });
 
@@ -83,7 +84,7 @@ export function partnerSettlementDraftFromEntry(entry) {
   const debit = savedNumber(entry.goldDebit) > 0 || savedNumber(entry.tomanDebit) > 0;
   const credit = savedNumber(entry.goldCredit) > 0 || savedNumber(entry.tomanCredit) > 0;
   if (debit && credit) throw new Error('این سند گردش هم‌زمان بدهکار و بستانکار دارد و از فرم یک‌جهته قابل ویرایش نیست.');
-  return { ...newPartnerSettlement(), date: entry.date, direction: debit ? 'debit' : 'credit', paymentMethod: entry.paymentMethod,
+  return { ...newPartnerSettlement(), date: entry.date, invoiceTime: entry.invoiceTime || '', direction: debit ? 'debit' : 'credit', paymentMethod: entry.paymentMethod,
     goldAmount: savedNumber(debit ? entry.goldDebit : entry.goldCredit), tomanAmount: savedNumber(debit ? entry.tomanDebit : entry.tomanCredit),
     counterpartyName: entry.counterpartyName || '', reference: entry.reference || '', note: entry.note || '' };
 }
@@ -125,7 +126,7 @@ export function partnerInvoiceDraftFromEntry(entry, documents = [], payment = {}
     if (record.inventorySourceId) form.inventorySourceId = record.inventorySourceId;
     if (['crafted', 'melted'].includes(record.category)) {
       const weightKey = record.category === 'crafted' ? 'weight' : 'meltedWeight';
-      form.weightMode = record.weightMode === 'unit' || rowDirection === 'sale' ? 'unit' : 'total';
+      form.weightMode = (record.weightMode === 'unit' || !record.weightMode && rowDirection === 'sale') ? 'unit' : 'total';
       if (form.weightMode === 'total') {
         const recordedScale = parsePartnerNumber(record.scaleWeight);
         form[weightKey] = Number.isFinite(recordedScale) ? recordedScale : savedNumber(record[weightKey]) * (savedNumber(record.itemCount) || 1);
@@ -133,7 +134,7 @@ export function partnerInvoiceDraftFromEntry(entry, documents = [], payment = {}
     }
     return form;
   });
-  return { ...newPartnerInvoice(prices, 'crafted', direction), date: entry.date,
+  return { ...newPartnerInvoice(prices, 'crafted', direction), date: entry.date, invoiceTime: entry.invoiceTime || '',
     calculationVersion, settlementUnit: entry.settlementUnit || 'gold',
     externalInvoiceNumber: entry.externalInvoiceNumber || '', note: entry.note || '', lines,
     ...(entry.goldBalancePurchase === true ? { goldBalancePurchase: true } : {}),
@@ -193,13 +194,20 @@ export function preparePartnerLine(form, rate, calculationVersion = 2, invoiceDi
       line.coinPricingVersion = 2; line.coinGroup = definition.group;
       line.profitFixed = numeric(form.profitFixed, 'سود پولی هر سکه', { optional: true });
       if (isOrdinaryCoin(form)) {
-        const spec = coinSpec(form);
-        line.coinWeight = numeric(definition.custom ? form.coinWeight : spec.weight, 'وزن ترازو هر سکه', { positive: true, max: 1e5 });
-        line.coinAyar = numeric(definition.custom ? form.coinAyar : spec.ayar, 'عیار اصلی سکه', { positive: true, max: 1000 });
+        line.coinWeight = numeric(form.coinWeight ?? definition.weight, 'وزن ترازو هر سکه', { positive: true, max: 1e5 });
+        line.coinAyar = numeric(form.coinAyar ?? definition.ayar, 'عیار اصلی سکه', { positive: true, max: 1000 });
         if (line.coinAyar < 1) throw new Error('عیار سکه باید بین ۱ و ۱۰۰۰ باشد.');
         line.coinWeight750 = line.coinWeight * line.coinAyar / 750;
-        line.gramPrice = numeric(calculationVersion >= 2 || !text(form.gramPrice) ? rate : form.gramPrice, 'نرخ هر گرم طلای ۷۵۰', { positive: true });
-      } else line.coinPrice = numeric(form.coinPrice, 'نرخ تابلو هر سکه', { positive: true });
+        line.gramPrice = numeric(!text(form.gramPrice) ? rate : form.gramPrice, 'نرخ هر گرم طلای ۷۵۰', { positive: true });
+      } else {
+        line.coinPrice = numeric(form.coinPrice, 'نرخ تابلو هر سکه', { positive: true });
+        if (text(form.coinWeight) || text(form.coinAyar) || definition.weight) {
+          line.coinWeight = numeric(form.coinWeight ?? definition.weight, 'وزن ترازو هر سکه', { positive: true, max: 1e5 });
+          line.coinAyar = numeric(form.coinAyar ?? definition.ayar, 'عیار اصلی سکه', { positive: true, max: 1000 });
+          if (line.coinAyar < 1) throw new Error('عیار سکه باید بین ۱ و ۱۰۰۰ باشد.');
+          line.coinWeight750 = line.coinWeight * line.coinAyar / 750;
+        }
+      }
     } else if (form.coinType === 'پارسیان') {
       line.parsianWeight = numeric(form.parsianWeight, 'وزن هر سکه پارسیان', { positive: true, max: 1e5 });
       line.parsianPrice = numeric(form.parsianPrice, 'قیمت هر سکه پارسیان', { positive: true });
@@ -231,7 +239,7 @@ function mixedPartnerLineTotals(line, goldPrice, invoiceDirection) {
     : ordinary ? count * coin.weight : line.category === 'coin' && line.coinType === 'پارسیان' ? count * savedNumber(line.parsianWeight) : 0;
   const weight750 = metal || ordinary ? actualWeight * purity / 750 : 0;
   const meltedFee = melted ? savedNumber(line.meltedFee) : 0;
-  const rate = remittance ? conversionGoldPrice : melted ? meltedFee / MELTED_FEE_DIVISOR : metal || ordinary ? conversionGoldPrice
+  const rate = remittance ? conversionGoldPrice : melted ? meltedFee / MELTED_FEE_DIVISOR : ordinary ? savedNumber(line.gramPrice) || conversionGoldPrice : metal ? conversionGoldPrice
     : savedNumber(line.category === 'coin' ? line.coinType === 'پارسیان' ? line.parsianPrice : line.coinPrice : line.currencyRate);
   const baseAmount = remittance ? savedNumber(line.goldAmount) * conversionGoldPrice : (metal || ordinary ? weight750 : count) * rate;
   const principalGold = remittance ? roundPartnerAmount(savedNumber(line.goldAmount)) : metal && !melted ? weight750 : convert(baseAmount);
@@ -273,7 +281,7 @@ export function partnerLineTotals(line, goldPrice = 0, calculationVersion = 1, i
       rate: calculationVersion === 2 ? conversionGoldPrice : savedNumber(line.category === 'crafted' ? line.gramPrice : line.meltedGramPrice) || savedNumber(goldPrice), count };
   }
   const ordinary = line.category === 'coin' && isOrdinaryCoin(line);
-  const coinGramPrice = calculationVersion >= 2 ? conversionGoldPrice : savedNumber(line.gramPrice) || conversionGoldPrice;
+  const coinGramPrice = savedNumber(line.gramPrice) || conversionGoldPrice;
   const price = line.category === 'coin' ? coinBase({ ...line, gramPrice: coinGramPrice, coinCount: 1 }) : line.currencyRate;
   const laborToman = line.category === 'coin' ? count * savedNumber(price) * savedNumber(line.wagePercent) / 100 : 0;
   const fixedLaborToman = line.category === 'coin' ? count * savedNumber(line.wageFixed) / (calculationVersion >= 2 && line.wageFixedUnit === 'rial' ? 10 : 1) : 0;
@@ -363,7 +371,7 @@ export function preparePartnerInvoice(form) {
   const gold18Price = numeric(form.gold18Price, 'نرخ طلای ۷۵۰ هنگام ثبت', { positive: true });
   if (!Array.isArray(form.lines) || form.lines.length < 1 || form.lines.length > 100) throw new Error('فاکتور باید بین یک تا صد ردیف داشته باشد.');
   if (form.direction && !['purchase', 'sale'].includes(form.direction)) throw new Error('نوع فاکتور همکار معتبر نیست.');
-  return { date: validDate(form.date), externalInvoiceNumber: text(form.externalInvoiceNumber), note: text(form.note), gold18Price,
+  return { date: validDate(form.date), ...(validInvoiceTime(form.invoiceTime) ? { invoiceTime: validInvoiceTime(form.invoiceTime) } : {}), externalInvoiceNumber: text(form.externalInvoiceNumber), note: text(form.note), gold18Price,
     ...(form.goldBalancePurchase === true ? { goldBalancePurchase: true } : {}),
     ...(form.direction === 'sale' ? { direction: 'sale' } : {}),
     ...(calculationVersion >= 2 ? { calculationVersion } : {}),
@@ -386,7 +394,7 @@ export function preparePartnerSettlement(form) {
   const goldAmount = roundPartnerAmount(numeric(form.goldAmount, 'مقدار طلای ۷۵۰', { optional: true }));
   const tomanAmount = roundPartnerAmount(numeric(form.tomanAmount, 'مبلغ تومان', { optional: true }));
   if (!(goldAmount > 0 || tomanAmount > 0)) throw new Error('حداقل مقدار طلا یا مبلغ تومان را وارد کنید.');
-  return { date: validDate(form.date), direction: form.direction, goldAmount, tomanAmount,
+  return { date: validDate(form.date), ...(validInvoiceTime(form.invoiceTime) ? { invoiceTime: validInvoiceTime(form.invoiceTime) } : {}), direction: form.direction, goldAmount, tomanAmount,
     paymentMethod: form.paymentMethod, counterpartyName: text(form.counterpartyName), reference: text(form.reference), note: text(form.note) };
 }
 
@@ -395,7 +403,7 @@ export function partnerStatement(partner) {
   let tomanBalance = savedNumber(partner?.openingTomanBalance);
   const totals = { goldDebit: 0, goldCredit: 0, tomanDebit: 0, tomanCredit: 0 };
   const entries = [...(partner?.entries || [])].map((entry, index) => ({ ...entry, index }))
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0) || a.index - b.index);
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || ledgerClock(a).localeCompare(ledgerClock(b)) || (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0) || a.index - b.index);
   const rows = entries.map(entry => {
     const previousGoldBalance = roundPartnerAmount(goldBalance), previousTomanBalance = roundPartnerAmount(tomanBalance);
     const values = Object.fromEntries(Object.keys(totals).map(key => [key, savedNumber(entry[key])]));

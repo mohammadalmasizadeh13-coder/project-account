@@ -1,7 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatPersianDate, normalizeDigits } from './persianDate.js';
-import { formatRecordDate, formatRecordTimestamp, newRecordTimestamp } from './recordTime.js';
+import { formatRecordDate, formatRecordTimestamp, newRecordTimestamp, invoiceTimeNow, validInvoiceTime } from './recordTime.js';
+import { newPartnerInvoice, partnerStatement, preparePartnerInvoice, partnerInvoiceDraftFromEntry } from './partnerLedger.js';
+import { invoiceHeader } from './invoiceDraft.js';
+
+test('backdated invoice time is shown in print and survives draft and API preparation', () => {
+  const record = { date: '2026-10-08', invoiceTime: '09:45', recordedAt: '2026-10-11T12:00:00Z' };
+  assert.equal(formatRecordDate(record), `${formatPersianDate(record.date)}، ساعت ۰۹:۴۵`);
+  assert.equal(invoiceHeader(record).invoiceTime, '09:45');
+  assert.equal(invoiceTimeNow(new Date('2026-10-11T06:15:00Z')), '09:45');
+  assert.equal(validInvoiceTime('۰۹:۴۵'), '09:45');
+  for (const invalid of ['24:00', '12:60', '9:45', '12:30:30']) assert.throws(() => validInvoiceTime(invalid));
+  const form = { ...newPartnerInvoice({ goldGramPrice: 100000 }, 'coin'), ...record,
+    lines: [{ category: 'coin', itemName: 'Coin', coinType: 'امامی', coinPrice: 200000, coinCount: 1 }] };
+  const payload = preparePartnerInvoice(form);
+  assert.equal(payload.invoiceTime, '09:45');
+  assert.equal(partnerInvoiceDraftFromEntry({ ...payload, type: 'purchase' }).invoiceTime, '09:45');
+});
+
+test('partner statement uses business time within the selected date', () => {
+  const result = partnerStatement({ entries: [
+    { id: 'late', date: '2026-10-08', invoiceTime: '18:00', createdAt: '2026-10-11T08:00:00Z', goldDebit: 2 },
+    { id: 'early', date: '2026-10-08', invoiceTime: '09:00', createdAt: '2026-10-11T09:00:00Z', goldCredit: 1 },
+  ] });
+  assert.deepEqual(result.rows.map(row => row.id), ['early', 'late']);
+  assert.equal(result.rows[0].goldBalance, -1);
+  assert.equal(result.rows[1].goldBalance, 1);
+});
 
 test('new registration timestamps retain the exact instant and normalize offsets to UTC', () => {
   assert.equal(newRecordTimestamp(new Date('2026-09-25T07:08:09.123Z')), '2026-09-25T07:08:09.123Z');

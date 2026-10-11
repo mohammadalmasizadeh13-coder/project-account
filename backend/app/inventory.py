@@ -45,7 +45,7 @@ COIN_RATE_FIELDS = {"امامی بانکی ۸۶": "bankEmami86Price", "نیم س
     "ربع سکه بانکی ۸۶": "bankQuarter86Price", "سکه یک گرمی بانکی ۸۶": "bankOneGram86Price", "امامی": "emamiCoinPrice",
     "تمام": "tamamCoinPrice", "نیم": "halfCoinPrice", "ربع": "quarterCoinPrice"}
 BANK_COINS = {"امامی بانکی ۸۶", "نیم سکه بانکی ۸۶", "ربع سکه بانکی ۸۶", "سکه یک گرمی بانکی ۸۶"}
-ORDINARY_COIN_SPECS = {"تمام عادی": ("8.133", "900"), "نیم عادی": ("4.066", "900"), "ربع عادی": ("2.022", "900")}
+ORDINARY_COIN_SPECS = {"تمام عادی": ("8.133", "900"), "نیم عادی": ("4.066", "900"), "ربع عادی": ("2.033", "900")}
 ORDINARY_COINS = {*ORDINARY_COIN_SPECS, "پارسیان", "گل رز", "سایر"}
 COIN_PHYSICAL_FIELDS = ("coinPricingVersion", "coinGroup", "coinType", "coinWeight", "coinAyar", "coinWeight750", "parsianWeight")
 COINS |= ORDINARY_COINS
@@ -164,9 +164,11 @@ def normalize_coin_specs(document):
     for field in ("parsianWeight", "parsianPrice"):
         document.pop(field, None)
     numeric(document.get("profitFixed"), "سود ثابت هر سکه", default=0)
-    if group == "ordinary":
-        if kind in ORDINARY_COIN_SPECS:
-            document["coinWeight"], document["coinAyar"] = ORDINARY_COIN_SPECS[kind]
+    defaults = ORDINARY_COIN_SPECS.get(kind) or (("2.033", "900") if kind == "ربع سکه بانکی ۸۶" else None)
+    if defaults:
+        document.setdefault("coinWeight", defaults[0])
+        document.setdefault("coinAyar", defaults[1])
+    if group == "ordinary" or defaults or document.get("coinWeight") not in (None, "") or document.get("coinAyar") not in (None, ""):
         weight = numeric(document.get("coinWeight"), "وزن ترازوی هر سکه", minimum=Decimal("0.000001"), maximum=Decimal("100000"))
         purity = numeric(document.get("coinAyar"), "عیار اصلی سکه", minimum=Decimal(1), maximum=Decimal(1000))
         with localcontext() as context:
@@ -281,7 +283,7 @@ def item_weight(document):
         return decimal_output(weight)
     if document["category"] == "melted":
         return decimal_output(count * number(document.get("meltedWeight")) * number(document.get("meltedAyar") or 750) / 750)
-    if is_ordinary_coin(document):
+    if is_priced_coin(document) and document.get("coinWeight"):
         return decimal_output(count * number(document.get("coinWeight")))
     if document["category"] == "coin" and document.get("coinType") == "پارسیان":
         return decimal_output(count * number(document.get("parsianWeight")))
@@ -305,7 +307,7 @@ def item_summary(document):
             detail = f"{count} عدد، هر عدد {format_number(document.get('weight'))} گرم، عیار {format_number(document.get('ayar'))}، معادل هر عدد {format_number(equivalent)} گرم طلای ۷۵۰"
     elif category == "coin":
         detail = f"{document.get('coinType', 'سکه')}، {count} عدد"
-        if is_ordinary_coin(document):
+        if is_priced_coin(document) and document.get("coinWeight"):
             detail += f"، وزن ترازوی هر عدد {format_number(document.get('coinWeight'))} گرم، عیار اصلی {format_number(document.get('coinAyar'))}، معادل عیار ۷۵۰ هر عدد {format_number(document.get('coinWeight750'))} گرم"
         elif document.get("coinType") == "پارسیان":
             detail += f"، هر عدد {format_number(document.get('parsianWeight'))} گرم"

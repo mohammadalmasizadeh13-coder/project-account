@@ -52,8 +52,8 @@ export function assetReport(stock, prices = {}) {
     result.items[item.id] = value;
     result.totalToman += value.total;
     result.wage += value.wage; result.costs += value.costs; result.profit += value.profit;
-    if (item.category === 'crafted' || item.category === 'melted' || (item.category === 'coin' && isOrdinaryCoin(item))) {
-      const ordinary = item.category === 'coin' && isOrdinaryCoin(item);
+    if (item.category === 'crafted' || item.category === 'melted' || (item.category === 'coin' && isModernCoin(item))) {
+      const ordinary = item.category === 'coin' && isModernCoin(item);
       const weight = item.remaining * (ordinary ? coinSpec(item).weight : number(item.category === 'crafted' ? item.weight : item.meltedWeight));
       const purity = ordinary ? coinSpec(item).ayar : number((item.category === 'crafted' ? item.ayar : item.meltedAyar) || 750);
       result.goldWeightGrams += weight;

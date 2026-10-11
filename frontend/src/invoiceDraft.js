@@ -3,7 +3,7 @@ import { profitPercentInput } from './profitDefaults.js';
 import { isMiscPurchase, miscGoldDefaults } from './miscGold.js';
 import { coinSpec, isOrdinaryCoin } from './coins.js';
 
-export const invoiceHeaderFields = ['date', 'customerId', 'customerName', 'customerPhone', 'customerBirthDate', 'customerAddress', 'customerNationalId', 'paymentMethod', 'gold18Price', 'gramDebt', 'rialDebt', 'cashPaid', 'note'];
+export const invoiceHeaderFields = ['date', 'invoiceTime', 'customerId', 'customerName', 'customerPhone', 'customerBirthDate', 'customerAddress', 'customerNationalId', 'paymentMethod', 'gold18Price', 'gramDebt', 'rialDebt', 'cashPaid', 'note'];
 export const invoiceHeader = form => Object.fromEntries(invoiceHeaderFields.map(key => [key, form[key]]));
 
 export function cleanInvoiceLine(form) {

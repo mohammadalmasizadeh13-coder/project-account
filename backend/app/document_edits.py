@@ -20,14 +20,15 @@ from .inventory import (CURRENCIES, ECONOMIC_FIELDS, STRING_FIELDS, STOCK_TYPES,
 from .invoices import (MAX_SAFE_INTEGER, SETTLEMENT_FIELDS, guard_invoice_stock,
     reserve_invoice_numbers, settlement_row_total, validate_group)
 from .pricing import iso_now, number
+from .invoice_time import validate_invoice_time
 from .security import account_request_id, digest, has_permission, require_mutation
 
 
 RATE_FIELDS = {"crafted": {"gramPrice"}, "melted": {"meltedGramPrice"},
     "coin": {"coinPrice", "parsianPrice", "gramPrice"}, "currency": {"currencyRate"}}
-TRADE_FIELDS = {"date", "customerId", "customerName", "gramDebt", "rialDebt", "gold18Price",
+TRADE_FIELDS = {"date", "invoiceTime", "customerId", "customerName", "gramDebt", "rialDebt", "gold18Price",
     "profitPercent", "otherCosts", "discountRial", "discountPercent", "cashPaid", "settlementGoldPrice"} | DOCUMENT_DETAIL_FIELDS
-EXPENSE_FIELDS = {"date", "description", "note", "expensePayee", "expenseUnit", "expenseCurrency",
+EXPENSE_FIELDS = {"date", "invoiceTime", "description", "note", "expensePayee", "expenseUnit", "expenseCurrency",
     "expenseGoldPurity", "expenseRate", "expenseAmount"}
 EDIT_TEXT_FIELDS = STRING_FIELDS | {"expensePayee", "expenseUnit", "expenseCurrency", "customerName"}
 
@@ -81,6 +82,11 @@ def normalize_changes(row, changes):
     for field, value in changes.items():
         if field in DOCUMENT_DETAIL_FIELDS:
             normalized[field] = normalize_customer_detail(field, value)
+        elif field == "invoiceTime":
+            try:
+                normalized[field] = validate_invoice_time(value)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc))
         elif field == "date":
             try:
                 if not isinstance(value, str) or len(value) != 10:
