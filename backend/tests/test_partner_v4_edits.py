@@ -1,4 +1,5 @@
 from copy import deepcopy
+from uuid import uuid4
 
 import pytest
 
@@ -93,3 +94,25 @@ def test_v4_saved_coin_pricing_version_survives_edit_without_cash_conversion(cli
     assert record["goldBalance"] == 3.465 and record["tomanBalance"] == 33365
     assert record["entries"][0]["lines"][0]["coinPricingVersion"] == 3
     assert response.json()["data"]["documents"][0]["coinPricingVersion"] == 3
+
+
+def test_partner_invoice_delete_removes_linked_payment_stock_and_replays(client):
+    headers = login(client)
+    created, _ = create_partner(client, headers)
+    identifier = created["createdId"]
+    posted = post_invoice(client, headers, identifier, paidGold=1, paidToman=100)
+    assert posted.status_code == 201, posted.text
+    entry = posted.json()["data"]["partners"][0]["entries"][0]
+    assert len(posted.json()["data"]["partners"][0]["entries"]) == 2
+    body = {"revision": posted.json()["revision"], "requestId": str(uuid4())}
+    path = f"/api/owner/partners/{identifier}/invoices/{entry['id']}"
+    deleted = client.request("DELETE", path, headers=headers, json=body)
+    assert deleted.status_code == 200, deleted.text
+    data = deleted.json()["data"]
+    assert data["documents"] == []
+    assert data["partners"][0]["entries"] == []
+    assert data["partners"][0]["goldBalance"] == 0
+    assert data["partners"][0]["tomanBalance"] == 0
+    replay = client.request("DELETE", path, headers=headers, json=body)
+    assert replay.status_code == 200
+    assert replay.json() == deleted.json()

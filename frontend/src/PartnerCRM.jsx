@@ -20,7 +20,7 @@ import { GalleryAccountContext } from './GalleryAccountContext.js';
 const DRAFT_KIND = 'partner-workspace';
 const normalized = value => normalizeDigits(value).replace(/ي/g, 'ی').replace(/ك/g, 'ک').toLowerCase().trim();
 const balanceText = (value, unit) => `${fmt(Math.abs(value))} ${unit} · ${value > 0 ? 'بدهی ما به همکار' : value < 0 ? 'طلب ما از همکار' : 'تسویه'}`;
-const actionNames = { create: 'ثبت همکار', update: 'ویرایش همکار', invoice: 'ثبت فاکتور همکار', 'invoice-update': 'ویرایش سند همکار', settlement: 'ثبت سند حساب همکار', 'settlement-update': 'ویرایش سند دریافت / پرداخت همکار' };
+const actionNames = { create: 'ثبت همکار', update: 'ویرایش همکار', invoice: 'ثبت فاکتور همکار', 'invoice-update': 'ویرایش سند همکار', 'invoice-delete': 'حذف سند همکار', settlement: 'ثبت سند حساب همکار', 'settlement-update': 'ویرایش سند دریافت / پرداخت همکار', 'settlement-delete': 'حذف گردش همکار' };
 const dayText = date => date ? formatPersianDate(date.slice(0, 10)) : '—';
 const initialDraft = (username, initialAction, draftKind = DRAFT_KIND) => {
   const recovered = readAccountingDraft(username, draftKind)?.form;
@@ -148,7 +148,7 @@ function PartnerStatement({ partner, username, documents, onOpenDocument, canEdi
       <button type="button" className="partner-table-action" aria-expanded={selectedEntry === entry.id} onClick={() => setSelectedEntry(selectedEntry === entry.id ? '' : entry.id)}>مشاهده</button>
       {openable && onOpenDocument && <>
         <button type="button" className="partner-table-action" data-partner-entry-view disabled={locked} onClick={() => onOpenDocument(partner.id, target.id, false)}><Printer size={14}/> نمایش و چاپ</button>
-        {editable && <button type="button" className="partner-table-action" data-partner-entry-edit disabled={locked} title={entry.linkedEntryId ? 'ویرایش دریافت / پرداخت هم‌زمان از سند اصلی' : 'ویرایش این سند'} onClick={() => onOpenDocument(partner.id, target.id, true)}><Pencil size={14}/> ویرایش</button>}
+        {editable && <><button type="button" className="partner-table-action" data-partner-entry-edit disabled={locked} title={entry.linkedEntryId ? 'ویرایش دریافت / پرداخت هم‌زمان از سند اصلی' : 'ویرایش این سند'} onClick={() => onOpenDocument(partner.id, target.id, 'edit')}><Pencil size={14}/> ویرایش</button><button type="button" className="partner-table-action document-delete-link" data-partner-entry-delete disabled={locked} onClick={() => onOpenDocument(partner.id, target.id, 'delete')}><Trash2 size={14}/> حذف</button></>}
       </>}
     </div>;
   }
@@ -174,7 +174,7 @@ function PartnerStatement({ partner, username, documents, onOpenDocument, canEdi
   </section>;
 }
 
-export function PartnerDocumentDialog({ partner, entry, username, documents, prices, onAction, editing = false, canEdit = false, onClose, onSaved }) {
+export function PartnerDocumentDialog({ partner, entry, username, documents, prices, onAction, editing = false, deleting = false, canEdit = false, onClose, onSaved, onDeleted }) {
   const account = useContext(GalleryAccountContext);
   const galleryName = entry.galleryName || documents.find(row => (entry.documentIds || []).includes(row.id))?.galleryName || account.galleryName;
   const settlement = entry.type === 'settlement' && !entry.linkedEntryId;
@@ -183,7 +183,9 @@ export function PartnerDocumentDialog({ partner, entry, username, documents, pri
   const documentTitle = remittance ? 'سند حواله' : settlement ? settlementReceived ? 'سند دریافت از همکار' : 'سند پرداخت به همکار' : 'سند';
   const dialog = useRef(null);
   const [edit, setEdit] = useState(editing);
+  const [removeMode, setRemoveMode] = useState(deleting);
   const [locked, setLocked] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const closeRef = useRef(onClose); closeRef.current = onClose;
   useEffect(() => {
     const previousFocus = document.activeElement;
@@ -216,10 +218,11 @@ export function PartnerDocumentDialog({ partner, entry, username, documents, pri
   return createPortal(<dialog ref={dialog} className="partner-document-dialog" data-partner-document-dialog dir="rtl" aria-label={`سند همکار ${partner.name}`} onCancel={event => { event.preventDefault(); if (!locked) closeRef.current?.(); }}>
     <div className="partner-crm">
       <div className="partner-section-heading partner-screen-only"><h2>{edit ? 'ویرایش سند همکار' : 'سند همکار'} · {partner.name}</h2><button type="button" className="partner-icon-button" data-partner-document-close disabled={locked} onClick={onClose} aria-label="بستن سند"><X size={20}/></button></div>
-      {edit && canEdit ? <PartnerCRM key={entry.id} embedded username={username} partners={[partner]} documents={documents} prices={prices} onAction={onAction} initialAction={settlement ? remittance ? 'remittance' : 'settlement' : 'invoice'} canPurchase={canEdit} readOnly={!canEdit} editingEntry={settlement ? null : entry} editingSettlement={settlement ? entry : null} onSaved={saved => { setEdit(false); setLocked(false); onSaved?.(saved); }} onClose={() => setEdit(false)} onLockChange={setLocked}/>
+      {removeMode && canEdit ? <section className="partner-statement partner-delete-confirm"><h2>حذف سند همکار</h2><p>با تأیید، سند و پرداخت متصل آن حذف می‌شود و ماندهٔ همکار و موجودی صندوق دوباره محاسبه خواهد شد.</p>{deleteError && <p className="form-message error" role="alert">{deleteError}</p>}<div className="partner-section-heading"><button type="button" className="button document-delete-button" disabled={locked} onClick={async () => { setLocked(true); setDeleteError(''); try { const saved = await onAction(settlement ? 'settlement-delete' : 'invoice-delete', partner.id, { entryId: entry.id }, crypto.randomUUID()); onDeleted?.(saved); } catch (error) { setDeleteError(error.message || 'حذف سند انجام نشد.'); setLocked(false); } }}>تأیید حذف سند</button><button type="button" className="button button-ghost" disabled={locked} onClick={() => setRemoveMode(false)}>انصراف</button></div></section>
+        : edit && canEdit ? <PartnerCRM key={entry.id} embedded username={username} partners={[partner]} documents={documents} prices={prices} onAction={onAction} initialAction={settlement ? remittance ? 'remittance' : 'settlement' : 'invoice'} canPurchase={canEdit} readOnly={!canEdit} editingEntry={settlement ? null : entry} editingSettlement={settlement ? entry : null} onSaved={saved => { setEdit(false); setLocked(false); onSaved?.(saved); }} onClose={() => setEdit(false)} onLockChange={setLocked}/>
         : <section className="partner-statement">
           <header>{galleryName && <h2 data-invoice-gallery-name>{galleryName}</h2>}<h2>{documentTitle} {entry.invoiceNumber ? fmt(entry.invoiceNumber) : String(entry.id).slice(-8)} · {partner.name}</h2><p>{formatRecordDate(entry)}{entry.externalInvoiceNumber && ` · شماره فاکتور همکار: ${entry.externalInvoiceNumber}`}</p></header>
-          <div className="partner-section-heading partner-screen-only"><button type="button" className="button button-ghost" data-invoice-print onClick={print}><Printer size={17}/> چاپ روی برگهٔ آماده</button>{canEdit && <button type="button" className="button button-primary" data-invoice-edit onClick={() => setEdit(true)}><Pencil size={16}/> ویرایش سند</button>}</div>
+          <div className="partner-section-heading partner-screen-only"><button type="button" className="button button-ghost" data-invoice-print onClick={print}><Printer size={17}/> چاپ روی برگهٔ آماده</button>{canEdit && <><button type="button" className="button button-primary" data-invoice-edit onClick={() => setEdit(true)}><Pencil size={16}/> ویرایش سند</button><button type="button" className="button document-delete-button" data-invoice-delete onClick={() => setRemoveMode(true)}>حذف سند</button></>}</div>
           <p className="partner-screen-only partner-help">برگهٔ A5 را در چاپگر بگذارید. فقط نوشته‌ها چاپ می‌شوند؛ مقیاس را روی ۱۰۰٪ بگذارید و سربرگ و پابرگ مرورگر را خاموش کنید.</p>
           {settlement ? <div className="partner-statement-opening" data-partner-settlement-details data-partner-remittance-details={remittance || undefined}>
             <strong>{remittance ? settlementReceived ? 'حواله بدهکار · بدهی ما به همکار' : 'حواله بستانکار · طلب ما از همکار' : settlementReceived ? 'دریافت از همکار · بدهکار' : 'پرداخت به همکار · بستانکار'}</strong>

@@ -765,7 +765,7 @@ def register_partner_routes(application, workspace_response, encode_workspace):
     def mutate(action, identifier, payload, identity, response, entry_id=None):
         if not has_permission(identity, "partners.write"):
             raise HTTPException(403, "اجازهٔ ویرایش دفتر همکاران ندارید.")
-        if action in {"invoice", "invoice-update"} and not has_permission(identity, "documents.write"):
+        if action in {"invoice", "invoice-update", "invoice-delete"} and not has_permission(identity, "documents.write"):
             raise HTTPException(403, "ثبت خرید همکار به اجازهٔ افزودن موجودی نیز نیاز دارد.")
         if action in {"invoice", "invoice-update"} and payload.goldBalancePurchase and not has_permission(identity, "goldPurchases.write"):
             raise HTTPException(403, "ثبت یا ویرایش خرید تراز طلا به اجازهٔ خرید طلا نیاز دارد.")
@@ -778,7 +778,7 @@ def register_partner_routes(application, workspace_response, encode_workspace):
         # Retrying one after an upgrade must still match its original receipt hash.
         if action == "invoice" and payload.calculationVersion == 1:
             body.pop("calculationVersion", None)
-        if action in {"invoice-update", "settlement-update"}:
+        if action in {"invoice-update", "settlement-update", "invoice-delete", "settlement-delete"}:
             body["entryId"] = entry_id
         try:
             body_hash = digest(json.dumps({"action": action, "partnerId": identifier, "payload": body}, sort_keys=True, ensure_ascii=False, allow_nan=False))
@@ -795,7 +795,7 @@ def register_partner_routes(application, workspace_response, encode_workspace):
 
         with engine.begin() as connection:
             current = read_workspace(connection, account_id)
-            if action == "invoice-update" and not has_permission(identity, "goldPurchases.write"):
+            if action in {"invoice-update", "invoice-delete"} and not has_permission(identity, "goldPurchases.write"):
                 previous_partner = find_partner(current["data"], identifier)
                 previous_entry = next((row for row in previous_partner["entries"] if row["id"] == entry_id), None)
                 if previous_entry and previous_entry.get("goldBalancePurchase"):
@@ -846,6 +846,29 @@ def register_partner_routes(application, workspace_response, encode_workspace):
                     data["documents"] = [row for row in data["documents"] if row["id"] not in old_ids]
                     created_id = make_supplier_invoice(data, partner, payload, identity, connection,
                         existing_entry=existing_entry, previous_documents=previous_documents)
+                elif action in {"invoice-delete", "settlement-delete"}:
+                    existing_entry = next((row for row in partner["entries"] if row["id"] == entry_id), None)
+                    if existing_entry is None:
+                        raise HTTPException(404, "سند همکار پیدا نشد.")
+                    expected_type = "settlement" if action == "settlement-delete" else None
+                    if expected_type and existing_entry["type"] != expected_type:
+                        raise HTTPException(422, "این مسیر فقط برای حذف گردش مستقل است.")
+                    if not expected_type and existing_entry["type"] not in {"purchase", "sale", "mixed"}:
+                        raise HTTPException(422, "این مسیر فقط برای حذف سند فاکتور است.")
+                    if existing_entry.get("linkedEntryId"):
+                        raise HTTPException(422, "گردش متصل باید همراه سند اصلی حذف شود.")
+                    old_ids = set(existing_entry.get("documentIds", []))
+                    previous_documents = list(data["documents"])
+                    if old_ids:
+                        found_ids = {row["id"] for row in previous_documents if row["id"] in old_ids}
+                        if found_ids != old_ids:
+                            raise HTTPException(422, "اطلاعات اصلی این سند ناقص است و نیاز به بررسی دفتر دارد.")
+                        data["documents"] = [row for row in previous_documents if row["id"] not in old_ids]
+                        guard_linked_inventory_changes(previous_documents, data["documents"])
+                    linked_id = existing_entry["id"]
+                    partner["entries"] = [row for row in partner["entries"]
+                        if row["id"] != linked_id and row.get("linkedEntryId") != linked_id]
+                    created_id = linked_id
                 else:
                     existing_entry = None
                     if action == "settlement-update":
@@ -921,6 +944,10 @@ def register_partner_routes(application, workspace_response, encode_workspace):
     def edit_invoice(identifier: str, entry_id: str, payload: PartnerInvoice, response: Response, identity=Depends(require_mutation)):
         return mutate("invoice-update", identifier, payload, identity, response, entry_id=entry_id)
 
+    @application.delete("/api/owner/partners/{identifier}/invoices/{entry_id}")
+    def delete_invoice(identifier: str, entry_id: str, payload: PartnerMutation, response: Response, identity=Depends(require_mutation)):
+        return mutate("invoice-delete", identifier, payload, identity, response, entry_id=entry_id)
+
     @application.post("/api/owner/partners/{identifier}/settlements", status_code=201)
     def post_settlement(identifier: str, payload: PartnerSettlement, response: Response, identity=Depends(require_mutation)):
         return mutate("settlement", identifier, payload, identity, response)
@@ -928,3 +955,7 @@ def register_partner_routes(application, workspace_response, encode_workspace):
     @application.patch("/api/owner/partners/{identifier}/settlements/{entry_id}")
     def edit_settlement(identifier: str, entry_id: str, payload: PartnerSettlement, response: Response, identity=Depends(require_mutation)):
         return mutate("settlement-update", identifier, payload, identity, response, entry_id=entry_id)
+
+    @application.delete("/api/owner/partners/{identifier}/settlements/{entry_id}")
+    def delete_settlement(identifier: str, entry_id: str, payload: PartnerMutation, response: Response, identity=Depends(require_mutation)):
+        return mutate("settlement-delete", identifier, payload, identity, response, entry_id=entry_id)
