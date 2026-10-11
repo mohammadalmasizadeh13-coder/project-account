@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorkspaceStorage, emptyWorkspace } from './ownerStorage.js';
 
-for (const action of ['invoice-delete', 'settlement-delete']) test(`${action} replays the confirmed revision even after another workspace is loaded`, async () => {
+for (const action of ['invoice-delete', 'settlement-delete', 'operation-delete']) test(`${action} replays the confirmed revision even after another workspace is loaded`, async () => {
   const calls = [];
   const storage = createWorkspaceStorage(async (path, options) => {
     calls.push({ path, ...options });
@@ -19,7 +19,7 @@ for (const action of ['invoice-delete', 'settlement-delete']) test(`${action} re
   storage.hydrate({ revision: 5, data: before });
   await storage.mutatePartner(action, 'supplier/one', payload, 'same-delete', 4);
   assert.deepEqual(calls[0], calls[1]);
-  assert.equal(calls[0].path, `/api/owner/partners/supplier%2Fone/${action === 'invoice-delete' ? 'invoices' : 'settlements'}/entry%2Fone`);
+  assert.equal(calls[0].path, `/api/owner/partners/supplier%2Fone/${action === 'operation-delete' ? 'operations' : action === 'invoice-delete' ? 'invoices' : 'settlements'}/entry%2Fone`);
   assert.equal(calls[0].method, 'DELETE');
   assert.deepEqual(calls[0].body, { revision: 4, requestId: 'same-delete' });
   assert.deepEqual(payload, { entryId: 'entry/one' });

@@ -19,6 +19,7 @@ from .inventory import (COIN_PHYSICAL_FIELDS, amount, coin_base, coin_fixed_prof
     is_priced_coin, item_summary, numeric, quantity)
 from .invoices import guard_invoice_stock, prepare_invoices, reserve_invoice_numbers, validate_group
 from .pricing import iso_now, number
+from .partner_trading import PartnerOperation, make_operation, OPERATION_TYPES
 from .invoice_time import validate_invoice_time, ledger_clock
 from .security import account_request_id, digest, get_user, has_permission, require_mutation
 
@@ -67,7 +68,7 @@ class PartnerProfile(StrictModel):
 class LedgerEntry(StrictModel):
     id: str = Field(min_length=1, max_length=64)
     galleryName: str = Field(default="", max_length=120)
-    type: Literal["purchase", "sale", "mixed", "settlement"]
+    type: Literal["purchase", "sale", "mixed", "settlement", "trade", "delivery", "offset"]
     direction: Literal["purchase", "sale"] | None = None
     date: str = Field(min_length=10, max_length=10)
     invoiceTime: str = Field(default="", exclude_if=lambda value: not value)
@@ -87,13 +88,15 @@ class LedgerEntry(StrictModel):
     invoiceNumber: int | None = Field(default=None, ge=1)
     transactionId: str | None = Field(default=None, max_length=64)
     documentIds: list[str] = Field(default_factory=list, max_length=100)
-    lines: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+    lines: list[dict[str, Any]] = Field(default_factory=list, max_length=101)
     # Persisted v4 ledgers may remain after rolling back the invoice editor.
     # Preserve their independent gold and cash balances during reads and edits.
     settlementUnit: Literal["gold", "toman", "mixed"] | None = None
     gold18Price: float | None = Field(default=None, gt=0, le=1e12)
     linkedEntryId: str | None = Field(default=None, max_length=64)
-    calculationVersion: Literal[1, 2, 3, 4] = 1
+    calculationVersion: Literal[1, 2, 3, 4, 5] = 1
+    assetChanges: dict[str, float] = Field(default_factory=dict, exclude_if=lambda value: not value)
+    assetBalances: dict[str, float] = Field(default_factory=dict, exclude_if=lambda value: not value)
     conversionGoldPrice: float | None = Field(default=None, gt=0, le=1e12)
     paidGold: float = Field(default=0, ge=0, le=1e12)
     paidToman: float = Field(default=0, ge=0, le=1e12)
@@ -115,6 +118,14 @@ class LedgerEntry(StrictModel):
 
     @model_validator(mode="after")
     def one_direction(self):
+        if (self.type in OPERATION_TYPES) != (self.calculationVersion == 5):
+            raise ValueError("نوع عملیات با نسخهٔ دفتر مطابقت ندارد.")
+        if self.calculationVersion == 5:
+            if not self.lines or self.settlementUnit != "mixed":
+                raise ValueError("ردیف عملیات حساب معتبر نیست.")
+            return self
+        if self.assetChanges:
+            raise ValueError("گردش دارایی فقط در عملیات حساب ثبت می‌شود.")
         if self.settlementUnit == "mixed" and self.calculationVersion != 4:
             raise ValueError("تسویهٔ ترکیبی مربوط به نسخهٔ چهارم محاسبات است.")
         if self.type == "mixed" and self.calculationVersion not in (3, 4):
@@ -131,6 +142,7 @@ class PartnerRecord(PartnerProfile):
     entries: list[LedgerEntry] = Field(default_factory=list, max_length=50000)
     goldBalance: float = Field(default=0, ge=-float(MAX_BALANCE), le=float(MAX_BALANCE))
     tomanBalance: float = Field(default=0, ge=-float(MAX_BALANCE), le=float(MAX_BALANCE))
+    assetBalances: dict[str, float] = Field(default_factory=dict, exclude_if=lambda value: not value)
     createdAt: str = Field(default="", max_length=60)
     updatedAt: str = Field(default="", max_length=60)
 
@@ -229,12 +241,27 @@ def rounded_gold(value):
 
 def recalculate_partner(partner):
     gold, toman = number(partner.get("openingGoldBalance")), number(partner.get("openingTomanBalance"))
+    assets = {}
     chronological = sorted(enumerate(partner.get("entries", [])), key=lambda pair: (pair[1]["date"], ledger_clock(pair[1]), datetime.fromisoformat(pair[1]["createdAt"].replace("Z", "+00:00")), pair[0]))
     for _, entry in chronological:
         gold += number(entry.get("goldDebit")) - number(entry.get("goldCredit"))
         toman += number(entry.get("tomanDebit")) - number(entry.get("tomanCredit"))
         entry["goldBalance"], entry["tomanBalance"] = decimal_output(rounded_gold(gold)), decimal_output(toman)
+        for key, value in entry.get("assetChanges", {}).items():
+            if not key.startswith(("coin:", "currency:")) or len(key) > 300 or abs(number(value)) > MAX_BALANCE:
+                raise ValueError("گردش دارایی معتبر نیست.")
+            assets[key] = assets.get(key, Decimal(0)) + number(value)
+            if abs(assets[key]) > MAX_BALANCE:
+                raise ValueError("ماندهٔ دارایی بیش از حد مجاز است.")
+        if assets:
+            entry["assetBalances"] = {key: decimal_output(value) for key, value in assets.items()}
+        else:
+            entry.pop("assetBalances", None)
     partner["goldBalance"], partner["tomanBalance"] = decimal_output(rounded_gold(gold)), decimal_output(toman)
+    if assets:
+        partner["assetBalances"] = {key: decimal_output(value) for key, value in assets.items()}
+    else:
+        partner.pop("assetBalances", None)
     return partner
 
 
@@ -249,9 +276,13 @@ def validate_partner_records(partners):
         if len(entry_ids) != len(partner.get("entries", [])):
             raise ValueError("شناسهٔ گردش دفتر تکراری است.")
         recalculated = recalculate_partner(deepcopy(partner))
+        if partner.get("assetBalances", {}) != recalculated.get("assetBalances", {}):
+            raise ValueError("ماندهٔ دارایی همکار با گردش‌ها مطابقت ندارد.")
         if abs(number(partner.get("goldBalance")) - number(recalculated["goldBalance"])) > Decimal("0.000001") or number(partner.get("tomanBalance")) != number(recalculated["tomanBalance"]):
             raise ValueError("ماندهٔ دفتر همکار با گردش‌ها مطابقت ندارد.")
         for entry, expected in zip(partner.get("entries", []), recalculated.get("entries", [])):
+            if entry.get("assetBalances", {}) != expected.get("assetBalances", {}):
+                raise ValueError("ماندهٔ دارایی ردیف با گردش‌ها مطابقت ندارد.")
             if abs(number(entry["goldBalance"]) - number(expected["goldBalance"])) > Decimal("0.000001") or number(entry["tomanBalance"]) != number(expected["tomanBalance"]):
                 raise ValueError("ماندهٔ ردیف دفتر همکار با گردش‌ها مطابقت ندارد.")
     return partners
@@ -778,7 +809,7 @@ def register_partner_routes(application, workspace_response, encode_workspace):
         # Retrying one after an upgrade must still match its original receipt hash.
         if action == "invoice" and payload.calculationVersion == 1:
             body.pop("calculationVersion", None)
-        if action in {"invoice-update", "settlement-update", "invoice-delete", "settlement-delete"}:
+        if action in {"invoice-update", "settlement-update", "invoice-delete", "settlement-delete", "operation-update", "operation-delete"}:
             body["entryId"] = entry_id
         try:
             body_hash = digest(json.dumps({"action": action, "partnerId": identifier, "payload": body}, sort_keys=True, ensure_ascii=False, allow_nan=False))
@@ -795,6 +826,11 @@ def register_partner_routes(application, workspace_response, encode_workspace):
 
         with engine.begin() as connection:
             current = read_workspace(connection, account_id)
+            if action.startswith("operation"):
+                previous_partner = find_partner(current["data"], identifier)
+                previous_entry = next((row for row in previous_partner["entries"] if row["id"] == entry_id), None)
+                if (getattr(payload, "kind", None) == "delivery" or previous_entry and previous_entry["type"] == "delivery") and not has_permission(identity, "documents.write"):
+                    raise HTTPException(403, "دریافت و تحویل جنس به اجازهٔ تغییر موجودی نیاز دارد.")
             if action in {"invoice-update", "invoice-delete"} and not has_permission(identity, "goldPurchases.write"):
                 previous_partner = find_partner(current["data"], identifier)
                 previous_entry = next((row for row in previous_partner["entries"] if row["id"] == entry_id), None)
@@ -825,6 +861,32 @@ def register_partner_routes(application, workspace_response, encode_workspace):
                         if document.get("partnerId") == partner["id"]:
                             document["customerName"] = partner["name"]
                     created_id = partner["id"]
+                elif action in {"operation", "operation-update", "operation-delete"}:
+                    existing_entry = None
+                    position = len(partner["entries"])
+                    previous_documents = list(data["documents"])
+                    if action != "operation":
+                        existing_entry = next((row for row in partner["entries"] if row["id"] == entry_id), None)
+                        if not existing_entry:
+                            raise HTTPException(404, "عملیات حساب پیدا نشد.")
+                        if existing_entry["type"] not in OPERATION_TYPES or existing_entry["calculationVersion"] != 5:
+                            raise HTTPException(422, "این مسیر فقط برای عملیات حساب است.")
+                        if action == "operation-update" and payload.kind != existing_entry["type"]:
+                            raise HTTPException(422, "نوع عملیات هنگام ویرایش قابل تغییر نیست.")
+                        position = partner["entries"].index(existing_entry)
+                        old_ids = set(existing_entry["documentIds"])
+                        if old_ids != {row["id"] for row in previous_documents if row["id"] in old_ids}:
+                            raise HTTPException(409, "اسناد موجودی این عملیات کامل نیست.")
+                        data["documents"] = [row for row in previous_documents if row["id"] not in old_ids]
+                        partner["entries"].pop(position)
+                        recalculate_partner(partner)
+                    if action != "operation-delete":
+                        entry = make_operation(data, partner, payload, identity, connection, existing_entry, previous_documents)
+                        partner["entries"].insert(position, entry)
+                        created_id = entry["id"]
+                    else:
+                        created_id = existing_entry["id"]
+                    guard_linked_inventory_changes(previous_documents, data["documents"])
                 elif action == "invoice":
                     created_id = make_supplier_invoice(data, partner, payload, identity, connection)
                 elif action == "invoice-update":
@@ -939,6 +1001,18 @@ def register_partner_routes(application, workspace_response, encode_workspace):
     @application.post("/api/owner/partners/{identifier}/invoices", status_code=201)
     def post_invoice(identifier: str, payload: PartnerInvoice, response: Response, identity=Depends(require_mutation)):
         return mutate("invoice", identifier, payload, identity, response)
+
+    @application.post("/api/owner/partners/{identifier}/operations", status_code=201)
+    def post_operation(identifier: str, payload: PartnerOperation, response: Response, identity=Depends(require_mutation)):
+        return mutate("operation", identifier, payload, identity, response)
+
+    @application.patch("/api/owner/partners/{identifier}/operations/{entry_id}")
+    def edit_operation(identifier: str, entry_id: str, payload: PartnerOperation, response: Response, identity=Depends(require_mutation)):
+        return mutate("operation-update", identifier, payload, identity, response, entry_id=entry_id)
+
+    @application.delete("/api/owner/partners/{identifier}/operations/{entry_id}")
+    def delete_operation(identifier: str, entry_id: str, payload: PartnerMutation, response: Response, identity=Depends(require_mutation)):
+        return mutate("operation-delete", identifier, payload, identity, response, entry_id=entry_id)
 
     @application.patch("/api/owner/partners/{identifier}/invoices/{entry_id}")
     def edit_invoice(identifier: str, entry_id: str, payload: PartnerInvoice, response: Response, identity=Depends(require_mutation)):

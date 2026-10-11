@@ -711,7 +711,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   };
   const canEditPartnerEntry = entry => Boolean(entry && has('partners.write')
     && (!entry.goldBalancePurchase || has('goldPurchases.write'))
-    && (entry.type === 'settlement' ? !entry.linkedEntryId : ['purchase', 'sale', 'mixed'].includes(entry.type) && has('documents.write')));
+    && (['trade', 'offset'].includes(entry.type) || (entry.type === 'settlement' ? !entry.linkedEntryId : ['purchase', 'sale', 'mixed', 'delivery'].includes(entry.type) && has('documents.write'))));
   const openPartnerDocument = async (partnerId, entryId, mode = 'view') => {
     try {
       await ownerStorage.flush();
@@ -740,7 +740,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     setStorageMessage(rows === null ? 'سند حذف شد و حساب‌ها به‌روز شدند.' : 'تغییرات سند ذخیره شد و حساب‌ها به‌روز شدند.');
   };
   const canChangeDocument = invoice => has('documents.write') && canManageInvoice(invoice) && (invoice.rows[0].type === 'expense' || has('customers.write'));
-  const canChangePartnerDocument = invoice => invoice.partnerEntryId && (!(invoice.partnerEntry?.goldBalancePurchase || invoice.rows.some(row => row.goldBalancePurchase)) || has('goldPurchases.write')) && has('partners.write') && (invoice.partnerEntry?.type === 'settlement' || has('documents.write'));
+  const canChangePartnerDocument = invoice => invoice.partnerEntryId && canEditPartnerEntry(invoice.partnerEntry);
   const documentActions = invoice => (canChangePartnerDocument(invoice) || canChangeDocument(invoice)) && <div className="document-actions"><button type="button" className="button button-ghost" data-invoice-edit onClick={() => openDocumentAction(invoice, 'edit')}>ویرایش سند</button><button type="button" className="button button-ghost document-delete-link" data-invoice-delete onClick={() => openDocumentAction(invoice, 'delete')}>حذف سند</button></div>;
   const performPartnerAction = async (action, identifier, payload, requestId, revision) => {
     const saved = await ownerStorage.mutatePartner(action, identifier, payload, requestId, revision);

@@ -12,6 +12,7 @@ export const currencyCatalog = [
   { code: 'AED', name: 'درهم امارات', price: 'aedPrice' },
   { code: 'GBP', name: 'پوند انگلیس', price: 'gbpPrice' },
   { code: 'TRY', name: 'لیر ترکیه', price: 'tryPrice' },
+  { code: 'IQD', name: 'دینار عراق', price: 'iqdPrice' },
 ];
 export const currencyName = code => currencyCatalog.find(item => item.code === code)?.name || code;
 export const currencyRate = (code, prices) => number(prices[currencyCatalog.find(item => item.code === code)?.price]);

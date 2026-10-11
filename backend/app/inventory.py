@@ -40,7 +40,7 @@ LINKED_PROTECTED_FIELDS = set().union(*ECONOMIC_FIELDS.values()) | {
     "weight750",
 }
 COINS = {"امامی بانکی ۸۶", "نیم سکه بانکی ۸۶", "ربع سکه بانکی ۸۶", "سکه یک گرمی بانکی ۸۶", "امامی", "تمام", "نیم", "ربع", "پارسیان"}
-CURRENCIES = {"USD", "EUR", "AED", "GBP", "TRY"}
+CURRENCIES = {"USD", "EUR", "AED", "GBP", "TRY", "IQD"}
 COIN_RATE_FIELDS = {"امامی بانکی ۸۶": "bankEmami86Price", "نیم سکه بانکی ۸۶": "bankHalf86Price",
     "ربع سکه بانکی ۸۶": "bankQuarter86Price", "سکه یک گرمی بانکی ۸۶": "bankOneGram86Price", "امامی": "emamiCoinPrice",
     "تمام": "tamamCoinPrice", "نیم": "halfCoinPrice", "ربع": "quarterCoinPrice"}
@@ -49,7 +49,7 @@ ORDINARY_COIN_SPECS = {"تمام عادی": ("8.133", "900"), "نیم عادی":
 ORDINARY_COINS = {*ORDINARY_COIN_SPECS, "پارسیان", "گل رز", "سایر"}
 COIN_PHYSICAL_FIELDS = ("coinPricingVersion", "coinGroup", "coinType", "coinWeight", "coinAyar", "coinWeight750", "parsianWeight")
 COINS |= ORDINARY_COINS
-CURRENCY_RATE_FIELDS = {"USD": "usdPrice", "EUR": "eurPrice", "AED": "aedPrice", "GBP": "gbpPrice", "TRY": "tryPrice"}
+CURRENCY_RATE_FIELDS = {"USD": "usdPrice", "EUR": "eurPrice", "AED": "aedPrice", "GBP": "gbpPrice", "TRY": "tryPrice", "IQD": "iqdPrice"}
 KINDS = {"النگو", "دستبند", "گردنبند", "زنجیر", "انگشتر", "گوشواره", "آویز و پلاک", "نیم‌ست", "ست", "سرویس", "پابند", "سایر"}
 NUMERIC_FIELDS = (set().union(*ECONOMIC_FIELDS.values()) - STRING_FIELDS) | {
     "gramPrice", "meltedGramPrice", "coinPrice", "parsianPrice", "currencyRate", "profitPercent", "otherCosts",

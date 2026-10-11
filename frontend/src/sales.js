@@ -58,7 +58,7 @@ export function salesReport(documents, period, helpers, today = iranDate()) {
   const { quantity, weight, amount } = helpers;
   const days = period === 'week' ? 7 : period === 'month' ? 30 : 1;
   const start = dateBefore(today, days - 1);
-  const sales = documents.filter(doc => (String(doc.type).endsWith('-sale') || doc.direction === 'فروش') && doc.date >= start && doc.date <= today && doc.source !== 'opening-inventory');
+  const sales = documents.filter(doc => !doc.partnerOperation && (String(doc.type).endsWith('-sale') || doc.direction === 'فروش') && doc.date >= start && doc.date <= today && doc.source !== 'opening-inventory');
   const categories = saleCategories.map(category => ({ ...category, amount: 0, quantity: 0, weight: 0 }));
   const products = new Map();
   const productTransactions = new Map();

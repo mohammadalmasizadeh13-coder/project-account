@@ -292,7 +292,7 @@ export function createWorkspaceStorage(request = api, delay = 150, recoveryStora
     async mutatePartner(action, identifier, payload, requestId, expectedRevision) {
       if (!allowedFields.has('partners')) throw new Error('برای تغییر حساب همکاران دسترسی ندارید.');
       if (['invoice', 'invoice-update', 'invoice-delete'].includes(action) && !allowedFields.has('documents')) throw new Error('برای ثبت فاکتور همکار، دسترسی ثبت اسناد نیز لازم است.');
-      if (['invoice-update', 'settlement-update', 'invoice-delete', 'settlement-delete'].includes(action) && !String(payload?.entryId || '').trim()) throw new Error('شناسهٔ سند همکار مشخص نیست.');
+      if (['invoice-update', 'settlement-update', 'invoice-delete', 'settlement-delete', 'operation-update', 'operation-delete'].includes(action) && !String(payload?.entryId || '').trim()) throw new Error('شناسهٔ سند همکار مشخص نیست.');
       if (!active || committing || mutatingInventory || importing) throw new Error('ابتدا ذخیرهٔ جاری را کامل کنید.');
       if (!requestId) throw new Error('شناسهٔ ثبت مشخص نیست؛ فرم را دوباره باز کنید.');
       const mutationGeneration = generation;
@@ -302,6 +302,9 @@ export function createWorkspaceStorage(request = api, delay = 150, recoveryStora
       const routes = { create: ['', 'POST'], update: [`/${encodeURIComponent(identifier)}`, 'PATCH'], invoice: [`/${encodeURIComponent(identifier)}/invoices`, 'POST'],
         'invoice-update': [`/${encodeURIComponent(identifier)}/invoices/${encodeURIComponent(payload?.entryId)}`, 'PATCH'],
         'invoice-delete': [`/${encodeURIComponent(identifier)}/invoices/${encodeURIComponent(payload?.entryId)}`, 'DELETE'], settlement: [`/${encodeURIComponent(identifier)}/settlements`, 'POST'],
+        operation: [`/${encodeURIComponent(identifier)}/operations`, 'POST'],
+        'operation-update': [`/${encodeURIComponent(identifier)}/operations/${encodeURIComponent(payload?.entryId)}`, 'PATCH'],
+        'operation-delete': [`/${encodeURIComponent(identifier)}/operations/${encodeURIComponent(payload?.entryId)}`, 'DELETE'],
         'settlement-update': [`/${encodeURIComponent(identifier)}/settlements/${encodeURIComponent(payload?.entryId)}`, 'PATCH'],
         'settlement-delete': [`/${encodeURIComponent(identifier)}/settlements/${encodeURIComponent(payload?.entryId)}`, 'DELETE'] };
       if (!routes[action]) throw new Error('عملیات همکار معتبر نیست.');
@@ -309,7 +312,7 @@ export function createWorkspaceStorage(request = api, delay = 150, recoveryStora
       mutatingInventory = true; notify();
       try {
         const body = { ...structuredClone(payload), revision: expectedRevision ?? revision, requestId };
-        if (['invoice-update', 'settlement-update', 'invoice-delete', 'settlement-delete'].includes(action)) delete body.entryId;
+        if (['invoice-update', 'settlement-update', 'invoice-delete', 'settlement-delete', 'operation-update', 'operation-delete'].includes(action)) delete body.entryId;
         const saved = await request(`/api/owner/partners${suffix}`, { method, body });
         if (generation !== mutationGeneration || !active) return null;
         if (!Number.isSafeInteger(saved?.revision) || !Array.isArray(saved?.data?.partners)) throw new Error('تأیید ثبت حساب همکار دریافت نشد؛ دوباره تلاش کنید.');

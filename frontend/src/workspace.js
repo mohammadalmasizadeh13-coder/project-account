@@ -51,7 +51,7 @@ export function profitReport(documents, period = 'today', today = iranDate()) {
     }
   }
   const entries = new Map(documents.filter(doc => !isExpense(doc) && (doc.source === 'opening-inventory' || String(doc.type).endsWith('-purchase'))).map(doc => [doc.id, doc]));
-  const sales = documents.filter(doc => !isExpense(doc) && doc.source !== 'opening-inventory' && (String(doc.type).endsWith('-sale') || doc.direction === 'فروش') && inPeriod(doc));
+  const sales = documents.filter(doc => !doc.partnerOperation && !isExpense(doc) && doc.source !== 'opening-inventory' && (String(doc.type).endsWith('-sale') || doc.direction === 'فروش') && inPeriod(doc));
   let revenue = 0, cost = 0, unknownRevenue = 0;
   let sellerProfit = 0, discounts = 0, sellerProfitKnown = 0;
   const records = sales.map(sale => {

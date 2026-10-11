@@ -19,7 +19,7 @@ COIN_RATES = {"امامی بانکی ۸۶": "bankEmami86Price", "نیم سکه �
     "ربع سکه بانکی ۸۶": "bankQuarter86Price", "سکه یک گرمی بانکی ۸۶": "bankOneGram86Price",
     "امامی": "emamiCoinPrice", "تمام": "tamamCoinPrice", "نیم": "halfCoinPrice", "ربع": "quarterCoinPrice"}
 CURRENCIES = {"USD": ("دلار آمریکا", "usdPrice"), "EUR": ("یورو", "eurPrice"),
-    "AED": ("درهم امارات", "aedPrice"), "GBP": ("پوند انگلیس", "gbpPrice"), "TRY": ("لیر ترکیه", "tryPrice")}
+    "AED": ("درهم امارات", "aedPrice"), "GBP": ("پوند انگلیس", "gbpPrice"), "TRY": ("لیر ترکیه", "tryPrice"), "IQD": ("دینار عراق", "iqdPrice")}
 CRAFTED_KINDS = ("النگو", "دستبند", "گردنبند", "زنجیر", "انگشتر", "گوشواره", "آویز و پلاک", "نیم‌ست", "ست", "سرویس", "پابند", "سایر")
 KIND_ALIASES = (("نیم‌ست", ("نیمست",)), ("دستبند", ("دستبند",)), ("گردنبند", ("گردنبند",)),
     ("النگو", ("النگو",)), ("زنجیر", ("زنجیر",)), ("انگشتر", ("انگشتر", "حلقه")),

@@ -1,0 +1,10 @@
+.partner-trading { min-width: 0; }
+.partner-trading fieldset { border: 0; padding: 0; min-width: 0; }
+.partner-trading .partner-tabs { flex-wrap: wrap; margin-block: 1rem; }
+.partner-asset-balances { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: .75rem; margin-block: 1rem; }
+.partner-asset-balances article { display: flex; flex-direction: column; gap: .4rem; padding: .85rem; background: #f4f7f3; border: 1px solid #dce5dc; border-radius: 12px; }
+.partner-asset-balances strong { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.partner-operation-line-total { padding: .75rem; background: #f4f7f3; border-radius: 8px; }
+.partner-operation-history > article { padding-block: 1.25rem; border-top: 1px solid #dce5dc; }
+.partner-trading textarea { display: block; width: 100%; min-height: 70px; margin-block: .5rem 1rem; }
+@media print { .partner-asset-balances { grid-template-columns: repeat(3, 1fr); } .partner-asset-balances article { break-inside: avoid; } }
