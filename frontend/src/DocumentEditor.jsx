@@ -41,7 +41,7 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
   const original = invoice.rows;
   const first = original[0];
   const expense = first.type === 'expense';
-  const settled = first.settlementVersion === 1;
+  const settled = [1, 3].includes(first.settlementVersion);
   const [rows, setRows] = useState(() => original.map(row => ({ ...row })));
   const [header, setHeader] = useState({ date: first.date || '', invoiceTime: first.invoiceTime || '', customerId: first.customerId || '', ...Object.fromEntries(documentMetadataFields.map(key => [key, first[key] ?? ''])), cashPaid: first.cashPaid ?? '', settlementGoldPrice: first.settlementGoldPrice ?? '', gold18Price: first.gold18Price ?? '', gramDebt: invoice.gramDebt, rialDebt: invoice.rialDebt });
   const [busy, setBusy] = useState(false);
@@ -70,7 +70,7 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
     if (row.type === 'expense') return sum + expenseValue({ ...row, expenseUnit: row.expenseUnit ?? 'toman', expenseAmount: row.expenseAmount ?? row.amount });
     const changed = economicChange(row, original[index]);
     const amount = settled ? Math.round(documentBreakdown(row).total) : !changed && row.amount != null ? number(row.amount) : documentBreakdown(row).total;
-    return sum + amount;
+    return sum + (first.settlementVersion === 3 && !String(row.type).endsWith('-sale') ? -amount : amount);
   }, 0);
   const settlement = settled ? invoiceSettlement(rows, header.cashPaid, header.settlementGoldPrice) : null;
   function changes() {
@@ -103,7 +103,7 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
         for (const [index, row] of rows.entries()) {
           if (!row.type?.endsWith('-sale') && !(row.category === 'coin' && isModernCoin(row))) continue;
           if (!economicChange(row, original[index])) continue;
-          const validation = validateDocument(row, row.category, number);
+          const validation = validateDocument(settled ? { ...row, gramDebt: 0, rialDebt: 0 } : row, row.category, number);
           const discountError = row.category === 'coin' && isModernCoin(row) ? Object.values(validation)[0] : validation.discountPercent || validation.discountRial;
           if (discountError) { setError(`ردیف ${(index + 1).toLocaleString('fa-IR')}: ${discountError}`); return; }
         }
@@ -160,9 +160,9 @@ export default function DocumentEditor({ invoice, mode, customers, revision, onS
           </div>
           {row.type?.endsWith('-sale') && <p>تخفیف درصدی از کل مبلغ ردیف، شامل اجرت، هزینه‌ها و سود محاسبه می‌شود و تخفیف ریالی هم علاوه بر آن کسر می‌شود.</p>}
         </fieldset>)}
-        {!expense && <div className="document-edit-grid">{(settled ? [['cashPaid', 'پرداخت نقدی (تومان)'], ['settlementGoldPrice', 'نرخ تبدیل مانده به طلای ۱۸ عیار (تومان)']] : [['gramDebt', 'بدهی گرمی سند'], ['rialDebt', 'بدهی نقدی سند (تومان)']]).map(([key, label]) => <label key={key}>{label}<NumberInput name={key} value={header[key]} onChange={event => updateHeader(key, event.target.value)}/></label>)}</div>}
+        {!expense && <div className="document-edit-grid">{(settled ? [['cashPaid', total < 0 ? 'پرداخت نقدی ما به مشتری (تومان)' : 'پرداخت نقدی مشتری (تومان)'], ['settlementGoldPrice', 'نرخ تبدیل مانده به طلای ۱۸ عیار (تومان)']] : [['gramDebt', 'بدهی گرمی سند'], ['rialDebt', 'بدهی نقدی سند (تومان)']]).map(([key, label]) => <label key={key}>{label}<NumberInput name={key} value={header[key]} onChange={event => updateHeader(key, event.target.value)}/></label>)}</div>}
         {!expense && <label>نحوه پرداخت<textarea name="paymentMethod" rows={3} maxLength={5000} value={header.paymentMethod} placeholder="نحوه پرداخت و توضیحات آن را بنویسید" onChange={event => updateHeader('paymentMethod', event.target.value)}/></label>}
-        <div className="document-edit-preview" aria-live="polite"><strong>مبلغ اصلاح‌شده: {Number.isFinite(total) ? money(total) : '—'} تومان</strong>{settlement && <span>بدهی گرمی: {settlement.gramDebt === null ? '—' : settlement.gramDebt.toLocaleString('fa-IR', { maximumFractionDigits: 6 })} گرم</span>}</div>
+        <div className="document-edit-preview" aria-live="polite"><strong>مبلغ اصلاح‌شده: {Number.isFinite(total) ? money(total) : '—'} تومان</strong>{settlement && <span>{settlement.gramDebt < 0 ? 'طلب گرمی مشتری: ' : 'بدهی گرمی مشتری: '}{settlement.gramDebt === null ? '—' : Math.abs(settlement.gramDebt).toLocaleString('fa-IR', { maximumFractionDigits: 6 })} گرم</span>}</div>
       </fieldset>}
       {error && <p role="alert" className="document-edit-error">{error}</p>}
       {uncertain && <p>تأیید سرور دریافت نشد. «تلاش دوباره» همین تغییر را پیگیری می‌کند.</p>}

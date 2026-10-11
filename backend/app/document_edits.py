@@ -108,8 +108,9 @@ def normalize_changes(row, changes):
         else:
             default = 0 if field in {"wagePercent", "wageFixed", "profitPercent", "profitFixed", "otherCosts", "discountRial", "discountPercent", "gramDebt", "rialDebt", "cashPaid"} else None
             maximum = Decimal(100) if field == "discountPercent" else Decimal(MAX_SAFE_INTEGER) if field in {"cashPaid", "discountRial", "expenseAmount"} else Decimal("1e12")
-            normalized[field] = format(numeric(value, "مقدار واردشده", maximum=maximum, default=default), "f")
-    if any(key in normalized for key in ("cashPaid", "settlementGoldPrice")) and row.get("settlementVersion") != 1:
+            minimum = Decimal("-1e12") if field == "gramDebt" and row.get("settlementVersion") == 3 else Decimal(0)
+            normalized[field] = format(numeric(value, "مقدار واردشده", minimum=minimum, maximum=maximum, default=default), "f")
+    if any(key in normalized for key in ("cashPaid", "settlementGoldPrice")) and row.get("settlementVersion") not in (1, 3):
         raise HTTPException(422, "اطلاعات پرداخت فقط در ردیف اول سند فروش ثبت می‌شود.")
     return normalized
 
@@ -175,13 +176,13 @@ def synchronize_customers(data, old_rows, new_rows):
         cached = references[0][1]
         updated = replacements.get(str(old["id"]))
         target = document_customer(data, updated) if updated else None
-        sign = 1 if is_sale(old) else -1
+        sign = 1 if old.get("settlementVersion") == 3 or is_sale(old) else -1
         for field in ("gramDebt", "rialDebt"):
             balance = numeric(customer.get(field), "ماندهٔ مشتری", minimum=Decimal(-MAX_SAFE_INTEGER), maximum=Decimal(MAX_SAFE_INTEGER), default=0, status=409)
-            before = numeric(old.get(field), "بدهی سند", default=0, status=409)
+            before = numeric(old.get(field), "بدهی سند", minimum=Decimal("-1e12") if old.get("settlementVersion") == 3 else Decimal(0), default=0, status=409)
             customer[field] = decimal_output(balance - sign * before)
             if target is not None:
-                after = numeric(updated.get(field), "بدهی سند", default=0)
+                after = numeric(updated.get(field), "بدهی سند", minimum=Decimal("-1e12") if updated.get("settlementVersion") == 3 else Decimal(0), default=0)
                 target_balance = numeric(target.get(field), "ماندهٔ مشتری", minimum=Decimal(-MAX_SAFE_INTEGER), maximum=Decimal(MAX_SAFE_INTEGER), default=0, status=409)
                 target[field] = decimal_output(target_balance + sign * after)
         customer["updatedAt"] = iso_now()
@@ -248,8 +249,8 @@ def correct_documents(data, identifier, requested_rows, identity):
             headers = [(str(row.get("customerId")), row.get("customerName"), row.get("date"), document_detail_header(row)) for row in updated_rows]
             if any(header != headers[0] for header in headers[1:]):
                 raise HTTPException(422, "تاریخ، مشخصات مشتری و نحوه پرداخت تمام ردیف‌های سند باید یکسان باشد.")
-        settlement = next((row for row in updated_rows if row.get("settlementVersion") == 1), None)
-        old_settlement = next((row for row in old_rows if row.get("settlementVersion") == 1), None)
+        settlement = next((row for row in updated_rows if row.get("settlementVersion") in (1, 3)), None)
+        old_settlement = next((row for row in old_rows if row.get("settlementVersion") in (1, 3)), None)
         payment_changed = settlement and any(number(settlement.get(field)) != number(old_settlement.get(field)) for field in ("cashPaid", "settlementGoldPrice"))
         if settlement and (repriced or payment_changed):
             with localcontext() as context:
@@ -260,14 +261,15 @@ def correct_documents(data, identifier, requested_rows, identity):
                         row["amount"] = decimal_output(settlement_row_total(row).quantize(Decimal(1), rounding=ROUND_HALF_UP))
                     row["gold18Price"] = settlement["settlementGoldPrice"]
                     row["gramDebt"], row["rialDebt"] = 0, 0
-                    total += number(row["amount"])
-                cash = numeric(settlement.get("cashPaid"), "پرداخت نقدی", maximum=total)
+                    total += number(row["amount"]) * (-1 if settlement.get("settlementVersion") == 3 and not is_sale(row) else 1)
+                cash = numeric(settlement.get("cashPaid"), "پرداخت نقدی", maximum=abs(total))
                 if cash != cash.to_integral_value():
                     raise HTTPException(422, "پرداخت نقدی باید تومان کامل باشد.")
                 rate = numeric(settlement.get("settlementGoldPrice"), "نرخ تبدیل مانده", minimum=Decimal("0.00000001"))
+                remainder = total - (-cash if settlement.get("settlementVersion") == 3 and total < 0 else cash)
                 settlement.update(cashPaid=decimal_output(cash), settlementGoldPrice=decimal_output(rate),
-                    settlementRemainder=decimal_output(total - cash),
-                    gramDebt=decimal_output(((total - cash) / rate).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)))
+                    settlementRemainder=decimal_output(remainder),
+                    gramDebt=decimal_output((remainder / rate).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)))
         if any(row.get("invoiceVersion") == 1 for row in updated_rows):
             validate_group(updated_rows)
     replacements = {str(row["id"]): row for row in updated_rows}

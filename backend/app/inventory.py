@@ -465,6 +465,8 @@ def edit_stock(data, identifier, changes, identity):
         raise HTTPException(403, "اجازهٔ ویرایش اسناد ندارید.")
     result = deepcopy(data)
     source = find_source(result, identifier)
+    if source.get("transactionId") and any(row.get("transactionId") == source["transactionId"] and row.get("settlementVersion") == 3 for row in result["documents"]):
+        raise HTTPException(409, "این کالا بخشی از فاکتور ترکیبی است؛ آن را از ویرایش فاکتور اصلاح کنید.")
     allowed = TEXT_FIELDS | ECONOMIC_FIELDS[source["category"]]
     if not changes or set(changes) - allowed:
         raise HTTPException(422, "فیلد ویرایش موجودی مجاز نیست یا تغییری ارسال نشده است.")

@@ -117,6 +117,9 @@ export function groupInvoices(documents = []) {
     const rows = [...group.rows].sort((a, b) => (number(a.invoiceLine) || Infinity) - (number(b.invoiceLine) || Infinity));
     const first = rows[0];
     const invoiceNumber = rows.find(row => row.invoiceNumber != null && String(row.invoiceNumber).trim())?.invoiceNumber;
+    const mixedCustomer = first.settlementVersion === 3;
+    const saleTotal = rows.filter(row => String(row.type).endsWith('-sale')).reduce((sum, row) => sum + invoiceRowAmount(row), 0);
+    const purchaseTotal = rows.filter(row => String(row.type).endsWith('-purchase')).reduce((sum, row) => sum + invoiceRowAmount(row), 0);
     const partnerEntry = first.partnerEntry;
     const partnerTotals = first.partnerLedgerTotals;
     return {
@@ -132,11 +135,12 @@ export function groupInvoices(documents = []) {
       customerAddress: first.customerAddress,
       customerNationalId: first.customerNationalId,
       paymentMethod: first.paymentMethod,
-      direction: first.direction || (String(first.type).endsWith('-sale') ? 'فروش' : String(first.type).endsWith('-purchase') ? 'خرید' : ''),
+      direction: mixedCustomer ? 'ترکیبی' : first.direction || (String(first.type).endsWith('-sale') ? 'فروش' : String(first.type).endsWith('-purchase') ? 'خرید' : ''),
       createdAt: first.createdAt,
       recordedAt: first.recordedAt,
       invoiceTime: first.invoiceTime,
-      amount: rows.reduce((sum, row) => sum + invoiceRowAmount(row), 0),
+      amount: mixedCustomer ? saleTotal - purchaseTotal : rows.reduce((sum, row) => sum + invoiceRowAmount(row), 0),
+      ...(mixedCustomer ? { saleTotal, purchaseTotal } : {}),
       rialDebt: rows.reduce((sum, row) => sum + number(row.rialDebt), 0),
       gramDebt: rows.reduce((sum, row) => sum + number(row.gramDebt), 0),
       ...((partnerEntry?.calculationVersion === 3 || first.partnerRemittance) && partnerTotals ? {
@@ -146,8 +150,8 @@ export function groupInvoices(documents = []) {
         ...(first.partnerRemittance ? { partnerRemittance: true, remittanceDirection: first.remittanceDirection } : {}),
         ...partnerTotals, gramDebt: partnerTotals.netGold, rialDebt: partnerTotals.netToman,
       } : {}),
-      ...(first.settlementVersion === 1 ? {
-        settlementVersion: 1, cashPaid: number(first.cashPaid),
+      ...([1, 3].includes(first.settlementVersion) ? {
+        settlementVersion: first.settlementVersion, cashPaid: number(first.cashPaid),
         settlementGoldPrice: number(first.settlementGoldPrice),
         settlementRemainder: number(first.settlementRemainder),
       } : {}),

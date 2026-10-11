@@ -54,7 +54,7 @@ export function validateStockSale(sale, documents) {
 export function validateStockSales(sales, documents) {
   const replacingIds = new Set(sales.map(sale => sale.id).filter(Boolean));
   const staged = documents.filter(doc => !replacingIds.has(doc.id));
-  for (const sale of sales) {
+  for (const sale of sales.filter(isStockSale)) {
     const draft = { ...sale, id: Symbol('stock-sale-draft') };
     const error = validateStockSale(draft, staged);
     if (error) return error;

@@ -6,6 +6,35 @@ import { groupInvoices } from './invoices.js';
 
 const gold = { category: 'crafted', type: 'crafted-sale', itemCount: 2, weight: 2.5, ayar: 750, gramPrice: 6000000, wagePercent: 10, wageFixed: 100000, profitPercent: 7, discountRial: 524000 };
 
+test('customer exchange nets incoming coins and miscellaneous gold against a bracelet in either row order', () => {
+  const purchases = [
+    { category: 'coin', type: 'coin-purchase', coinCount: 2, coinPrice: 100000, profitPercent: 0 },
+    { category: 'crafted', type: 'misc-purchase', itemCount: 1, weight: 1, ayar: 750, gramPrice: 100000 },
+  ];
+  for (const [price, cash, debt] of [[100000, 20000, .8], [50000, 20000, -.8], [75000, 0, 0], [50000, 100000, 0]]) {
+    const sale = { category: 'crafted', type: 'crafted-sale', itemCount: 1, weight: 4, ayar: 750, gramPrice: price, profitPercent: 0 };
+    for (const rows of [[...purchases, sale], [sale, ...purchases]]) {
+      const payment = invoiceSettlement(rows, cash, 100000);
+      assert.deepEqual(payment.errors, {});
+      assert.equal(payment.settlementVersion, 3);
+      assert.equal(payment.purchaseTotal, 300000);
+      assert.equal(payment.saleTotal, 4 * price);
+      assert.equal(payment.total, 4 * price - 300000);
+      assert.equal(payment.gramDebt, debt);
+      assert.ok(invoiceSettlement(rows, Math.abs(payment.total) + 1, 100000).errors.cashPaid);
+      const documents = rows.map((row, index) => ({ ...row, id: String(index), transactionId: 'exchange', invoiceLine: index + 1,
+        amount: payment.amounts[index], gramDebt: index ? 0 : payment.gramDebt,
+        ...(index ? {} : { settlementVersion: 3, cashPaid: cash, settlementGoldPrice: 100000, settlementRemainder: payment.settlementRemainder }) }));
+      const [group] = groupInvoices(documents.reverse());
+      assert.equal(group.direction, 'ترکیبی');
+      assert.equal(group.amount, payment.total);
+      assert.equal(group.gramDebt, debt);
+      assert.equal(group.purchaseTotal, 300000);
+      assert.equal(group.cashPaid, cash);
+    }
+  }
+});
+
 test('partial cash settles combined weights, percentage and fixed wage, profit and discount into gold once', () => {
   const rows = [gold, { category: 'coin', type: 'coin-sale', coinCount: 1, coinPrice: 10000000, wagePercent: 0, profitPercent: 0 }];
   const result = invoiceSettlement(rows, '۳۸٬۰۰۰٬۰۰۰', '۶٬۰۰۰٬۰۰۰');

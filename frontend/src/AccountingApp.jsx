@@ -22,7 +22,7 @@ import { isMiscPurchase, miscGoldDefaults, miscGoldWeight750 } from './miscGold'
 import { cleanInvoiceLine, expandInvoiceDraft, invoiceHeader, invoiceHeaderFields, invoiceLineForms, invoiceLinePreview } from './invoiceDraft';
 import { groupInvoices, partnerDocumentRows } from './invoices';
 import { partnerEntryForDocument } from './partnerLedger';
-import { invoiceSettlement, settlementRowAmount } from './invoiceSettlement';
+import { invoiceSettlement } from './invoiceSettlement';
 import InvoiceDetails from './InvoiceDetails';
 import DocumentEditor, { canManageInvoice } from './DocumentEditor';
 import NumberInput from './NumberInput.jsx';
@@ -861,9 +861,10 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const documentPreview = { ...documentForm, category: selectedDocumentType.category, profitPercent: profitPercentInput(documentForm.profitPercent, selectedDocumentType.category, documentForm), ...(separateSetMode ? { gramPrice: savedPrices.goldGramPrice } : {}) };
   const invoiceRows = documentForm.invoiceRows || [];
   const previewRows = expenseMode ? [documentPreview] : expandInvoiceDraft(documentForm, savedPrices.goldGramPrice);
-  const previewAmount = previewRows.reduce((sum, row) => sum + (saleMode ? settlementRowAmount(row) : getDocumentAmount(row)), 0);
-  const paymentStep = saleMode && Boolean(documentForm.invoicePaymentStep);
+  const invoiceHasSales = !expenseMode && previewRows.some(isStockSale);
   const paymentPreview = invoiceSettlement(previewRows, documentForm.cashPaid, documentForm.gold18Price ?? savedPrices.goldGramPrice ?? '');
+  const previewAmount = invoiceHasSales ? paymentPreview.total : previewRows.reduce((sum, row) => sum + getDocumentAmount(row), 0);
+  const paymentStep = invoiceHasSales && Boolean(documentForm.invoicePaymentStep);
   const latestDocuments = groupInvoices(documents.filter(document => expenseMode ? document.type === 'expense' : isTradeDocument(document) && !document.partnerId)).slice(0, 5);
   const assets = assetReport(stock, savedPrices);
   const liveInventoryValue = assetReport(stock, priceForm).totalToman;
@@ -956,7 +957,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     const lines = invoiceLineForms({ ...documentForm, invoiceCurrentEmpty: false });
     const expanded = expandInvoiceDraft({ ...documentForm, invoiceCurrentEmpty: false }, savedPrices.goldGramPrice);
     if (lines.length > 50 || expanded.length > 100) { showInvoiceErrors({ invoiceRows: 'حداکثر ۵۰ جنس و ۱۰۰ ردیف در هر سند قابل ثبت است.' }); return; }
-    if (saleMode) {
+    if (expanded.some(isStockSale)) {
       const error = validateStockSales(expanded, documents);
       if (error) { showInvoiceErrors({ productCode: error }); return; }
     }
@@ -987,7 +988,6 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
   const chooseStock = item => {
     if (documentSaving || documentLocked || documentOperation.current) { setStorageMessage('ثبت سند در حال تأیید است؛ ابتدا وضعیت ذخیره را مشخص کنید.'); return; }
-    if (invoiceRows.length && !String(invoiceRows[0].type).endsWith('-sale')) { setFormMessage({ type: 'error', text: 'این سند برای خرید است؛ فروش را در یک سند جدا ثبت کنید.' }); return; }
     setDocumentForm(current => ({ ...stockSaleForm(item, current, savedPrices), invoiceCurrentEmpty: false, invoicePaymentStep: false }));
     setStockQuery(item.productCode);
     setDocumentErrors({}); setFormMessage(null);
@@ -1003,7 +1003,6 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   };
   const chooseSet = items => {
     if (documentSaving || documentLocked || documentOperation.current) { setStorageMessage('ثبت سند در حال تأیید است؛ ابتدا وضعیت ذخیره را مشخص کنید.'); return; }
-    if (invoiceRows.length && !String(invoiceRows[0].type).endsWith('-sale')) { setFormMessage({ type: 'error', text: 'این سند برای خرید است؛ فروش را در یک سند جدا ثبت کنید.' }); return; }
     const available = items.filter(item => item.remaining > 0);
     if (!available.length) return;
     setDocumentForm(current => setSaleForm(available, current));
@@ -1021,10 +1020,6 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     if (!available.length) {
       setVaultSaleRequest(null);
       setFormMessage({ type: 'error', text: 'جنس انتخاب‌شده دیگر در صندوق موجود نیست؛ موجودی صندوق را بررسی کنید.' });
-      return;
-    }
-    if (invoiceRows.some(row => !String(row.type).endsWith('-sale')) || (!documentForm.invoiceCurrentEmpty && !saleMode)) {
-      setFormMessage({ type: 'info', text: 'پیش‌نویس خرید محفوظ است. ابتدا آن را ثبت یا پاک کنید، سپس فروش جنس انتخاب‌شده را ادامه دهید.' });
       return;
     }
     const currentIds = separateSetMode
@@ -1165,7 +1160,6 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     }
     if (name === 'type') {
       if (invoiceRows.length && !documentForm.invoiceCurrentEmpty) { setFormMessage({ type: 'error', text: 'ابتدا ورودی فعلی را به سند اضافه کنید یا پاک کنید، سپس نوع جنس بعدی را انتخاب کنید.' }); return; }
-      if (invoiceRows.length && getDocumentType(value).direction !== getDocumentType(invoiceRows[0].type).direction) { setFormMessage({ type: 'error', text: 'ردیف‌های یک سند باید همگی خرید یا همگی فروش باشند.' }); return; }
       setDocumentForm(current => newInvoiceEditor(current, value));
       setStockQuery(''); setFormMessage(null); return;
     }
@@ -1197,7 +1191,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     : expenseMode ? documentTypes.filter(type => type.value === 'expense') : customerDocumentTypes;
   const documentEntryType = partnerEntry ? partnerEntryType : documentForm.type;
   const availableDocumentEntryType = availableDocumentTypes.some(type => type.value === documentEntryType);
-  const documentTypeSelector = <label className="document-type-select">{partnerEntry ? 'نوع سند همکار' : expenseMode ? 'نوع سند فروشگاه' : 'نوع سند مشتری'}<select data-document-type name="type" value={availableDocumentEntryType ? documentEntryType : ''} aria-invalid={Boolean(documentErrors.type)} disabled={documentSaving || documentLocked} onChange={chooseDocumentEntryType}>
+  const documentTypeSelector = <label className="document-type-select">{partnerEntry ? 'نوع سند همکار' : expenseMode ? 'نوع سند فروشگاه' : 'نوع معاملهٔ این ردیف'}<select data-document-type name="type" value={availableDocumentEntryType ? documentEntryType : ''} aria-invalid={Boolean(documentErrors.type)} disabled={documentSaving || documentLocked} onChange={chooseDocumentEntryType}>
     {!availableDocumentEntryType && <option value="" disabled>نوع سند مجاز را انتخاب کنید</option>}
     {availableDocumentTypes.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
   </select></label>;
@@ -1211,7 +1205,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const upsertCustomerFromDocument = (currentCustomers, documentRecord) => {
     const cleanName = documentRecord.customerName.trim();
     const customerIndex = currentCustomers.findIndex(customer => customer.id === documentRecord.customerId);
-    const debtSign = isSaleDocument(documentRecord) ? 1 : -1;
+    const debtSign = documentRecord.settlementVersion === 3 || isSaleDocument(documentRecord) ? 1 : -1;
     const purchaseRecord = {
       id: documentRecord.id,
       title: documentRecord.typeLabel,
@@ -1221,8 +1215,8 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       recordedAt: documentRecord.recordedAt,
       gold18Price: documentRecord.gold18Price,
       transactionId: documentRecord.transactionId,
-      ...(documentRecord.settlementVersion === 1 ? {
-        settlementVersion: 1, cashPaid: documentRecord.cashPaid,
+      ...([1, 3].includes(documentRecord.settlementVersion) ? {
+        settlementVersion: documentRecord.settlementVersion, cashPaid: documentRecord.cashPaid,
         settlementGoldPrice: documentRecord.settlementGoldPrice,
         settlementRemainder: documentRecord.settlementRemainder,
         gramDebt: documentRecord.gramDebt, rialDebt: 0,
@@ -1268,7 +1262,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       setStockQuery('');
       const transactionId = changes.documents?.find(row => row.invoiceVersion === 1 && !documents.some(previous => previous.id === row.id))?.transactionId;
       const invoice = transactionId && groupInvoices(saved.data.documents || []).find(item => item.id === transactionId);
-      if (invoice?.settlementVersion === 1) setSelectedInvoice(invoice);
+      if ([1, 3].includes(invoice?.settlementVersion)) setSelectedInvoice(invoice);
       setFormMessage({ type: 'success', text: invoice ? `سند شمارهٔ ${formatNumber(invoice.number)} با ${formatNumber(invoice.rows.length)} ردیف ثبت شد؛ موجودی و حساب مشتری به‌روز شد.` : successMessage });
     } catch (error) {
       setDocumentLocked(ownerStorage.status().recovery?.requestId === requestId);
@@ -1306,7 +1300,6 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
           showInvoiceErrors(errors); return;
         }
       }
-      if (new Set(forms.map(line => getDocumentType(line.type).direction)).size !== 1) { showInvoiceErrors({ invoiceRows: 'ردیف‌های سند باید همگی خرید یا همگی فروش باشند.' }); return; }
     }
     setDocumentErrors({});
 
@@ -1332,8 +1325,9 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     const transactionId = crypto.randomUUID();
     const rows = expandInvoiceDraft(documentForm, savedPrices.goldGramPrice, transactionId);
     if (forms.length > 50 || rows.length > 100) { showInvoiceErrors({ invoiceRows: 'حداکثر ۵۰ جنس و ۱۰۰ ردیف در هر سند قابل ثبت است.' }); return; }
-    const payment = saleMode ? invoiceSettlement(rows, documentForm.cashPaid, documentForm.gold18Price ?? savedPrices.goldGramPrice ?? '') : null;
-    if (saleMode) {
+    const hasSales = rows.some(isStockSale);
+    const payment = hasSales ? invoiceSettlement(rows, documentForm.cashPaid, documentForm.gold18Price ?? savedPrices.goldGramPrice ?? '') : null;
+    if (hasSales) {
       const stockError = validateStockSales(rows, documents);
       if (stockError) { setDocumentForm(current => ({ ...current, invoicePaymentStep: false })); showInvoiceErrors({ productCode: stockError }); return; }
       if (!paymentStep) {
@@ -1361,7 +1355,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
         gramDebt: index === 0 ? (payment ? payment.gramDebt : toNumber(documentForm.gramDebt)) : 0,
         rialDebt: index === 0 && !payment ? toNumber(documentForm.rialDebt) : 0,
         ...(payment && index === 0 ? {
-          settlementVersion: 1, cashPaid: payment.cashPaid,
+          settlementVersion: payment.settlementVersion, cashPaid: payment.cashPaid,
           settlementGoldPrice: payment.settlementGoldPrice, settlementRemainder: payment.settlementRemainder,
         } : {}),
         createdAt: recordedAt, recordedAt,
@@ -1372,14 +1366,14 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
     try {
       const latest = currentDocuments();
       // A sale and its stock movement are the same stored record.
-      if (saleMode) {
+      if (hasSales) {
         const stockError = validateStockSales(documentRecords, latest);
         if (stockError) throw new Error(stockError);
       }
       saved = assignProductCodes([...documentRecords, ...latest]);
       const nextCustomers = documentRecords.reduce(upsertCustomerFromDocument, loadUserRecords(CUSTOMERS_KEY, username));
       const savedRecord = saved.find(item => item.id === documentRecords[0].id);
-      await confirmDocument({ documents: saved, customers: nextCustomers }, `سند ثبت شد؛ ${saleMode ? 'موجودی قطعه‌های فروخته‌شده کم شد' : separateSetMode ? `${formatNumber(documentRecords.length)} قطعه با کدهای مستقل به مجموعه اضافه شد` : `جنس با کد ${savedRecord.productCode} وارد صندوق شد`}.`);
+      await confirmDocument({ documents: saved, customers: nextCustomers }, `سند ثبت شد؛ ${payment?.mixed ? 'خرید و فروش و مابه‌التفاوت مشتری ثبت شد' : saleMode ? 'موجودی قطعه‌های فروخته‌شده کم شد' : separateSetMode ? `${formatNumber(documentRecords.length)} قطعه با کدهای مستقل به مجموعه اضافه شد` : `جنس با کد ${savedRecord.productCode} وارد صندوق شد`}.`);
     } catch (error) { setFormMessage({ type: 'error', text: error.message || 'سند ذخیره نشد؛ دوباره تلاش کنید.' }); return; }
   };
 
@@ -1471,7 +1465,7 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
               <fieldset className="document-save-fields" hidden={paymentStep} disabled={documentSaving || documentLocked || paymentStep}>
               {documentTypeSelector}
 
-              <p className="document-required-note">ساعت و دقیقهٔ ثبت، هنگام ذخیره به‌صورت خودکار به وقت ایران ثبت می‌شود.</p>
+              <p className="document-required-note">تاریخ و ساعت فاکتور را می‌توانید برای معامله‌های قبلی هم وارد کنید.</p>
 
               {expenseMode ? <>
                 <p className="document-required-note">هزینه را به تومان، ریال، گرم طلا یا ارز ثبت کنید. معادل تومانی با نرخ همین سند از سود دوره کم می‌شود.</p>
@@ -1502,13 +1496,13 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
               <fieldset className="document-section"><legend>مشخصات مشترک سند</legend>
                 <DocumentField name="invoiceTime" label="ساعت فاکتور" error={documentErrors.invoiceTime}><input type="time" name="invoiceTime" value={documentForm.invoiceTime ?? ''} onChange={updateDocumentField}/></DocumentField><DocumentField name="date" label="تاریخ سند" error={documentErrors.date} required><PersianDateInput name="date" required value={documentForm.date} onChange={updateDocumentField}/></DocumentField>
                 <DocumentField name="gold18Price" label="قیمت هر گرم طلای ۱۸ عیار هنگام ثبت (تومان)" error={documentErrors.gold18Price} required><NumberInput name="gold18Price" inputMode="decimal" value={documentForm.gold18Price ?? savedPrices.goldGramPrice ?? ''} onChange={updateDocumentField} placeholder="نرخ طلای ۱۸ عیار"/></DocumentField>
-                {!saleMode && <>
+                {!invoiceHasSales && <>
                 <DocumentField name="gramDebt" label="بدهی گرمی ما به مشتری" error={documentErrors.gramDebt}><NumberInput name="gramDebt" inputMode="decimal" value={documentForm.gramDebt} onChange={updateDocumentField} placeholder="گرم"/></DocumentField>
                 <DocumentField name="rialDebt" label="بدهی ریالی ما به مشتری" error={documentErrors.rialDebt}><NumberInput name="rialDebt" inputMode="numeric" value={documentForm.rialDebt} onChange={updateDocumentField} placeholder="تومان"/></DocumentField>
                 </>}
                 {!saleMode && <DocumentField className="wide" name="paymentMethod" label="نحوه پرداخت" error={documentErrors.paymentMethod}><textarea name="paymentMethod" rows={3} maxLength={5000} value={documentForm.paymentMethod ?? ''} onChange={updateDocumentField} placeholder="مثلاً بخشی کارت‌به‌کارت و باقی‌مانده با چک؛ جزئیات را بنویسید"/></DocumentField>}
                 <DocumentField className="wide" name="note" label="یادداشت" error={documentErrors.note}><input name="note" value={documentForm.note} onChange={updateDocumentField} placeholder="توضیح تکمیلی"/></DocumentField>
-                <p className="document-required-note wide">{saleMode ? 'پس از محاسبهٔ مبلغ سند، پرداخت نقدی مشتری را وارد می‌کنید و باقی‌مانده با نرخ همین سند به بدهی گرمی تبدیل می‌شود.' : 'مشتری، تاریخ و ماندهٔ بدهی برای کل سند است؛ بدهی فقط یک‌بار در حساب مشتری اعمال می‌شود.'}</p>
+                <p className="document-required-note wide">{invoiceHasSales ? 'پس از کسر خریدها از فروش‌ها، پرداخت نقدی را وارد می‌کنید و باقی‌مانده با نرخ همین سند به بدهی یا طلب گرمی تبدیل می‌شود.' : 'مشتری، تاریخ و ماندهٔ بدهی برای کل سند است؛ بدهی فقط یک‌بار در حساب مشتری اعمال می‌شود.'}</p>
                 <p className="document-required-note wide">نرخ طلا را بررسی کنید؛ همراه با ساعت ثبت در همین سند ذخیره می‌شود و با تغییر نرخ‌های بازار ثابت می‌ماند. مقدار اولیه از آخرین نرخ دستی ثبت‌شده است.</p>
               </fieldset>
               {invoiceRows.length > 0 && <section className="invoice-draft-list" aria-label="ردیف‌های پیش‌نویس سند">
@@ -1594,17 +1588,17 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
 
               </fieldset>
               {paymentStep && <fieldset className="invoice-payment-step" data-invoice-payment-step disabled={documentSaving || documentLocked}>
-                <legend>پرداخت مشتری</legend>
-                <p>مبلغ سند با احتساب اجرت، هزینه‌ها و تخفیف محاسبه شد. مشتری چقدر نقد پرداخت کرده است؟</p>
-                <dl className="invoice-payment-summary"><div><dt>مبلغ قابل پرداخت</dt><dd data-invoice-payment-total>{formatNumber(paymentPreview.total)} تومان</dd></div><div><dt>تخفیف این سند</dt><dd>{formatNumber(previewRows.reduce((sum, row) => sum + documentBreakdown(row).discount, 0))} تومان</dd></div><div><dt>نرخ تبدیل هر گرم طلای ۱۸ عیار</dt><dd>{formatNumber(paymentPreview.settlementGoldPrice)} تومان</dd></div></dl>
-                <DocumentField name="cashPaid" label="مبلغ نقدی پرداخت‌شده (تومان)" error={documentErrors.cashPaid} required><NumberInput name="cashPaid" inputMode="numeric" autoComplete="off" value={documentForm.cashPaid ?? ''} onChange={updateDocumentField} placeholder="اگر پرداختی نشده، صفر وارد کنید"/></DocumentField>
+                <legend>تسویهٔ فاکتور</legend>
+                <p>{paymentPreview.total < 0 ? 'پس از تهاتر کالاها، ما به مشتری بدهکاریم. مبلغ نقدی پرداخت‌شده به مشتری را وارد کنید.' : paymentPreview.total === 0 ? 'ارزش خرید و فروش برابر است؛ پرداخت نقدی را صفر وارد کنید.' : 'پس از کسر خرید از مشتری، مبلغ نقدی دریافت‌شده از مشتری را وارد کنید.'}</p>
+                <dl className="invoice-payment-summary">{paymentPreview.mixed && <><div><dt>فروش به مشتری</dt><dd data-invoice-sale-total>{formatNumber(paymentPreview.saleTotal)} تومان</dd></div><div><dt>خرید از مشتری</dt><dd data-invoice-purchase-total>{formatNumber(paymentPreview.purchaseTotal)} تومان</dd></div></>}<div><dt>{paymentPreview.total < 0 ? 'پرداخت ما به مشتری' : 'دریافت از مشتری'}</dt><dd data-invoice-payment-total>{formatNumber(Math.abs(paymentPreview.total))} تومان</dd></div><div><dt>تخفیف این سند</dt><dd>{formatNumber(previewRows.reduce((sum, row) => sum + documentBreakdown(row).discount, 0))} تومان</dd></div><div><dt>نرخ تبدیل هر گرم طلای ۱۸ عیار</dt><dd>{formatNumber(paymentPreview.settlementGoldPrice)} تومان</dd></div></dl>
+                <DocumentField name="cashPaid" label={paymentPreview.total < 0 ? 'پرداخت نقدی ما به مشتری (تومان)' : 'پرداخت نقدی مشتری (تومان)'} error={documentErrors.cashPaid} required><NumberInput name="cashPaid" inputMode="numeric" autoComplete="off" value={documentForm.cashPaid ?? ''} onChange={updateDocumentField} placeholder="اگر پرداختی نشده، صفر وارد کنید"/></DocumentField>
                 <DocumentField name="paymentMethod" label="نحوه پرداخت" error={documentErrors.paymentMethod}><textarea name="paymentMethod" rows={3} maxLength={5000} value={documentForm.paymentMethod ?? ''} onChange={updateDocumentField} placeholder="مثلاً بخشی کارت‌به‌کارت و باقی‌مانده با چک؛ جزئیات را بنویسید"/></DocumentField>
-                <button type="button" className="button button-ghost" data-invoice-pay-full onClick={() => updateDocumentField({ target: { name: 'cashPaid', value: String(paymentPreview.total) } })}>کل مبلغ پرداخت شده</button>
-                <div className="invoice-payment-result" aria-live="polite"><span>ماندهٔ پرداخت: <strong data-invoice-payment-remainder>{paymentPreview.settlementRemainder == null ? '—' : formatNumber(paymentPreview.settlementRemainder)} تومان</strong></span><span>بدهی گرمی این سند: <strong data-invoice-payment-grams>{paymentPreview.gramDebt == null ? '—' : new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 6 }).format(paymentPreview.gramDebt)} گرم طلای ۱۸ عیار</strong></span></div>
-                <p className="document-required-note">ماندهٔ تومان ÷ نرخ هر گرم = بدهی گرمی. این مقدار به حساب مشتری اضافه و در صورتحساب چاپ می‌شود.</p>
+                <button type="button" className="button button-ghost" data-invoice-pay-full onClick={() => updateDocumentField({ target: { name: 'cashPaid', value: String(Math.abs(paymentPreview.total)) } })}>کل مبلغ پرداخت شده</button>
+                <div className="invoice-payment-result" aria-live="polite"><span>ماندهٔ پرداخت: <strong data-invoice-payment-remainder>{paymentPreview.settlementRemainder == null ? '—' : formatNumber(Math.abs(paymentPreview.settlementRemainder))} تومان</strong></span><span>{paymentPreview.gramDebt < 0 ? 'طلب گرمی مشتری: ' : 'بدهی گرمی مشتری: '}<strong data-invoice-payment-grams>{paymentPreview.gramDebt == null ? '—' : new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 6 }).format(Math.abs(paymentPreview.gramDebt))} گرم طلای ۱۸ عیار</strong></span></div>
+                <p className="document-required-note">ماندهٔ مابه‌التفاوت به طلای ۱۸ عیار تبدیل و به‌عنوان بدهی یا طلب مشتری ثبت می‌شود.</p>
                 <button type="button" className="button button-ghost" data-invoice-payment-back onClick={() => { setDocumentForm(current => ({ ...current, invoicePaymentStep: false })); setDocumentErrors({}); setFormMessage(null); }}>بازگشت به ردیف‌های سند</button>
               </fieldset>}
-              <button className="button button-primary full" type="submit" data-invoice-payment-confirm={paymentStep ? '' : undefined} disabled={documentSaving}><ReceiptText size={17}/> {documentSaving ? 'در حال ذخیره در دیتابیس…' : documentLocked ? 'تلاش دوباره برای ثبت' : expenseMode ? 'ثبت هزینه' : paymentStep ? 'ثبت نهایی و نمایش صورتحساب' : saleMode ? 'محاسبه سند و ثبت پرداخت' : 'ثبت سند'}</button>
+              <button className="button button-primary full" type="submit" data-invoice-payment-confirm={paymentStep ? '' : undefined} disabled={documentSaving}><ReceiptText size={17}/> {documentSaving ? 'در حال ذخیره در دیتابیس…' : documentLocked ? 'تلاش دوباره برای ثبت' : expenseMode ? 'ثبت هزینه' : paymentStep ? 'ثبت نهایی و نمایش صورتحساب' : invoiceHasSales ? 'محاسبه سند و ثبت پرداخت' : 'ثبت سند'}</button>
             </form>}
 
             {activeTool === 'search' && <div className="search-ledger">
@@ -1625,8 +1619,8 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
                       {document.type === 'expense' ? <><strong>هزینه: {expenseSummary(document)}</strong>{document.expenseUnit && document.expenseUnit !== 'toman' && <small>معادل ثبت‌شده: {formatNumber(document.amount)} تومان</small>}{expenseRateSummary(document) && <small>{expenseRateSummary(document)}</small>}</> : <>
                         {invoice.partnerRemittance ? <strong>حواله: {formatDebtGrams(invoice.goldDebit + invoice.goldCredit)} گرم ۷۵۰ / {formatNumber(invoice.tomanDebit + invoice.tomanCredit)} تومان</strong> : <strong>مبلغ کل سند: {formatNumber(invoice.amount)} تومان</strong>}
                         {isTradeDocument(document) && <small data-trade-gold-price>{tradeGoldPriceSummary(document)}</small>}
-                        {invoice.partnerEntryId ? <><small>بدهکار: {formatDebtGrams(invoice.goldDebit)} گرم · بستانکار: {formatDebtGrams(invoice.goldCredit)} گرم</small><small>مانده سند: {formatDebtGrams(invoice.gramDebt)} گرم ۷۵۰{invoice.partnerRemittance && ` / ${formatNumber(invoice.rialDebt)} تومان`}</small></> : <small>بدهی کل سند: {formatDebtGrams(invoice.gramDebt)} گرم / {formatNumber(invoice.rialDebt)} تومان</small>}
-                        {invoice.settlementVersion === 1 && <small>پرداخت نقدی: {formatNumber(invoice.cashPaid)} تومان</small>}
+                        {invoice.partnerEntryId ? <><small>بدهکار: {formatDebtGrams(invoice.goldDebit)} گرم · بستانکار: {formatDebtGrams(invoice.goldCredit)} گرم</small><small>مانده سند: {formatDebtGrams(invoice.gramDebt)} گرم ۷۵۰{invoice.partnerRemittance && ` / ${formatNumber(invoice.rialDebt)} تومان`}</small></> : <small>{invoice.settlementVersion === 3 && invoice.gramDebt < 0 ? 'طلب مشتری' : 'بدهی کل سند'}: {formatDebtGrams(invoice.settlementVersion === 3 ? Math.abs(invoice.gramDebt) : invoice.gramDebt)} گرم / {formatNumber(invoice.rialDebt)} تومان</small>}
+                        {[1, 3].includes(invoice.settlementVersion) && <small>پرداخت نقدی: {formatNumber(invoice.cashPaid)} تومان</small>}
                       </>}
                     </div>
                   </article>;

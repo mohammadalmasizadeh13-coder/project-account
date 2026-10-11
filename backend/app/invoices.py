@@ -84,20 +84,25 @@ def validate_settlement(rows, total):
     if not any(SETTLEMENT_FIELDS.intersection(row) for row in rows):
         return
     first = next(row for row in rows if row["invoiceLine"] == 1)
-    if SETTLEMENT_FIELDS - first.keys() or type(first["settlementVersion"]) is not int or first["settlementVersion"] != 1:
+    if SETTLEMENT_FIELDS - first.keys() or type(first["settlementVersion"]) is not int or first["settlementVersion"] not in (1, 3):
         invoice_error("اطلاعات پرداخت نقدی و تبدیل ماندهٔ فاکتور کامل نیست.")
     if any(SETTLEMENT_FIELDS.intersection(row) for row in rows if row is not first):
         invoice_error("اطلاعات پرداخت فقط یک بار در ردیف اول فاکتور ثبت می‌شود.")
-    if any(not str(row["type"]).endswith("-sale") for row in rows):
+    mixed = first["settlementVersion"] == 3
+    if mixed:
+        if {str(row["type"]).rsplit("-", 1)[-1] for row in rows} != {"sale", "purchase"} or any(row.get("partnerId") or row.get("counterpartyType") == "partner" for row in rows):
+            invoice_error("تسویهٔ ترکیبی باید شامل خرید و فروش همان مشتری باشد.")
+        total = sum(number(row["amount"]) * (1 if is_sale(row) else -1) for row in rows)
+    elif any(not str(row["type"]).endswith("-sale") for row in rows):
         invoice_error("تبدیل خودکار مانده به طلا فقط برای فاکتور فروش است.")
     cash = numeric(first["cashPaid"], "پرداخت نقدی", maximum=Decimal(MAX_SAFE_INTEGER))
-    remainder = numeric(first["settlementRemainder"], "ماندهٔ پرداخت", maximum=Decimal(MAX_SAFE_INTEGER))
+    remainder = numeric(first["settlementRemainder"], "ماندهٔ پرداخت", minimum=Decimal(-MAX_SAFE_INTEGER) if mixed else Decimal(0), maximum=Decimal(MAX_SAFE_INTEGER))
     rate = numeric(first["settlementGoldPrice"], "نرخ تبدیل مانده به طلا")
     if rate <= 0:
         invoice_error("نرخ تبدیل مانده به طلا باید بیشتر از صفر باشد.")
-    if cash != cash.to_integral_value() or cash > total:
+    if cash != cash.to_integral_value() or cash > abs(total):
         invoice_error("پرداخت نقدی باید تومان کامل و حداکثر برابر جمع فاکتور باشد.")
-    if remainder != total - cash:
+    if remainder != total - (-cash if mixed and total < 0 else cash):
         invoice_error("ماندهٔ پرداخت با جمع فاکتور و پرداخت نقدی مطابقت ندارد.")
     with localcontext() as context:
         context.prec = 80
@@ -109,8 +114,8 @@ def validate_settlement(rows, total):
                 invoice_error("مبلغ ردیف با وزن، نرخ، اجرت و تخفیف ثبت‌شده مطابقت ندارد.")
             if numeric(row.get("rialDebt"), "بدهی ریالی") != 0:
                 invoice_error("ماندهٔ این فاکتور به طلا تبدیل شده و بدهی ریالی جداگانه ندارد.")
-        grams = numeric(first.get("gramDebt"), "بدهی گرمی")
-        if remainder > rate * (Decimal("1e12") + Decimal("0.000001")):
+        grams = numeric(first.get("gramDebt"), "بدهی گرمی", minimum=Decimal("-1e12") if mixed else Decimal(0))
+        if abs(remainder) > rate * (Decimal("1e12") + Decimal("0.000001")):
             invoice_error("بدهی گرمی محاسبه‌شده بیش از محدودهٔ مجاز است.")
         if grams != grams.quantize(Decimal("0.000001")) or not rounded_matches(grams, remainder / rate, Decimal("0.000001")):
             invoice_error("بدهی گرمی باید برابر ماندهٔ پرداخت تقسیم بر نرخ طلای ثبت‌شده باشد.")
@@ -123,6 +128,7 @@ def validate_group(rows):
     indexes = []
     headers = []
     total = Decimal(0)
+    mixed_customer = any(row.get("invoiceLine") == 1 and type(row.get("settlementVersion")) is int and row["settlementVersion"] == 3 for row in rows)
     for row in rows:
         line = row.get("invoiceLine")
         if type(line) is not int or type(row.get("invoiceLineCount")) is not int or row["invoiceLineCount"] != count:
@@ -153,9 +159,8 @@ def validate_group(rows):
         direction = kind.rsplit("-", 1)[1]
         if row.get("direction") not in (None, "فروش" if direction == "sale" else "خرید"):
             invoice_error("نوع معاملهٔ ردیف با فاکتور مطابقت ندارد.")
-        # A partner's mixed document explicitly carries both purchase and sale rows.
-        # Keep ordinary customer invoices subject to their single-direction contract.
-        group_direction = ("partner-v3", row["partnerId"]) if row.get("calculationVersion") == 3 and row.get("counterpartyType") == "partner" and row.get("partnerId") == customer else direction
+        # Mixed customer and partner documents explicitly declare their settlement contract.
+        group_direction = "customer-exchange" if mixed_customer else ("partner-v3", row["partnerId"]) if row.get("calculationVersion") == 3 and row.get("counterpartyType") == "partner" and row.get("partnerId") == customer else direction
         headers.append((customer, name.strip(), recorded_date, created_at, row.get("recordedAt"), group_direction,
             document_detail_header(row), row.get("invoiceTime", "")))
         validate_item(row)
@@ -169,7 +174,7 @@ def validate_group(rows):
                     invoice_error("مبلغ ردیف با وزن، نرخ، اجرت و تخفیف ثبت‌شده مطابقت ندارد.")
         total += saved_amount
         for field in ("gramDebt", "rialDebt"):
-            debt = numeric(row.get(field), "ماندهٔ فاکتور", default=0)
+            debt = numeric(row.get(field), "ماندهٔ فاکتور", minimum=Decimal("-1e12") if mixed_customer and field == "gramDebt" else Decimal(0), default=0)
             if line != 1 and debt != 0:
                 invoice_error("ماندهٔ فاکتور فقط یک بار در ردیف اول ثبت می‌شود.")
     if sorted(indexes) != list(range(1, count + 1)) or any(header != headers[0] for header in headers[1:]):
@@ -239,7 +244,16 @@ def prepare_invoices(previous, incoming, connection, *, allow_single_stock_edit=
             protected = ECONOMIC_FIELDS["crafted"] | {"weight750", "itemWeight", "amount", "currentAmount", "profitPercent", "gramPrice"}
             if not allow_single_stock_edit and any(values_differ(field, old.get(field), row.get(field)) for field in protected):
                 invoice_error("مشخصات خرید طلای متفرقه را از بخش اصلاح موجودی تغییر دهید.", 409)
-    incoming = [normalize_misc_purchase(row, prices) if str(row["id"]) not in previous_by_id else row for row in incoming]
+    mixed_transactions = {row.get("transactionId") for row in incoming if isinstance(row.get("transactionId"), str) and row.get("settlementVersion") == 3}
+    normalized = []
+    for row in incoming:
+        updated = normalize_misc_purchase(row, prices) if str(row["id"]) not in previous_by_id else row
+        if updated is not row and isinstance(row.get("transactionId"), str) and row["transactionId"] in mixed_transactions:
+            # Mixed invoices round every line to whole tomans. Validate the
+            # submitted amount below against the normalized physical inputs.
+            updated["amount"] = row.get("amount")
+        normalized.append(updated)
+    incoming = normalized
     for row in incoming:
         if str(row["id"]) not in previous_by_id and is_priced_coin(row):
             normalize_coin_specs(row)
