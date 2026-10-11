@@ -94,10 +94,12 @@ class LedgerEntry(StrictModel):
     transactionId: str | None = Field(default=None, max_length=64)
     documentIds: list[str] = Field(default_factory=list, max_length=100)
     lines: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
-    settlementUnit: Literal["gold", "toman"] | None = None
+    # Persisted v4 ledgers may remain after rolling back the invoice editor.
+    # Read their frozen balances without enabling v4 invoice creation/editing.
+    settlementUnit: Literal["gold", "toman", "mixed"] | None = None
     gold18Price: float | None = Field(default=None, gt=0, le=1e12)
     linkedEntryId: str | None = Field(default=None, max_length=64)
-    calculationVersion: Literal[1, 2, 3] = 1
+    calculationVersion: Literal[1, 2, 3, 4] = 1
     conversionGoldPrice: float | None = Field(default=None, gt=0, le=1e12)
     paidGold: float = Field(default=0, ge=0, le=1e12)
     paidToman: float = Field(default=0, ge=0, le=1e12)
@@ -119,9 +121,11 @@ class LedgerEntry(StrictModel):
 
     @model_validator(mode="after")
     def one_direction(self):
-        if self.type == "mixed" and self.calculationVersion != 3:
+        if self.settlementUnit == "mixed" and self.calculationVersion != 4:
+            raise ValueError("تسویهٔ ترکیبی مربوط به نسخهٔ چهارم محاسبات است.")
+        if self.type == "mixed" and self.calculationVersion not in (3, 4):
             raise ValueError("سند ترکیبی باید با نسخهٔ سوم محاسبات ثبت شود.")
-        if self.calculationVersion != 3 and (self.goldDebit and self.goldCredit or self.tomanDebit and self.tomanCredit):
+        if self.calculationVersion not in (3, 4) and (self.goldDebit and self.goldCredit or self.tomanDebit and self.tomanCredit):
             raise ValueError("ردیف دفتر نمی‌تواند همزمان بدهکار و بستانکار باشد.")
         if not any((self.goldDebit, self.goldCredit, self.tomanDebit, self.tomanCredit)):
             raise ValueError("مقدار ردیف دفتر باید بیشتر از صفر باشد.")
