@@ -96,6 +96,61 @@ def test_sale_edit_recomputes_settlement_and_delete_releases_stock_and_reverses_
     assert repeated.status_code == 200 and repeated.json() == deleted.json()
 
 
+@pytest.mark.parametrize("kind", ["settled-sale", "coin-purchase"])
+def test_historical_price_difference_does_not_block_reversing_saved_document(client, kind):
+    headers = login(client)
+    if kind == "settled-sale":
+        rows, stocks = settled_invoice()
+        # Old pricing inputs no longer reproduce the persisted sale amount.
+        rows[0]["weight"] = "3"
+        account = customer_snapshot(rows)
+    else:
+        rows, stocks = invoice(("coin",)), []
+        rows[0].update(coinPricingVersion=2, coinGroup="ordinary", coinType="پارسیان",
+            coinWeight=1, coinAyar=750, gramPrice=100000, profitFixed=0)
+        account = customer(rows)
+    saved = restore_historical_workspace(client, {**empty_workspace(), "documents": [*rows, *stocks], "customers": [account]})
+    # Editing still validates the economic inputs; deleting reverses saved debt.
+    assert patch(client, headers, saved, rows, {0: {"note": "review"}}).status_code == 422
+    assert client.get("/api/owner/workspace").json() == saved
+    request_id = str(uuid4())
+    removed = remove(client, headers, saved, rows[0]["id"], request_id)
+    assert removed.status_code == 200, removed.text
+    data = removed.json()["data"]
+    assert data["documents"] == stocks
+    assert data["customers"][0]["purchases"] == []
+    assert data["customers"][0]["gramDebt"] == (2 if kind == "settled-sale" else 3)
+    assert data["customers"][0]["rialDebt"] == (300 if kind == "settled-sale" else 200)
+    assert remove(client, headers, saved, rows[0]["id"], request_id).json() == removed.json()
+
+
+def test_delete_still_rejects_an_incomplete_historical_invoice(client):
+    headers = login(client)
+    rows, stocks = settled_invoice()
+    account = customer_snapshot(rows)
+    saved = restore_historical_workspace(client, {**empty_workspace(), "documents": [*rows[:-1], *stocks], "customers": [account]})
+    assert remove(client, headers, saved, rows[0]["id"]).status_code == 422
+    assert client.get("/api/owner/workspace").json() == saved
+
+
+def test_delete_legacy_dual_ledger_sale_reverses_saved_gold_and_cash_debts(client):
+    headers = login(client)
+    rows, stocks = settled_invoice()
+    rows[0].update(settlementVersion=2, gramDebt=12.345678, rialDebt=1234567)
+    for field in ("settlementGoldPrice", "settlementRemainder"):
+        rows[0].pop(field)
+    account = customer(rows)
+    saved = restore_historical_workspace(client, {**empty_workspace(), "documents": [*rows, *stocks], "customers": [account]})
+    response = remove(client, headers, saved, rows[0]["id"])
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["documents"] == stocks
+    assert data["customers"][0]["gramDebt"] == 3
+    assert data["customers"][0]["rialDebt"] == 200
+    assert data["customers"][0]["purchases"] == []
+    assert data["customers"][0]["settlements"] == account["settlements"]
+
+
 def test_overselling_edited_invoice_including_repeated_source_is_atomic(client):
     headers = login(client)
     stock = source(count="3")

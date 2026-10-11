@@ -280,7 +280,10 @@ try {
   assert.equal(await numberValue(rowField('itemCount')), '1', 'Editor reopens the persisted quantity');
   assert.equal(await numberValue(editField('cashPaid')), '6000000', 'Editor reopens the persisted payment');
   await click('[data-document-action-cancel]');
-  await openAction(invoiceId, 'delete'); await confirmDelete();
+  await tool('vault');
+  await click(`[data-inventory-id="${ring.id}"] > summary`);
+  await click(`[data-inventory-id="${ring.id}"] .vault-item-history > summary`);
+  await click(`[data-delete-sale="${saleRows[0].id}"]`); await confirmDelete();
   const deleted = await workspace();
   assert.equal(deleted.data.documents.some(row => row.transactionId === invoiceId), false, 'Delete removes every invoice row atomically');
   const clearedCustomer = deleted.data.customers.find(customer => customer.id === customerId);
@@ -336,6 +339,15 @@ try {
   assert.deepEqual(final.data.documents, deleted.data.documents, 'Unrelated stock entries survive expense changes');
   await go('/account'); await ready('.workspace-page');
   assert.deepEqual(await workspace(), final, 'Deletion persists after reload');
+  await tool('vault');
+  await click(`[data-inventory-id="${ring.id}"] > summary`);
+  await click(`[data-delete-stock="${ring.id}"]`);
+  await click('[data-confirm-stock-action="delete"]');
+  await until(`!document.querySelector('[data-confirm-stock-action="delete"]')`);
+  const afterOpeningDelete = await workspace();
+  assert.equal(afterOpeningDelete.data.documents.some(row => row.id === ring.id), false, 'Opening stock deletion removes its inventory entry');
+  assert.deepEqual(afterOpeningDelete.data.documents, final.data.documents.filter(row => row.id !== ring.id));
+  assert.deepEqual(afterOpeningDelete.data.customers, final.data.customers, 'Opening stock deletion leaves customer balances untouched');
   assert.equal(errors.length, 0, `No uncaught browser exceptions: ${JSON.stringify(errors)}`);
   console.log('Document editing browser checks passed: live grouping, Persian pasted amounts, decimal precision and caret movement; whole-invoice edit/delete/cancellation; payment, customer debt/history and inventory reconciliation; expense unit/rate edits; reload persistence; desktop/mobile editor.');
 } catch (error) {

@@ -21,6 +21,7 @@ from .inventory import create_stock, delete_stock, edit_stock, guard_linked_inve
 from .invoices import prepare_invoices, reserve_invoice_numbers
 from .pricing import number
 from .partners import canonical_partner_records, guard_partner_documents, register_partner_routes
+from .runtime import source_revision
 from .security import (COOKIE_NAME, account_request_id, bootstrap_owner, digest, filter_workspace, get_user, has_permission,
     hash_password, issue_session, login_throttle, normalize_username, public_user, require_mutation, require_origin,
     require_owner_mutation, set_session_cookie, verify_password)
@@ -159,6 +160,7 @@ def create_app(settings=None):
     application = FastAPI(title="حسابداری نور", version="2.0.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     application.state.settings = settings
     application.state.engine = engine
+    application.state.source_revision = source_revision()
     application.add_middleware(BodyLimitMiddleware)
     application.add_middleware(CORSMiddleware, allow_origins=list(settings.origins), allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Content-Type", "X-CSRF-Token", "X-Account-ID"])
@@ -178,7 +180,7 @@ def create_app(settings=None):
 
     @application.get("/api/health")
     def health():
-        return {"status": "ok", "service": "noor-gold-api"}
+        return {"status": "ok", "service": "noor-gold-api", "sourceRevision": application.state.source_revision}
 
     @application.post("/api/auth/login", dependencies=[Depends(require_origin)])
     def login(payload: LoginInput, request: Request, response: Response):

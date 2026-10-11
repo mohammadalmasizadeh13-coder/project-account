@@ -30,7 +30,9 @@ export async function api(path, options = {}) {
       globalThis.dispatchEvent?.(new Event('noor-session-expired'));
     }
     const detail = payload?.detail;
-    const error = new Error(typeof detail === 'string' ? detail : response.status === 422
+    const error = new Error(response.status === 405
+      ? 'نسخهٔ سرور این عملیات را پشتیبانی نمی‌کند. راه‌انداز حسابداری را دوباره اجرا کنید تا سرور به‌روز شود، سپس دوباره تلاش کنید.'
+      : typeof detail === 'string' ? detail : response.status === 422
       ? 'اطلاعات واردشده معتبر نیست؛ مقدار فیلدها را بررسی کنید.' : response.status === 403
         ? 'برای این بخش دسترسی ندارید؛ با مالک حساب هماهنگ کنید.'
         : 'سرور حسابداری پاسخ نمی‌دهد؛ برنامه را با راه‌انداز حسابداری اجرا و دوباره تلاش کنید.');

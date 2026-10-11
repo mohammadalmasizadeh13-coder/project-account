@@ -58,3 +58,16 @@ test('expired workspace session signals the shell; rejected login stays in its f
   await assert.rejects(api('/api/owner/workspace'), { status: 401 });
   assert.deepEqual(events, ['noor-session-expired']);
 });
+
+test('an outdated server gives restart guidance and never retries a delete with a different method', async t => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const calls = [];
+  globalThis.fetch = async (path, options) => {
+    calls.push({ path, method: options.method });
+    return { ok: false, status: 405, json: async () => ({ detail: 'Method Not Allowed' }) };
+  };
+  await assert.rejects(api('/api/owner/partners/one/settlements/two', { method: 'DELETE', body: { revision: 3 } }),
+    error => error.status === 405 && error.message.includes('راه‌انداز') && !error.message.includes('Method Not Allowed'));
+  assert.deepEqual(calls, [{ path: '/api/owner/partners/one/settlements/two', method: 'DELETE' }]);
+});

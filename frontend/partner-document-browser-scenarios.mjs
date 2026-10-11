@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { navigateWorkspace } from './browser-navigation.mjs';
+import { inventoryReport } from './src/inventory.js';
 
 // Exercise the real forms, server ledger, modal actions, and restricted staff UI.
 export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until, go, fill, click, resize, screenshot, workspace }) {
@@ -9,6 +11,11 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   const data = async () => (await workspace()).data;
   const partner = async () => (await data()).partners[0];
   const entry = async id => (await partner()).entries.find(saved => saved.id === id);
+  const vault = async id => {
+    await navigateWorkspace('vault', { click, evaluate, pause: ms => new Promise(resolve => setTimeout(resolve, ms)) });
+    await ready(`[data-inventory-id="${id}"]`);
+    if (!await evaluate(`document.querySelector('[data-inventory-id="${id}"]').open`)) await click(`[data-inventory-id="${id}"] > summary`);
+  };
   const api = (path, options = {}) => evaluate(`(async () => {
     const session=await fetch('/api/auth/session').then(r=>r.json());
     const options=${JSON.stringify(options)};
@@ -273,6 +280,14 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   assert.deepEqual(await workspace(), beforeDelete);
   await close();
 
+  // A partner sale is reachable from its stock history; cancel keeps both ledgers.
+  await vault(purchase.documentIds[0]);
+  assert.equal(await evaluate(`document.querySelector('[data-delete-stock="${purchase.documentIds[0]}"]').disabled`), true);
+  await click(`[data-inventory-id="${purchase.documentIds[0]}"] .vault-item-history > summary`);
+  await click(`[data-delete-sale="${sale.documentIds[0]}"]`); await ready('[data-partner-delete-confirm]');
+  await click('[data-cancel-partner-delete]'); await close();
+  assert.deepEqual(await workspace(), beforeDelete);
+
   // Delete from search, then lose the successful response: retry the same request.
   await click('[data-section="reports"]'); await click('[data-tool="search"]');
   await click(`[data-invoice-id="${sale.transactionId}"] [data-invoice-delete]`);
@@ -295,12 +310,18 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   assert.equal((await partner()).goldBalance, Number((saved.partners[0].goldBalance + 4).toFixed(6)));
   assert.deepEqual(afterSaleDelete.data.documents, beforeDelete.data.documents.filter(document => !sale.documentIds.includes(document.id)));
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-invoice-id="${sale.transactionId}"]'))`), false);
-  await click(`[data-invoice-id="${purchase.transactionId}"] [data-invoice-delete]`);
+  const restoredStock = inventoryReport(afterSaleDelete.data.documents).items.find(item => item.id === purchase.documentIds[0]);
+  assert.equal(restoredStock.remaining, restoredStock.received, 'Deleting the sale returns every sold unit');
+  await vault(purchase.documentIds[0]);
+  assert.equal(await evaluate(`document.querySelector('[data-delete-stock="${purchase.documentIds[0]}"]').disabled`), false);
+  await click(`[data-delete-stock="${purchase.documentIds[0]}"]`); await ready('[data-partner-delete-confirm]');
   await click('[data-confirm-partner-delete]'); await until(`!document.querySelector('${dialog}')`);
   assert.equal(await entry(purchase.id), undefined);
   assert.equal((await partner()).goldBalance, Number((saved.partners[0].goldBalance - 4).toFixed(6)));
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-inventory-id="${purchase.documentIds[0]}"]'))`), false);
 
   // Opening a confirmation never grants permission to delete a later revision.
+  await click('[data-section="reports"]'); await click('[data-tool="search"]');
   await click(`${card} [data-invoice-delete]`); await ready('[data-partner-delete-confirm]');
   const atConfirmation = await workspace();
   const changed = await api(`/api/owner/partners/${atConfirmation.data.partners[0].id}`, { method: 'PATCH', body: {
@@ -358,6 +379,16 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   assert.equal(await evaluate(`document.querySelector('.invoice-item-description').textContent`), 'سکه گل رز ۴۰۰');
   await cdp('Emulation.setEmulatedMedia', { media: 'screen' });
   await click('[data-invoice-close]');
+  await vault(coin.id);
+  await click(`[data-delete-stock="${coin.id}"]`); await ready('[data-document-action="delete"]');
+  await click('[data-confirm-document-action="delete"]');
+  await until(`!document.querySelector('[data-document-action="delete"]')`);
+  const afterCustomerDelete = await data();
+  assert.equal(afterCustomerDelete.documents.some(row => row.id === coin.id), false);
+  const customerAfterDelete = afterCustomerDelete.customers.find(customer => customer.id === coin.customerId);
+  assert.equal(customerAfterDelete.purchases.length, 0);
+  assert.equal(Number(customerAfterDelete.gramDebt), 0);
+  assert.equal(Number(customerAfterDelete.rialDebt), 0);
   const coinWorkspace = await workspace();
   const partnerCoin = await api(`/api/owner/partners/${coinWorkspace.data.partners[0].id}/invoices`, { method: 'POST', body: {
     revision: coinWorkspace.revision, requestId: await evaluate('crypto.randomUUID()'), date: '2026-10-11', calculationVersion: 3,

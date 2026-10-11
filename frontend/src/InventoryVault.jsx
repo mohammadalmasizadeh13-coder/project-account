@@ -103,10 +103,11 @@ const vaultItemName = item => item.itemName || (item.description !== item.typeLa
     || (item.category === 'currency' && currencyName(item.currencyType)) || stockCategories[item.category];
 const itemHasSales = item => !!item.sales?.length || parseNumber(item.sold) > 0;
 
-function VaultItem({ item, value, prices, onSell, onEdit, onDelete, canEditPurchases, deleteRestriction }) {
+function VaultItem({ item, value, prices, onSell, onEdit, onDelete, canEditPurchases, deleteRestriction, onDocumentAction, canChangeDocument }) {
   const name = vaultItemName(item);
-  const mayChangeRecord = item.source === 'opening-inventory' || canEditPurchases;
-  const deleteReason = itemHasSales(item) ? 'این جنس فروش مرتبط دارد و قابل حذف نیست.' : deleteRestriction?.(item) || '';
+  const purchaseDocument = item.source !== 'opening-inventory' && Boolean(onDocumentAction);
+  const mayChangeRecord = item.source === 'opening-inventory' || (purchaseDocument ? canChangeDocument(item) : canEditPurchases);
+  const deleteReason = itemHasSales(item) ? 'برای حذف این جنس، ابتدا سند فروش مرتبط را از «سوابق ورود و فروش» حذف کنید.' : purchaseDocument ? '' : deleteRestriction?.(item) || '';
   const unitValue = documentBreakdown({ ...item, itemCount: 1, coinCount: 1, currencyAmount: 1 }, prices);
   const specifications = [];
   if (item.category === 'crafted') {
@@ -148,10 +149,11 @@ function VaultItem({ item, value, prices, onSell, onEdit, onDelete, canEditPurch
       <div className="vault-item-top"><span>{isMiscPurchase(item) ? 'طلای متفرقه' : stockCategories[item.category]}</span><bdi className="vault-code" dir="ltr">{item.productCode}</bdi></div>
       {(onEdit || onDelete) && <section className="vault-item-controls" aria-label={`مدیریت ${name}`}>
         <div className="vault-item-tools">
-          {onEdit && <button type="button" className="button button-ghost" data-edit-stock={item.id} disabled={!mayChangeRecord} onClick={event => onEdit(item, event.currentTarget)}><Pencil size={16} aria-hidden="true"/>ویرایش جنس</button>}
-          {onDelete && <button type="button" className="button button-ghost vault-item-delete" data-delete-stock={item.id} disabled={!mayChangeRecord || !!deleteReason} title={deleteReason || undefined} onClick={event => onDelete(item, event.currentTarget)}><Trash2 size={16} aria-hidden="true"/>حذف جنس</button>}
+          {onEdit && <button type="button" className="button button-ghost" data-edit-stock={item.id} disabled={!mayChangeRecord} onClick={event => onEdit(item, event.currentTarget)}><Pencil size={16} aria-hidden="true"/>{purchaseDocument ? 'ویرایش سند خرید' : 'ویرایش جنس'}</button>}
+          {onDelete && <button type="button" className="button button-ghost vault-item-delete" data-delete-stock={item.id} disabled={!mayChangeRecord || !!deleteReason} title={deleteReason || undefined} onClick={event => onDelete(item, event.currentTarget)}><Trash2 size={16} aria-hidden="true"/>{purchaseDocument ? 'حذف سند خرید' : 'حذف جنس'}</button>}
         </div>
-        {(onEdit || onDelete) && !mayChangeRecord && <p className="vault-item-control-note">ویرایش و حذف خرید به دسترسی ویرایش اسناد و مشتریان نیاز دارد.</p>}
+        {(onEdit || onDelete) && !mayChangeRecord && <p className="vault-item-control-note">برای تغییر سند خرید، دسترسی ویرایش اسناد و دفتر طرف حساب لازم است.</p>}
+        {onDelete && mayChangeRecord && purchaseDocument && !deleteReason && <p className="vault-item-control-note">حذف سند خرید شامل همهٔ ردیف‌های همان سند و اصلاح ماندهٔ طرف حساب است.</p>}
         {onDelete && mayChangeRecord && deleteReason && <p className="vault-item-control-note">{deleteReason}{itemHasSales(item) && onEdit ? ' نام، شرح و یادداشت همچنان قابل ویرایش است.' : ''}</p>}
       </section>}
       <h3>مشخصات جنس</h3>
@@ -179,7 +181,7 @@ function VaultItem({ item, value, prices, onSell, onEdit, onDelete, canEditPurch
       </dl>
       {item.remaining > 0 && <div className="vault-item-value"><span>ارزش کل موجودی این جنس</span><strong>{number(value?.total)} تومان</strong><small>اجرت: {number(value?.wage)} · هزینه‌های دیگر: {number(value?.costs)} · سود: {number(value?.profit)} تومان</small></div>}
       {item.remaining > 0 ? onSell && <button type="button" className="button button-primary" onClick={() => onSell(item)}>فروش این جنس</button> : <span className="vault-empty-badge">اتمام موجودی</span>}
-      <details className="vault-item-history"><summary>سوابق ورود و فروش</summary><p>{formatRecordDate(item)} · {item.source === 'opening-inventory' ? 'موجودی اولیه' : `خرید از ${item.customerName}`} · {number(item.received)} {stockUnit(item)}</p>{item.sales.map(sale => <p key={sale.id}>{formatRecordDate(sale)} · فروش به {sale.customerName} · {number(stockQuantity(sale))} {stockUnit(sale)}</p>)}</details>
+      <details className="vault-item-history"><summary>سوابق ورود و فروش</summary><p>{formatRecordDate(item)} · {item.source === 'opening-inventory' ? 'موجودی اولیه' : `خرید از ${item.customerName}`} · {number(item.received)} {stockUnit(item)}</p>{item.sales.map(sale => <p key={sale.id}>{formatRecordDate(sale)} · فروش به {sale.customerName} · {number(stockQuantity(sale))} {stockUnit(sale)} {onDocumentAction && canChangeDocument(sale) && <button type="button" className="button button-ghost document-delete-link" data-delete-sale={sale.id} onClick={() => onDocumentAction(sale, 'delete')}>حذف سند فروش</button>}</p>)}</details>
     </div>
   </details>;
 }
@@ -200,7 +202,7 @@ function VaultSet({ group, assets, prices, onSell, onSellSet, itemActions }) {
   </section>;
 }
 
-export default function InventoryVault({ report, assets, prices, onPrices, onSell, onSellSet, onReceive, onLinkSale, onEditItem, onDeleteItem, onCreateItem, canEditPurchases = false }) {
+export default function InventoryVault({ report, assets, prices, onPrices, onSell, onSellSet, onReceive, onLinkSale, onEditItem, onDeleteItem, onCreateItem, canEditPurchases = false, onDocumentAction, canChangeDocument = () => false }) {
   const [filters, setFilters] = useState(() => ({ ...defaultVaultFilters }));
   const [links, setLinks] = useState({});
   const [message, setMessage] = useState(null);
@@ -240,9 +242,9 @@ export default function InventoryVault({ report, assets, prices, onPrices, onSel
     return '';
   };
   const itemActions = {
-    onEdit: onEditItem ? (item, target) => openEditor(item, 'edit', target) : undefined,
-    onDelete: onDeleteItem ? (item, target) => openEditor(item, 'delete', target) : undefined,
-    canEditPurchases, deleteRestriction,
+    onEdit: onEditItem ? (item, target) => item.source !== 'opening-inventory' && onDocumentAction ? onDocumentAction(item, 'edit') : openEditor(item, 'edit', target) : undefined,
+    onDelete: onDeleteItem ? (item, target) => item.source !== 'opening-inventory' && onDocumentAction ? onDocumentAction(item, 'delete') : openEditor(item, 'delete', target) : undefined,
+    canEditPurchases, deleteRestriction, onDocumentAction, canChangeDocument,
   };
   const linkSale = sale => {
     if (!onLinkSale) return;

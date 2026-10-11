@@ -121,7 +121,10 @@ def validate_settlement(rows, total):
             invoice_error("بدهی گرمی باید برابر ماندهٔ پرداخت تقسیم بر نرخ طلای ثبت‌شده باشد.")
 
 
-def validate_group(rows):
+def validate_group(rows, *, for_deletion=False):
+    # Deletion reverses persisted amounts; it must not reprice an old invoice.
+    # Group identity and stored debt integrity are still required, including
+    # for historical settlement versions with separate gold and cash balances.
     count = len(rows)
     if not 1 <= count <= MAX_INVOICE_LINES:
         invoice_error("فاکتور باید بین یک تا صد ردیف داشته باشد.")
@@ -165,7 +168,7 @@ def validate_group(rows):
             document_detail_header(row), row.get("invoiceTime", "")))
         validate_item(row)
         saved_amount = numeric(row.get("amount"), "مبلغ ردیف", maximum=Decimal(MAX_SAFE_INTEGER))
-        if is_priced_coin(row) or is_sale(row) and number(row.get("discountPercent")) > 0:
+        if not for_deletion and (is_priced_coin(row) or is_sale(row) and number(row.get("discountPercent")) > 0):
             with localcontext() as context:
                 context.prec = 80
                 exact = settlement_row_total(row)
@@ -181,7 +184,8 @@ def validate_group(rows):
         invoice_error()
     if total > MAX_SAFE_INTEGER:
         invoice_error("جمع مبلغ فاکتور بیش از محدودهٔ مجاز است.")
-    validate_settlement(rows, total)
+    if not for_deletion:
+        validate_settlement(rows, total)
 
 
 def guard_invoice_stock(incoming, new_rows):

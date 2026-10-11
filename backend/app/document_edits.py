@@ -49,7 +49,7 @@ class DocumentChanges(DocumentRevision):
     rows: list[DocumentLineChanges] = Field(min_length=1, max_length=100)
 
 
-def find_document_group(documents, identifier):
+def find_document_group(documents, identifier, *, removing=False):
     selected = next((row for row in documents if str(row["id"]) == identifier), None)
     if selected is None:
         raise HTTPException(404, "سند پیدا نشد.")
@@ -69,7 +69,7 @@ def find_document_group(documents, identifier):
     if any(row.get("category") not in STOCK_TYPES and row.get("type") != "expense" for row in rows):
         raise HTTPException(409, "این نوع سند از بخش مربوط به خودش قابل اصلاح است.")
     if any(row.get("invoiceVersion") == 1 for row in rows):
-        validate_group(rows)
+        validate_group(rows, for_deletion=removing)
     return rows
 
 
@@ -205,7 +205,7 @@ def synchronize_customers(data, old_rows, new_rows):
 
 def correct_documents(data, identifier, requested_rows, identity):
     result = deepcopy(data)
-    old_rows = find_document_group(data["documents"], identifier)
+    old_rows = find_document_group(data["documents"], identifier, removing=requested_rows is None)
     if any(row.get("type") != "expense" for row in old_rows) and not has_permission(identity, "customers.write"):
         raise HTTPException(403, "اصلاح این سند به اجازهٔ ویرایش مشتریان نیز نیاز دارد.")
     ids = {str(row["id"]) for row in old_rows}
