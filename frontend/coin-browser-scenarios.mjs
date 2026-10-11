@@ -58,7 +58,7 @@ export async function checkCoinTrading({ cdp, evaluate, ready, until, go, fill, 
   assert.ok(sale); almost(sale.amount, 20505160);
   almost((await data()).documents.find(row => row.id === purchase.id).amount, 21571120);
   await ready('[data-invoice-close]');
-  assert.ok((await evaluate(`document.querySelector('.invoice-sheet').textContent`)).includes('۹٫۷۵۹۶'));
+  assert.equal(await evaluate(`document.querySelector('.invoice-item-description').textContent`), sale.itemName);
   await click('[data-invoice-close]');
 
   // Custom weight and purity are retained in the customer's new purchase.

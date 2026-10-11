@@ -289,7 +289,7 @@ export function createWorkspaceStorage(request = api, delay = 150, recoveryStora
         if (generation === mutationGeneration) { mutatingInventory = false; notify(); }
       }
     },
-    async mutatePartner(action, identifier, payload, requestId) {
+    async mutatePartner(action, identifier, payload, requestId, expectedRevision) {
       if (!allowedFields.has('partners')) throw new Error('برای تغییر حساب همکاران دسترسی ندارید.');
       if (['invoice', 'invoice-update', 'invoice-delete'].includes(action) && !allowedFields.has('documents')) throw new Error('برای ثبت فاکتور همکار، دسترسی ثبت اسناد نیز لازم است.');
       if (['invoice-update', 'settlement-update', 'invoice-delete', 'settlement-delete'].includes(action) && !String(payload?.entryId || '').trim()) throw new Error('شناسهٔ سند همکار مشخص نیست.');
@@ -308,7 +308,7 @@ export function createWorkspaceStorage(request = api, delay = 150, recoveryStora
       const [suffix, method] = routes[action];
       mutatingInventory = true; notify();
       try {
-        const body = { ...structuredClone(payload), revision, requestId };
+        const body = { ...structuredClone(payload), revision: expectedRevision ?? revision, requestId };
         if (['invoice-update', 'settlement-update', 'invoice-delete', 'settlement-delete'].includes(action)) delete body.entryId;
         const saved = await request(`/api/owner/partners${suffix}`, { method, body });
         if (generation !== mutationGeneration || !active) return null;

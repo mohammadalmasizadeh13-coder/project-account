@@ -4,26 +4,19 @@ import { Printer, X } from 'lucide-react';
 import { documentBreakdown, number, quantity } from './assets';
 import { formatRecordDate } from './recordTime';
 import { invoiceItemName, invoiceRowAmount } from './invoices';
-import { isMiscPurchase, miscGoldWeight750 } from './miscGold.js';
-import { coinSpec, coinSummary, isModernCoin, isOrdinaryCoin } from './coins.js';
+import { coinSpec, isModernCoin, isOrdinaryCoin } from './coins.js';
 import { GalleryAccountContext } from './GalleryAccountContext.js';
 import './invoice.css';
 
 const decimal = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 3 }).format(number(value));
 const debtGrams = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 6 }).format(number(value));
 const money = value => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(number(value));
-const categories = { crafted: 'کار ساخته', melted: 'طلای آبشده', coin: 'سکه', currency: 'ارز', expense: 'هزینه' };
 const rowWeight = row => {
   const unitWeight = row.category === 'crafted' ? number(row.weight) : row.category === 'melted' ? number(row.meltedWeight) : row.category === 'coin' && isModernCoin(row) && coinSpec(row).weight ? coinSpec(row).weight : row.category === 'coin' && row.coinType === 'پارسیان' ? number(row.parsianWeight) : null;
   return unitWeight == null ? null : unitWeight * quantity(row);
 };
 const rowPurity = row => row.category === 'crafted' ? (row.ayar || 750) : row.category === 'melted' ? (row.meltedAyar || 750) : row.category === 'coin' && isModernCoin(row) && coinSpec(row).ayar ? coinSpec(row).ayar : null;
 const rowRate = row => row.category === 'crafted' ? row.gramPrice : row.category === 'melted' ? row.meltedGramPrice : row.category === 'coin' ? (isOrdinaryCoin(row) ? row.gramPrice : !isModernCoin(row) && row.coinType === 'پارسیان' ? row.parsianPrice : row.coinPrice) : row.category === 'currency' ? row.currencyRate : null;
-
-function CoinDetails({ row }) {
-  if (row.category !== 'coin' || !isModernCoin(row)) return null;
-  return <><small data-invoice-coin-spec>{coinSummary(row)}</small><small data-invoice-coin-profit>سود: {decimal(row.profitPercent)}٪ + {money(row.profitFixed)} تومان برای هر سکه</small>{coinSpec(row).weight > 0 && <small>وزن کل عیار ۷۵۰: {debtGrams(coinSpec(row).weight750 * quantity(row))} گرم</small>}</>;
-}
 
 const printOffset = value => Math.max(-5, Math.min(5, Number(value) || 0));
 const printSettingsKey = accountId => accountId == null || accountId === '' ? null : 'zar-invoice-print:' + accountId;
@@ -131,7 +124,7 @@ export default function InvoiceDetails({ invoice, galleryName, accountId, onClos
         </header>
         <div className="invoice-content">
         <div className="invoice-table-scroll"><table className="invoice-items"><caption className="invoice-table-caption">مشخصات کالاها؛ وزن هر ردیف مجموع وزن همان کالا است. مبالغ به تومان است.</caption><colgroup><col className="invoice-col-index"/><col className="invoice-col-description"/><col className="invoice-col-wage"/><col className="invoice-col-purity"/><col className="invoice-col-weight"/><col className="invoice-col-rate"/><col className="invoice-col-amount"/></colgroup><thead><tr><th scope="col">ردیف</th><th scope="col">شرح کالا</th><th scope="col">اجرت<br/><small>درصد</small></th><th scope="col">عیار</th><th scope="col">وزن کل<br/><small>گرم</small></th><th scope="col">فی<br/><small>تومان</small></th><th scope="col">مبلغ<br/><small>تومان</small></th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.id || index} data-invoice-item={row.id || index} data-invoice-detail-line={index + 1}>
-          <td>{decimal(index + 1)}</td><td className="invoice-item-description"><strong>{invoiceItemName(row)}</strong>{isMixed && <small data-invoice-row-direction>{row.type?.endsWith('-sale') ? 'تحویل به مشتری' : 'دریافت از مشتری'}</small>}<small>{isMiscPurchase(row) ? 'طلای متفرقه' : row.category === 'crafted' ? row.craftedKind || categories.crafted : categories[row.category] || row.typeLabel}</small><CoinDetails row={row}/>{isMiscPurchase(row) && <small>وزن معادل ۷۵۰: <span data-invoice-misc-weight750>{debtGrams(miscGoldWeight750(row) * quantity(row))}</span> گرم</small>}{row.category === 'melted' && <small>انگ: <bdi>{row.assayCode || '—'}</bdi>{row.laboratoryName && ` · ${row.laboratoryName}`}<br/>وزن معادل ۷۵۰: {decimal(number(row.meltedWeight) * number(row.meltedAyar || 750) / 750 * quantity(row))} گرم</small>}{row.type?.endsWith('-sale') && number(row.discountPercent) > 0 && <small data-invoice-discount-percent>تخفیف درصدی: {decimal(row.discountPercent)}٪{number(row.discountRial) > 0 && ` + ${money(row.discountRial)} تومان تخفیف ریالی`}</small>}</td>
+          <td>{decimal(index + 1)}</td><td className="invoice-item-description"><strong>{invoiceItemName(row)}</strong></td>
           <td data-invoice-wage>{row.category !== 'currency' && number(row.wagePercent) > 0 ? `${decimal(row.wagePercent)}٪` : ''}</td><td>{rowPurity(row) == null ? '—' : decimal(rowPurity(row))}</td><td data-invoice-weight>{rowWeight(row) == null ? '—' : decimal(rowWeight(row))}</td><td>{rowRate(row) == null ? '—' : money(rowRate(row))}{(['crafted', 'melted'].includes(row.category) || (row.category === 'coin' && isOrdinaryCoin(row))) && <small>هر گرم ۷۵۰</small>}</td><td className="invoice-row-total">{money(invoiceRowAmount(row))}</td>
         </tr>)}{Array.from({ length: Math.max(0, (isMixed ? 0 : 4) - rows.length) }, (_, index) => <tr className="invoice-empty-row" aria-hidden="true" key={`empty-${index}`}><td>{decimal(rows.length + index + 1)}</td><td/><td/><td/><td/><td/><td/></tr>)}</tbody></table></div>
         <div className="invoice-bottom">

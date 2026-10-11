@@ -35,6 +35,7 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
     await ready(`${dialog} [data-invoice-print]`);
     await until(`!document.querySelector('${invoice}') && !document.querySelector('${settlement}')`, 'Saved document returns to preview');
     assert.equal(await evaluate(`Boolean(document.querySelector('${dialog} [data-invoice-edit]'))`), editable);
+    assert.equal(await evaluate(`Boolean(document.querySelector('${dialog} [data-invoice-delete]'))`), editable);
     if (text) assert.equal(await evaluate(`document.querySelector('${dialog}').textContent.includes(${JSON.stringify(text)})`), true);
   };
   const close = async () => {
@@ -91,6 +92,7 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   await fields('[data-partner-invoice]', { paidGold: '1', refNumber: 'پرداخت خرید فوری' });
   await click('[data-partner-invoice-save]');
   await preview({ text: 'انگشتر آزمون گردش' });
+  assert.equal(await evaluate(`document.querySelector('${dialog} [data-partner-item-description]').textContent`), 'انگشتر آزمون گردش');
   const purchased = await data();
   const purchase = purchased.partners[0].entries.find(saved => saved.type === 'purchase');
   assert.equal(purchase.paidGold, 1);
@@ -228,6 +230,7 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   await cdp('Emulation.setEmulatedMedia', { media: 'print' });
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('#root')).display`), 'none');
   assert.equal(await evaluate(`document.querySelector('${dialog} table').getBoundingClientRect().height > 0`), true);
+  assert.equal(await evaluate(`document.querySelector('${dialog} [data-partner-item-description]').textContent`), 'سند قدیمی دو حسابی');
   const printed = await cdp('Page.printToPDF', { preferCSSPageSize: true, printBackground: false });
   assert.ok(Buffer.from(printed.data, 'base64').length > 1000, 'The partner document produces a nonempty PDF');
   await cdp('Emulation.setEmulatedMedia', { media: 'screen' });
@@ -257,6 +260,117 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   assert.deepEqual((await data()).partners, saved.partners, 'All edits survive a full reload');
   assert.equal(await evaluate(`document.querySelectorAll('[data-partner-entry-edit]').length`), saved.partners[0].entries.length, 'Every ledger row can be edited');
 
+  // Cancel is inert; a sold purchase cannot be removed while its sale remains.
+  const beforeDelete = await workspace();
+  await click(`${row(purchase.id)} [data-partner-entry-delete]`);
+  await ready('[data-partner-delete-confirm]');
+  await click('[data-cancel-partner-delete]'); await preview();
+  assert.deepEqual(await workspace(), beforeDelete);
+  await click(`${dialog} [data-invoice-delete]`);
+  await click('[data-confirm-partner-delete]');
+  await ready('[data-partner-delete-confirm] [role="alert"]');
+  assert.ok((await evaluate(`document.querySelector('[data-partner-delete-confirm] [role="alert"]').textContent`)).includes('سابقه'));
+  assert.deepEqual(await workspace(), beforeDelete);
+  await close();
+
+  // Delete from search, then lose the successful response: retry the same request.
+  await click('[data-section="reports"]'); await click('[data-tool="search"]');
+  await click(`[data-invoice-id="${sale.transactionId}"] [data-invoice-delete]`);
+  await ready('[data-partner-delete-confirm]');
+  await evaluate(`window.__deleteRequests=[]; window.__originalFetch=window.fetch; window.fetch=async (...args)=>{
+    const deleting=args[1]?.method==='DELETE';
+    if(deleting) window.__deleteRequests.push(JSON.parse(args[1].body));
+    const response=await window.__originalFetch(...args);
+    if(deleting && window.__deleteRequests.length===1 && response.ok) throw new TypeError('Lost delete response');
+    return response;
+  };`);
+  await click('[data-confirm-partner-delete]'); await ready('[data-partner-delete-confirm] [role="alert"]');
+  assert.equal(await entry(sale.id), undefined, 'The server committed before its acknowledgment was lost');
+  await click('[data-confirm-partner-delete]'); await until(`!document.querySelector('${dialog}')`);
+  const attempts = await evaluate('window.__deleteRequests');
+  assert.equal(attempts.length, 2); assert.deepEqual(attempts[0], attempts[1]);
+  await evaluate('window.fetch=window.__originalFetch');
+  const afterSaleDelete = await workspace();
+  assert.equal(afterSaleDelete.revision, beforeDelete.revision + 1, 'Retry does not reverse balances twice');
+  assert.equal((await partner()).goldBalance, Number((saved.partners[0].goldBalance + 4).toFixed(6)));
+  assert.deepEqual(afterSaleDelete.data.documents, beforeDelete.data.documents.filter(document => !sale.documentIds.includes(document.id)));
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-invoice-id="${sale.transactionId}"]'))`), false);
+  await click(`[data-invoice-id="${purchase.transactionId}"] [data-invoice-delete]`);
+  await click('[data-confirm-partner-delete]'); await until(`!document.querySelector('${dialog}')`);
+  assert.equal(await entry(purchase.id), undefined);
+  assert.equal((await partner()).goldBalance, Number((saved.partners[0].goldBalance - 4).toFixed(6)));
+
+  // Opening a confirmation never grants permission to delete a later revision.
+  await click(`${card} [data-invoice-delete]`); await ready('[data-partner-delete-confirm]');
+  const atConfirmation = await workspace();
+  const changed = await api(`/api/owner/partners/${atConfirmation.data.partners[0].id}`, { method: 'PATCH', body: {
+    revision: atConfirmation.revision, requestId: await evaluate('crypto.randomUUID()'), note: 'Concurrent profile change' } });
+  assert.equal(changed.status, 200);
+  await click('[data-confirm-partner-delete]'); await ready('[data-partner-delete-confirm] [role="alert"]');
+  assert.ok(await entry(v4.id));
+  assert.equal((await workspace()).revision, changed.body.revision);
+  await close(); await go('/account'); await ready('.workspace-page'); await statement();
+  await click(`${row(v4.id)} [data-partner-entry-delete]`);
+  await click('[data-confirm-partner-delete]'); await until(`!document.querySelector('${dialog}')`);
+  assert.equal(await entry(v4.id), undefined);
+
+  // Standalone payment deletion also works from the preview on mobile.
+  await click(`${row(gold.id)} [data-partner-entry-view]`); await preview();
+  await click(`${dialog} [data-invoice-delete]`); await resize(390, 844);
+  await screenshot('partner-delete-confirm-mobile', dialog);
+  const beforeGoldDelete = await partner();
+  await click('[data-confirm-partner-delete]'); await until(`!document.querySelector('${dialog}')`);
+  assert.equal(await entry(gold.id), undefined);
+  assert.equal((await partner()).goldBalance, beforeGoldDelete.goldBalance + 2);
+  await resize(1440);
+
+  // Deleting an old linked payment selects and removes its whole parent invoice.
+  const linkedWorkspace = await workspace();
+  const disposable = await api(`/api/owner/partners/${linkedWorkspace.data.partners[0].id}/invoices`, { method: 'POST', body: {
+    revision: linkedWorkspace.revision, requestId: await evaluate('crypto.randomUUID()'), date: '2026-10-09',
+    gold18Price: 100000, calculationVersion: 2, paidGold: 1,
+    lines: [{ category: 'crafted', itemName: 'خرید قابل حذف', weight: 2, ayar: 750, itemCount: 1, wagePercent: 0, profitPercent: 0 }] } });
+  assert.equal(disposable.status, 201);
+  const temporaryEntries = disposable.body.data.partners[0].entries.slice(-2);
+  await go('/account'); await ready('.workspace-page'); await statement();
+  await click(`${row(temporaryEntries[1].id)} [data-partner-entry-delete]`);
+  await click('[data-confirm-partner-delete]'); await until(`!document.querySelector('${dialog}')`);
+  assert.deepEqual((await data()).documents, linkedWorkspace.data.documents);
+  assert.deepEqual((await partner()).entries, linkedWorkspace.data.partners[0].entries);
+  const afterDeletes = await workspace();
+  await go('/account'); await ready('.workspace-page'); await statement();
+  assert.deepEqual(await workspace(), afterDeletes, 'Deleted documents stay deleted after reload');
+
+  // Match the reported coin layout: only its name belongs in the description cell.
+  await click('[data-section="entries"]'); await click('[data-tool="register"]');
+  await fill('[data-document-type]', 'coin-purchase');
+  await fields('.document-form', { customerName: 'مشتری شرح کوتاه', itemName: 'سکه گل رز ۴۰۰', coinGroup: 'ordinary', coinType: 'گل رز',
+    coinWeight: '0.3', coinAyar: '999.9', coinCount: '1', gold18Price: '26350000', gramPrice: '26350000', profitPercent: '0', profitFixed: '1000000' });
+  await click('.document-form button[type="submit"]'); await ready('.document-form .form-message.success');
+  const coin = (await data()).documents.find(document => document.customerName === 'مشتری شرح کوتاه');
+  assert.ok(coin);
+  await click('[data-section="reports"]'); await click('[data-tool="search"]');
+  await click(`[data-invoice-id="${coin.transactionId}"] [data-invoice-view]`); await ready('.invoice-sheet');
+  assert.equal(await evaluate(`document.querySelector('.invoice-item-description').textContent`), 'سکه گل رز ۴۰۰');
+  assert.equal(await evaluate(`document.querySelector('[data-invoice-weight]').textContent`), '۰٫۳');
+  await screenshot('invoice-customer-name-only', '.invoice-sheet');
+  await cdp('Emulation.setEmulatedMedia', { media: 'print' });
+  assert.equal(await evaluate(`document.querySelector('.invoice-item-description').textContent`), 'سکه گل رز ۴۰۰');
+  await cdp('Emulation.setEmulatedMedia', { media: 'screen' });
+  await click('[data-invoice-close]');
+  const coinWorkspace = await workspace();
+  const partnerCoin = await api(`/api/owner/partners/${coinWorkspace.data.partners[0].id}/invoices`, { method: 'POST', body: {
+    revision: coinWorkspace.revision, requestId: await evaluate('crypto.randomUUID()'), date: '2026-10-11', calculationVersion: 3,
+    gold18Price: 26350000, lines: [{ category: 'coin', itemName: 'سکه گل رز همکار', coinPricingVersion: 2, coinGroup: 'ordinary', coinType: 'گل رز',
+      coinWeight: .3, coinAyar: 999.9, coinCount: 1, profitPercent: 0, profitFixed: 1000000 }] } });
+  assert.equal(partnerCoin.status, 201, JSON.stringify(partnerCoin.body));
+  const coinEntry = partnerCoin.body.data.partners[0].entries.at(-1);
+  await go('/account'); await ready('.workspace-page'); await statement();
+  await click(`${row(coinEntry.id)} [data-partner-entry-view]`); await preview();
+  assert.equal(await evaluate(`document.querySelector('${dialog} [data-partner-item-description]').textContent`), 'سکه گل رز همکار');
+  await screenshot('invoice-partner-name-only', dialog);
+  await close();
+
   // Staff with only partner read access can inspect and print but cannot edit.
   const created = await api('/api/owner/users', { method: 'POST', body: { username: 'partner-actions-reader', password: 'partner-reader-password', permissions: ['partners.read'] } });
   assert.equal(created.status, 201, JSON.stringify(created.body));
@@ -265,6 +379,7 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   assert.equal(loggedIn.status, 200, JSON.stringify(loggedIn.body));
   await go('/account'); await ready('.workspace-page'); await statement();
   assert.equal(await evaluate(`document.querySelectorAll('[data-partner-entry-edit]').length`), 0);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-partner-entry-delete]').length`), 0);
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-partner-settlement]'))`), false);
   await click(`${row(linkedPayment.id)} [data-partner-entry-view]`);
   await preview({ editable: false, text: 'النگوی قدیمی' });
@@ -272,5 +387,5 @@ export async function checkPartnerDocumentActions({ cdp, evaluate, ready, until,
   await click(`${row(cash.id)} [data-partner-entry-view]`);
   await preview({ editable: false, text: 'پرداخت وجه اصلاح شد' });
   await print(); await close();
-  console.log('Partner document actions passed: immediate invoice/remittance/cash/gold preview and print, statement edits, linked-payment routing, preserved identities and balances, reload, mobile, and read-only access.');
+  console.log('Partner actions passed: edit/delete from search, statement and preview; cancellation, sold stock guard, lost response replay, stale revision, linked payments, balances, names-only descriptions, print, reload, mobile and read-only access.');
 }

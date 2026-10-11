@@ -712,19 +712,19 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   const canEditPartnerEntry = entry => Boolean(entry && has('partners.write')
     && (!entry.goldBalancePurchase || has('goldPurchases.write'))
     && (entry.type === 'settlement' ? !entry.linkedEntryId : ['purchase', 'sale', 'mixed'].includes(entry.type) && has('documents.write')));
-  const openPartnerDocument = async (partnerId, entryId, editing = false) => {
+  const openPartnerDocument = async (partnerId, entryId, mode = 'view') => {
     try {
       await ownerStorage.flush();
       const partner = partners.find(item => item.id === partnerId);
       const entry = partnerEntryForDocument(partner, entryId);
       if (!entry) throw new Error('سند مرتبط با این گردش پیدا نشد؛ صفحه را تازه کنید.');
-      if (editing && !canEditPartnerEntry(entry)) throw new Error('دسترسی تغییر این سند همکار را ندارید.');
+      if (mode !== 'view' && !canEditPartnerEntry(entry)) throw new Error('دسترسی تغییر این سند همکار را ندارید.');
       setSelectedInvoice(null);
-      setPartnerDocumentAction({ partnerId, entryId: entry.id, editing: editing === 'edit', deleting: editing === 'delete' });
+      setPartnerDocumentAction({ partnerId, entryId: entry.id, editing: mode === 'edit', deleting: mode === 'delete', revision: ownerStorage.status().revision });
     } catch (error) { setStorageMessage(error.message); }
   };
   const openDocumentAction = async (invoice, mode) => {
-    if (invoice.partnerEntryId) return openPartnerDocument(invoice.partnerId, invoice.partnerEntryId, mode === 'edit');
+    if (invoice.partnerEntryId) return openPartnerDocument(invoice.partnerId, invoice.partnerEntryId, mode);
     try {
       await ownerStorage.flush();
       setSelectedInvoice(null);
@@ -741,16 +741,16 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
   };
   const canChangeDocument = invoice => has('documents.write') && canManageInvoice(invoice) && (invoice.rows[0].type === 'expense' || has('customers.write'));
   const canChangePartnerDocument = invoice => invoice.partnerEntryId && (!(invoice.partnerEntry?.goldBalancePurchase || invoice.rows.some(row => row.goldBalancePurchase)) || has('goldPurchases.write')) && has('partners.write') && (invoice.partnerEntry?.type === 'settlement' || has('documents.write'));
-  const documentActions = invoice => canChangePartnerDocument(invoice) ? <div className="document-actions"><button type="button" className="button button-ghost" data-invoice-edit onClick={() => openDocumentAction(invoice, 'edit')}>ویرایش سند</button></div> : canChangeDocument(invoice) && <div className="document-actions"><button type="button" className="button button-ghost" data-invoice-edit onClick={() => openDocumentAction(invoice, 'edit')}>ویرایش سند</button><button type="button" className="button button-ghost document-delete-link" data-invoice-delete onClick={() => openDocumentAction(invoice, 'delete')}>حذف سند</button></div>;
-  const performPartnerAction = async (action, identifier, payload, requestId) => {
-    const saved = await ownerStorage.mutatePartner(action, identifier, payload, requestId);
+  const documentActions = invoice => (canChangePartnerDocument(invoice) || canChangeDocument(invoice)) && <div className="document-actions"><button type="button" className="button button-ghost" data-invoice-edit onClick={() => openDocumentAction(invoice, 'edit')}>ویرایش سند</button><button type="button" className="button button-ghost document-delete-link" data-invoice-delete onClick={() => openDocumentAction(invoice, 'delete')}>حذف سند</button></div>;
+  const performPartnerAction = async (action, identifier, payload, requestId, revision) => {
+    const saved = await ownerStorage.mutatePartner(action, identifier, payload, requestId, revision);
     applyStockWorkspace(saved);
     if (['invoice', 'settlement'].includes(action)) {
       const partner = saved.data.partners?.find(item => item.id === identifier);
       const entry = partnerEntryForDocument(partner, saved.createdId);
       if (entry) {
         setSelectedInvoice(null);
-        setPartnerDocumentAction({ partnerId: identifier, entryId: entry.id, editing: false });
+        setPartnerDocumentAction({ partnerId: identifier, entryId: entry.id, editing: false, revision: saved.revision });
       }
     }
     return saved;
@@ -1656,7 +1656,11 @@ export default function AccountPage({ username, user, onLogout, notices, onSessi
       </details>}
       </div>}
     </div>
-    {editingPartnerEntry && <PartnerDocumentDialog key={editingPartnerEntry.id} partner={editingPartner} entry={editingPartnerEntry} username={username} documents={documents} prices={savedPrices} onAction={performPartnerAction} editing={partnerDocumentAction.editing} deleting={partnerDocumentAction.deleting} canEdit={canEditPartnerEntry(editingPartnerEntry)} onClose={() => setPartnerDocumentAction(null)} onSaved={() => { setPartnerDocumentAction(current => current && ({ ...current, editing: false })); setStorageMessage('تغییرات سند همکار ذخیره شد و مانده حساب به‌روز شد.'); }} onDeleted={() => { setPartnerDocumentAction(null); setStorageMessage('سند همکار حذف شد و مانده حساب به‌روز شد.'); }}/>}
+    {editingPartnerEntry && <PartnerDocumentDialog key={editingPartnerEntry.id} partner={editingPartner} entry={editingPartnerEntry} username={username} documents={documents} prices={savedPrices}
+      onAction={performPartnerAction} revision={partnerDocumentAction.revision} editing={partnerDocumentAction.editing} deleting={partnerDocumentAction.deleting}
+      canEdit={canEditPartnerEntry(editingPartnerEntry)} onClose={() => setPartnerDocumentAction(null)}
+      onSaved={saved => { setPartnerDocumentAction(current => current && ({ ...current, editing: false, revision: saved.revision })); setStorageMessage('تغییرات سند همکار ذخیره شد و مانده حساب به‌روز شد.'); }}
+      onDeleted={() => { setPartnerDocumentAction(null); setStorageMessage('سند همکار حذف شد و مانده حساب به‌روز شد.'); }}/>}
     <InvoiceDetails invoice={selectedInvoice} onClose={() => setSelectedInvoice(null)} onEdit={selectedInvoice && canChangeDocument(selectedInvoice) ? () => openDocumentAction(selectedInvoice, 'edit') : undefined} onDelete={selectedInvoice && canChangeDocument(selectedInvoice) ? () => openDocumentAction(selectedInvoice, 'delete') : undefined}/>
     {documentAction && <DocumentEditor {...documentAction} customers={customers} onSave={mutateSavedDocument} onClose={() => setDocumentAction(null)}/>}
   </section>

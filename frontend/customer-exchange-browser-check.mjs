@@ -188,7 +188,7 @@ try {
   assert.ok(rows.every(row => row.invoiceTime === '10:25'));
   const customer = saved.data.customers.find(item => item.name === 'مشتری معاوضه');
   assert.equal(customer.gramDebt, .8);
-  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-invoice-row-direction]'),el=>el.textContent)`), ['دریافت از مشتری', 'دریافت از مشتری', 'تحویل به مشتری']);
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.invoice-item-description'),el=>el.textContent)`), ['دو ربع سکه', 'طلای متفرقه معاوضه', 'دستبند معاوضه']);
   assert.ok((await text('.invoice-sheet')).includes('مابه‌التفاوت قابل دریافت از مشتری'));
   await screenshot('customer-exchange-invoice', '.invoice-sheet');
   const pdf = Buffer.from((await cdp('Page.printToPDF', { printBackground: true, preferCSSPageSize: true })).data, 'base64');

@@ -200,9 +200,10 @@ try {
   assert.equal(Number(sale.gramDebt), 0.858333, 'Gold debt derives from the discounted amount');
   await includesAmount('[data-invoice-discount]', discount, 'Customer invoice shows both discount amounts together');
   await includesAmount('[data-invoice-total]', total, 'Customer invoice shows discounted total');
-  assert.ok(await evaluate(`document.querySelector('[data-invoice-discount-percent]').textContent.includes(${JSON.stringify(`${fa(12.5)}٪`)})`), 'Customer invoice shows the percentage used');
+  assert.equal(await evaluate(`document.querySelector('.invoice-item-description').textContent`), sale.itemName, 'Description contains only the item name');
   await cdp('Emulation.setEmulatedMedia', { media: 'print' });
-  assert.ok(await evaluate(`['[data-invoice-discount]','[data-invoice-discount-percent]'].every(selector=>{const node=document.querySelector(selector);return getComputedStyle(node).display!=='none'&&node.getBoundingClientRect().height>0;})`), 'Discount amount and percentage remain visible in print');
+  assert.ok(await evaluate(`(() => {const node=document.querySelector('[data-invoice-discount]');return getComputedStyle(node).display!=='none'&&node.getBoundingClientRect().height>0;})()`), 'Discount total remains visible in print');
+  assert.equal(await evaluate(`document.querySelector('.invoice-item-description').textContent`), sale.itemName);
   await cdp('Emulation.setEmulatedMedia', { media: '' });
   await screenshot('percentage-discount-invoice', '.invoice-sheet');
   const pdf = Buffer.from((await cdp('Page.printToPDF', { printBackground: true, preferCSSPageSize: true })).data, 'base64');
@@ -238,9 +239,9 @@ try {
   await viewInvoice(sale.transactionId);
   await includesAmount('[data-invoice-total]', editedTotal, 'Edited invoice prints the newly discounted total');
   await includesAmount('[data-invoice-discount]', 1300000, 'Edited invoice shows new combined discount');
-  assert.ok(await evaluate(`document.querySelector('.invoice-sheet').textContent.includes(${JSON.stringify(`${fa(20)}٪`)})`), 'Edited invoice shows the saved new percent');
+  assert.equal(await evaluate(`document.querySelector('.invoice-item-description').textContent`), editedSale.itemName, 'Edited invoice keeps only the name in its description');
   assert.equal(errors.length, 0, `No uncaught browser exceptions: ${JSON.stringify(errors)}`);
-  console.log('Percentage discount browser checks passed: Persian fractional input; invalid create/edit rejection; combined fixed and percentage preview, payment and persisted totals; row editing; invoice reload and editing; customer debt reconciliation; printed percent and total.');
+  console.log('Percentage discount browser checks passed: Persian fractional input; invalid create/edit rejection; combined fixed and percentage preview, payment and persisted totals; row editing; invoice reload and editing; customer debt reconciliation; names-only description and printed total.');
 
 } catch (error) {
   if (errors.length) console.error('Browser exceptions:', JSON.stringify(errors));

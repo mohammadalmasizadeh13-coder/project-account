@@ -2,6 +2,33 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorkspaceStorage, emptyWorkspace } from './ownerStorage.js';
 
+for (const action of ['invoice-delete', 'settlement-delete']) test(`${action} replays the confirmed revision even after another workspace is loaded`, async () => {
+  const calls = [];
+  const storage = createWorkspaceStorage(async (path, options) => {
+    calls.push({ path, ...options });
+    if (calls.length === 1) throw new Error('lost acknowledgment');
+    return { revision: 6, data: { ...emptyWorkspace(), partners: [{ id: 'supplier', entries: [], goldBalance: 3 }] } };
+  });
+  const before = { ...emptyWorkspace(), documents: [{ id: 'stock' }], partners: [{ id: 'supplier', entries: [{ id: 'entry' }] }] };
+  storage.hydrate({ revision: 4, data: before });
+  if (action === 'settlement-delete') storage.setWritableFields(['partners']);
+  const payload = { entryId: 'entry/one' };
+  await assert.rejects(storage.mutatePartner(action, 'supplier/one', payload, 'same-delete', 4), /lost/);
+  assert.deepEqual(storage.snapshot(), before);
+  assert.equal(storage.status().saving, false);
+  storage.hydrate({ revision: 5, data: before });
+  await storage.mutatePartner(action, 'supplier/one', payload, 'same-delete', 4);
+  assert.deepEqual(calls[0], calls[1]);
+  assert.equal(calls[0].path, `/api/owner/partners/supplier%2Fone/${action === 'invoice-delete' ? 'invoices' : 'settlements'}/entry%2Fone`);
+  assert.equal(calls[0].method, 'DELETE');
+  assert.deepEqual(calls[0].body, { revision: 4, requestId: 'same-delete' });
+  assert.deepEqual(payload, { entryId: 'entry/one' });
+  assert.equal(storage.status().revision, 6);
+  assert.equal(storage.snapshot().documents.length, 0);
+  assert.equal(storage.snapshot().partners[0].goldBalance, 3);
+  storage.clear();
+});
+
 test('partner invoice waits for existing writes and hydrates stock and partner balances together', async () => {
   const calls = [];
   const storage = createWorkspaceStorage(async (path, options) => {
@@ -61,9 +88,11 @@ test('partner financial writes require their own permission and purchase also re
   storage.setWritableFields(['customers', 'documents']);
   await assert.rejects(storage.mutatePartner('settlement', 'supplier', {}, 'id'), /دسترسی/);
   await assert.rejects(storage.mutatePartner('settlement-update', 'supplier', { entryId: 'entry' }, 'id'), /دسترسی/);
+  await assert.rejects(storage.mutatePartner('settlement-delete', 'supplier', { entryId: 'entry' }, 'id'), /دسترسی/);
   storage.setWritableFields(['partners']);
   await assert.rejects(storage.mutatePartner('invoice', 'supplier', {}, 'id'), /اسناد/);
   await assert.rejects(storage.mutatePartner('invoice-update', 'supplier', { entryId: 'entry' }, 'id'), /اسناد/);
+  await assert.rejects(storage.mutatePartner('invoice-delete', 'supplier', { entryId: 'entry' }, 'id'), /اسناد/);
   assert.equal(called, false);
   storage.clear();
 });
@@ -113,6 +142,8 @@ test('partner invoice editing requires an existing entry identifier before any r
   for (const entryId of [undefined, '', '   ']) {
     await assert.rejects(storage.mutatePartner('invoice-update', 'supplier', { entryId }, 'id'), /شناسه/);
     await assert.rejects(storage.mutatePartner('settlement-update', 'supplier', { entryId }, 'id'), /شناسه/);
+    await assert.rejects(storage.mutatePartner('invoice-delete', 'supplier', { entryId }, 'id'), /شناسه/);
+    await assert.rejects(storage.mutatePartner('settlement-delete', 'supplier', { entryId }, 'id'), /شناسه/);
   }
   assert.equal(called, false);
   storage.clear();

@@ -6,7 +6,7 @@ import { Coins, FilePlus2, Pencil, Plus, Printer, Search, Trash2, Users, Wallet,
 import PersianDateInput from './PersianDateInput.jsx';
 import { currencyCatalog } from './assets.js';
 import CoinFields from './CoinFields.jsx';
-import { coinSummary, isModernCoin, isOrdinaryCoin } from './coins.js';
+import { isModernCoin, isOrdinaryCoin } from './coins.js';
 import { craftedKinds } from './crmAnalytics.js';
 import { formatPersianDate, normalizeDigits } from './persianDate.js';
 import { readAccountingDraft, writeAccountingDraft } from './accountingDrafts.js';
@@ -105,32 +105,26 @@ function InvoiceLine({ line, index, prices, goldPrice, calculationVersion, invoi
   </section>;
 }
 
-function CoinAudit({ line, document, goldPrice }) {
-  const row = { ...document, ...line };
-  if (row.category !== 'coin' || !isModernCoin(row)) return null;
-  return <><small data-partner-coin-spec>{coinSummary(row)}</small><small>{isOrdinaryCoin(row) ? 'نرخ هر گرم ۷۵۰' : 'نرخ تابلو هر سکه'}: {fmt(isOrdinaryCoin(row) ? row.gramPrice || goldPrice : row.coinPrice, 2)} تومان</small><small>سود: {fmt(row.profitPercent)}٪ + {fmt(row.profitFixed, 2)} تومان برای هر سکه</small></>;
-}
-
 function StatementInvoiceLines({ entry, docById }) {
   const lines = entry.lines?.length ? entry.lines : (entry.documentIds || []).filter(id => docById.has(String(id))).map(id => ({ documentId: id }));
   if (entry.calculationVersion === 4) return <div className="partner-table-scroll"><table className="partner-invoice-lines"><thead><tr><th>شرح ردیف</th><th>وزن ۷۵۰</th><th>بدهکار طلا</th><th>بستانکار طلا</th><th>بدهکار تومان</th><th>بستانکار تومان</th></tr></thead><tbody>{lines.map((line, index) => {
     const totals = savedPartnerLineTotals(line, docById.get(String(line.documentId)), entry);
-    return <tr key={index}><td>{totals.itemName}<small>{line.category === 'remittance' ? [line.counterpartyName, line.reference].filter(Boolean).join(' · ') : `${line.direction === 'sale' ? 'تحویل به همکار' : 'خرید از همکار'} · تعداد: ${fmt(totals.count)}`}</small><small>{line.note}</small><CoinAudit line={line} document={docById.get(String(line.documentId))} goldPrice={entry.gold18Price}/></td><td>{fmt(totals.weight750)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.goldCredit)}</td><td>{fmt(totals.tomanDebit, 2)}</td><td>{fmt(totals.tomanCredit, 2)}</td></tr>;
+    return <tr key={index}><td data-partner-item-description>{totals.itemName}{line.category === 'remittance' && <><small>{[line.counterpartyName, line.reference].filter(Boolean).join(' · ')}</small><small>{line.note}</small></>}</td><td>{fmt(totals.weight750)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.goldCredit)}</td><td>{fmt(totals.tomanDebit, 2)}</td><td>{fmt(totals.tomanCredit, 2)}</td></tr>;
   })}</tbody></table></div>;
   if (entry.calculationVersion >= 3) return <div className="partner-table-scroll"><table className="partner-invoice-lines"><thead><tr><th>شرح و نوع ردیف</th><th>جهت معامله</th><th>تعداد</th><th>وزن ۷۵۰ (گرم)</th><th>مبلغ (تومان)</th><th>بدهکار طلا</th><th>بستانکار طلا</th></tr></thead>{lines.map((line, index) => {
     const totals = savedPartnerLineTotals(line, docById.get(String(line.documentId)), entry);
     const remittance = line.category === 'remittance';
-    return <tbody key={index}><tr><td>{remittance ? line.note || 'حواله' : totals.itemName}<small>{partnerLineTypes[totals.category]}</small><CoinAudit line={line} document={docById.get(String(line.documentId))} goldPrice={entry.gold18Price}/></td><td>{remittance ? line.remittanceDirection === 'debit' ? 'حواله بدهکار' : 'حواله بستانکار' : line.direction === 'sale' ? 'تحویل به همکار' : 'خرید از همکار'}</td><td>{remittance ? '—' : fmt(totals.count)}</td><td>{remittance ? fmt(line.goldAmount) : fmt(totals.weight750)}</td><td>{remittance ? '—' : fmt(totals.amount, 2)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.goldCredit)}</td></tr>
+    return <tbody key={index}><tr><td data-partner-item-description>{remittance ? line.note || 'حواله' : totals.itemName}</td><td>{remittance ? line.remittanceDirection === 'debit' ? 'حواله بدهکار' : 'حواله بستانکار' : line.direction === 'sale' ? 'تحویل به همکار' : 'خرید از همکار'}</td><td>{remittance ? '—' : fmt(totals.count)}</td><td>{remittance ? fmt(line.goldAmount) : fmt(totals.weight750)}</td><td>{remittance ? '—' : fmt(totals.amount, 2)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.goldCredit)}</td></tr>
       <tr className="partner-invoice-audit-row"><td colSpan={7}><div className="partner-invoice-audit-values">{remittance ? <span>{[line.counterpartyName, line.reference].filter(Boolean).join(' · ') || 'حواله طلای ۷۵۰'}</span> : <><span>وزن واقعی: <bdi>{fmt(totals.actualWeight)} گرم</bdi></span>{totals.purity != null && <span>عیار: <bdi>{fmt(totals.purity)}</bdi></span>}{line.category === 'melted' && <><span>فی آب‌شده: <bdi>{fmt(line.meltedFee, 2)} تومان</bdi></span><span>فی ÷ ۴٫۳۳۱۸: <bdi>{fmt(totals.rate, 2)} تومان برای هر گرم ۷۵۰</bdi></span></>}<span>اجرت درصدی: <bdi>{fmt(totals.laborGold)} گرم</bdi></span><span>اجرت ریالی به طلا: <bdi>{fmt(totals.fixedLaborGold)} گرم</bdi></span><span>هزینه‌ها به طلا: <bdi>{fmt(totals.otherCostsGold)} گرم</bdi></span><span>سود: <bdi>{fmt(totals.profitGold)} گرم ({fmt(totals.profitPercent)}٪)</bdi></span><span>نرخ تبدیل هر گرم ۷۵۰: <bdi>{fmt(totals.conversionGoldPrice, 2)} تومان</bdi></span></>}</div></td></tr></tbody>;
   })}</table></div>;
   if (entry.calculationVersion === 2) return <div className="partner-table-scroll"><table className="partner-invoice-lines"><thead><tr><th>شرح</th><th>تعداد</th><th>وزن واقعی (گرم)</th><th>عیار</th><th>وزن ۷۵۰ (گرم)</th><th>اجرت درصدی</th><th>درصد سود</th><th>بدهی طلای ۷۵۰ (گرم)</th></tr></thead>{lines.map((line, index) => {
     const totals = savedPartnerLineTotals(line, docById.get(String(line.documentId)), entry);
-    return <tbody key={index}><tr><td>{totals.itemName}<small>{partnerStockTypes[totals.category]}</small><CoinAudit line={line} document={docById.get(String(line.documentId))} goldPrice={entry.gold18Price}/></td><td><bdi>{fmt(totals.count)}</bdi></td><td><bdi>{totals.actualWeight ? fmt(totals.actualWeight) : '—'}</bdi></td><td><bdi>{totals.purity == null ? '—' : fmt(totals.purity)}</bdi></td><td><bdi>{fmt(totals.weight750)}</bdi></td><td><bdi>{fmt(totals.wagePercent)}٪</bdi></td><td><bdi>{fmt(totals.profitPercent)}٪</bdi></td><td><bdi>{fmt(totals.goldDebit)}</bdi></td></tr>
+    return <tbody key={index}><tr><td data-partner-item-description>{totals.itemName}</td><td><bdi>{fmt(totals.count)}</bdi></td><td><bdi>{totals.actualWeight ? fmt(totals.actualWeight) : '—'}</bdi></td><td><bdi>{totals.purity == null ? '—' : fmt(totals.purity)}</bdi></td><td><bdi>{fmt(totals.weight750)}</bdi></td><td><bdi>{fmt(totals.wagePercent)}٪</bdi></td><td><bdi>{fmt(totals.profitPercent)}٪</bdi></td><td><bdi>{fmt(totals.goldDebit)}</bdi></td></tr>
       <tr className="partner-invoice-audit-row"><td colSpan={8}><div className="partner-invoice-audit-values"><span>اجرت درصدی به طلا: <bdi>{fmt(totals.laborGold)} گرم</bdi></span><span>اجرت ریالی به طلا: <bdi>{fmt(totals.fixedLaborGold)} گرم</bdi></span><span>هزینه‌ها به طلا: <bdi>{fmt(totals.otherCostsGold)} گرم</bdi></span><span>سود به طلا: <bdi>{fmt(totals.profitGold)} گرم</bdi></span><span>نرخ تبدیل هر گرم ۷۵۰: <bdi>{fmt(totals.conversionGoldPrice, 2)} تومان</bdi></span>{totals.tomanDebit !== 0 && <span>بدهی تومان: <bdi>{fmt(totals.tomanDebit, 2)}</bdi></span>}</div></td></tr></tbody>;
   })}</table></div>;
   return <div className="partner-table-scroll"><table><thead><tr><th>شرح</th><th>تعداد</th><th>وزن واقعی کل</th><th>عیار</th><th>وزن ۷۵۰</th><th>اجرت درصدی</th><th>اجرت طلا</th><th>فی تومان</th><th>بدهی طلا</th><th>بدهی تومان</th></tr></thead><tbody>{lines.map((line, index) => {
     const totals = savedPartnerLineTotals(line, docById.get(String(line.documentId)), entry);
-    return <tr key={index}><td>{totals.itemName}<small>{partnerStockTypes[totals.category]}</small><CoinAudit line={line} document={docById.get(String(line.documentId))} goldPrice={entry.gold18Price}/></td><td>{fmt(totals.count)}</td><td>{totals.actualWeight ? `${fmt(totals.actualWeight)} گرم` : '—'}</td><td>{totals.purity == null ? '—' : fmt(totals.purity)}</td><td>{fmt(totals.weight750)}</td><td>{fmt(totals.wagePercent)}٪</td><td>{fmt(totals.laborGold)}</td><td>{fmt(totals.rate, 2)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.tomanDebit, 2)}</td></tr>;
+    return <tr key={index}><td data-partner-item-description>{totals.itemName}</td><td>{fmt(totals.count)}</td><td>{totals.actualWeight ? `${fmt(totals.actualWeight)} گرم` : '—'}</td><td>{totals.purity == null ? '—' : fmt(totals.purity)}</td><td>{fmt(totals.weight750)}</td><td>{fmt(totals.wagePercent)}٪</td><td>{fmt(totals.laborGold)}</td><td>{fmt(totals.rate, 2)}</td><td>{fmt(totals.goldDebit)}</td><td>{fmt(totals.tomanDebit, 2)}</td></tr>;
   })}</tbody></table></div>;
 }
 
@@ -147,7 +141,7 @@ function PartnerStatement({ partner, username, documents, onOpenDocument, canEdi
     return <div className="partner-entry-actions">
       <button type="button" className="partner-table-action" aria-expanded={selectedEntry === entry.id} onClick={() => setSelectedEntry(selectedEntry === entry.id ? '' : entry.id)}>مشاهده</button>
       {openable && onOpenDocument && <>
-        <button type="button" className="partner-table-action" data-partner-entry-view disabled={locked} onClick={() => onOpenDocument(partner.id, target.id, false)}><Printer size={14}/> نمایش و چاپ</button>
+        <button type="button" className="partner-table-action" data-partner-entry-view disabled={locked} onClick={() => onOpenDocument(partner.id, target.id, 'view')}><Printer size={14}/> نمایش و چاپ</button>
         {editable && <><button type="button" className="partner-table-action" data-partner-entry-edit disabled={locked} title={entry.linkedEntryId ? 'ویرایش دریافت / پرداخت هم‌زمان از سند اصلی' : 'ویرایش این سند'} onClick={() => onOpenDocument(partner.id, target.id, 'edit')}><Pencil size={14}/> ویرایش</button><button type="button" className="partner-table-action document-delete-link" data-partner-entry-delete disabled={locked} onClick={() => onOpenDocument(partner.id, target.id, 'delete')}><Trash2 size={14}/> حذف</button></>}
       </>}
     </div>;
@@ -174,7 +168,44 @@ function PartnerStatement({ partner, username, documents, onOpenDocument, canEdi
   </section>;
 }
 
-export function PartnerDocumentDialog({ partner, entry, username, documents, prices, onAction, editing = false, deleting = false, canEdit = false, onClose, onSaved, onDeleted }) {
+function PartnerDocumentDelete({ partner, entry, revision, onAction, onDeleted, onCancel, onLockChange }) {
+  const running = useRef(false);
+  const pending = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
+  const [error, setError] = useState('');
+  const settlement = entry.type === 'settlement';
+  async function submit(event) {
+    event.preventDefault();
+    if (running.current) return;
+    pending.current ||= { requestId: crypto.randomUUID(), revision };
+    running.current = true; setBusy(true); onLockChange(true); setError('');
+    try {
+      const saved = await onAction(settlement ? 'settlement-delete' : 'invoice-delete', partner.id,
+        { entryId: entry.id }, pending.current.requestId, pending.current.revision);
+      if (!saved) throw new Error('تأیید حذف دریافت نشد؛ دوباره تلاش کنید.');
+      onDeleted(saved);
+    } catch (failure) {
+      const retry = !failure.status || failure.status >= 500;
+      setUncertain(retry);
+      if (!retry) pending.current = null;
+      setError(failure.message || 'تأیید حذف دریافت نشد؛ دوباره تلاش کنید.');
+    } finally { running.current = false; setBusy(false); onLockChange(false); }
+  }
+  return <form className="partner-statement partner-delete-confirm" data-partner-delete-confirm onSubmit={submit} aria-busy={busy}>
+    <h2>حذف سند همکار</h2>
+    <p>{partner.name} · سند {entry.invoiceNumber ? fmt(entry.invoiceNumber) : String(entry.id).slice(-8)} · {formatRecordDate(entry)}</p>
+    <p>{settlement ? 'با تأیید، این گردش حذف و ماندهٔ همکار دوباره محاسبه می‌شود.' : 'با تأیید، تمام ردیف‌های سند و پرداخت هم‌زمان متصل به آن حذف می‌شوند و ماندهٔ همکار و موجودی صندوق به‌روز می‌شوند.'}</p>
+    {error && <p className="form-message error" role="alert">{error}</p>}
+    {uncertain && <p role="status">تأیید حذف دریافت نشد؛ «تلاش دوباره» وضعیت همین درخواست را پیگیری می‌کند.</p>}
+    <div className="document-actions">
+      <button type="submit" className="button document-delete-button" data-confirm-partner-delete disabled={busy}>{busy ? 'در حال حذف…' : uncertain ? 'تلاش دوباره' : 'تأیید حذف سند'}</button>
+      <button type="button" className="button button-ghost" data-cancel-partner-delete disabled={busy} onClick={onCancel} autoFocus>انصراف</button>
+    </div>
+  </form>;
+}
+
+export function PartnerDocumentDialog({ partner, entry, username, documents, prices, onAction, revision, editing = false, deleting = false, canEdit = false, onClose, onSaved, onDeleted }) {
   const account = useContext(GalleryAccountContext);
   const galleryName = entry.galleryName || documents.find(row => (entry.documentIds || []).includes(row.id))?.galleryName || account.galleryName;
   const settlement = entry.type === 'settlement' && !entry.linkedEntryId;
@@ -185,7 +216,6 @@ export function PartnerDocumentDialog({ partner, entry, username, documents, pri
   const [edit, setEdit] = useState(editing);
   const [removeMode, setRemoveMode] = useState(deleting);
   const [locked, setLocked] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
   const closeRef = useRef(onClose); closeRef.current = onClose;
   useEffect(() => {
     const previousFocus = document.activeElement;
@@ -218,7 +248,7 @@ export function PartnerDocumentDialog({ partner, entry, username, documents, pri
   return createPortal(<dialog ref={dialog} className="partner-document-dialog" data-partner-document-dialog dir="rtl" aria-label={`سند همکار ${partner.name}`} onCancel={event => { event.preventDefault(); if (!locked) closeRef.current?.(); }}>
     <div className="partner-crm">
       <div className="partner-section-heading partner-screen-only"><h2>{edit ? 'ویرایش سند همکار' : 'سند همکار'} · {partner.name}</h2><button type="button" className="partner-icon-button" data-partner-document-close disabled={locked} onClick={onClose} aria-label="بستن سند"><X size={20}/></button></div>
-      {removeMode && canEdit ? <section className="partner-statement partner-delete-confirm"><h2>حذف سند همکار</h2><p>با تأیید، سند و پرداخت متصل آن حذف می‌شود و ماندهٔ همکار و موجودی صندوق دوباره محاسبه خواهد شد.</p>{deleteError && <p className="form-message error" role="alert">{deleteError}</p>}<div className="partner-section-heading"><button type="button" className="button document-delete-button" disabled={locked} onClick={async () => { setLocked(true); setDeleteError(''); try { const saved = await onAction(settlement ? 'settlement-delete' : 'invoice-delete', partner.id, { entryId: entry.id }, crypto.randomUUID()); onDeleted?.(saved); } catch (error) { setDeleteError(error.message || 'حذف سند انجام نشد.'); setLocked(false); } }}>تأیید حذف سند</button><button type="button" className="button button-ghost" disabled={locked} onClick={() => setRemoveMode(false)}>انصراف</button></div></section>
+      {removeMode && canEdit ? <PartnerDocumentDelete partner={partner} entry={entry} revision={revision} onAction={onAction} onDeleted={onDeleted} onCancel={() => setRemoveMode(false)} onLockChange={setLocked}/>
         : edit && canEdit ? <PartnerCRM key={entry.id} embedded username={username} partners={[partner]} documents={documents} prices={prices} onAction={onAction} initialAction={settlement ? remittance ? 'remittance' : 'settlement' : 'invoice'} canPurchase={canEdit} readOnly={!canEdit} editingEntry={settlement ? null : entry} editingSettlement={settlement ? entry : null} onSaved={saved => { setEdit(false); setLocked(false); onSaved?.(saved); }} onClose={() => setEdit(false)} onLockChange={setLocked}/>
         : <section className="partner-statement">
           <header>{galleryName && <h2 data-invoice-gallery-name>{galleryName}</h2>}<h2>{documentTitle} {entry.invoiceNumber ? fmt(entry.invoiceNumber) : String(entry.id).slice(-8)} · {partner.name}</h2><p>{formatRecordDate(entry)}{entry.externalInvoiceNumber && ` · شماره فاکتور همکار: ${entry.externalInvoiceNumber}`}</p></header>
