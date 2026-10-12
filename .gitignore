@@ -4,6 +4,8 @@ dist/
 build/
 coverage/
 artifacts/
+/Zarnegar-Portable*/
+/Zarnegar-Portable*.zip
 
 # Python environments and caches
 .venv/
