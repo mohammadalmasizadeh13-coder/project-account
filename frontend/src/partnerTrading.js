@@ -9,7 +9,7 @@ export const directions = { purchase: 'خرید', sale: 'فروش', receive: 'د
 const num = value => parsePartnerNumber(value) || 0;
 const round = (value, places = 6) => Math.round((value + Number.EPSILON) * 10 ** places) / 10 ** places;
 export const allBalances = partner => ({ gold: num(partner.goldBalance), toman: num(partner.tomanBalance), ...partner.assetBalances });
-export const balanceSide = value => value > 0 ? 'باید بدهیم' : value < 0 ? 'باید بگیریم' : 'تسویه';
+export const balanceSide = value => value > 0 ? 'بس' : value < 0 ? 'بد' : 'تسویه';
 export function assetName(key) {
   if (key === 'gold') return 'طلای آب‌شده';
   if (key?.startsWith('coin:')) { const [, name, , , ...extra] = key.split(':'); return extra.join(':') || name; }

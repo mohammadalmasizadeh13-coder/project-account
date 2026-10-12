@@ -38,7 +38,7 @@ function EntryLines({ entry, documents }) {
 function BalanceTable({ balances, assets, final = false }) {
   return <table className="account-statement-balances" data-statement-final={final || undefined} data-statement-opening={!final || undefined}>
     <caption>{final ? 'ته حساب · مانده تا پایان بازه' : 'مانده منتقل‌شده از قبل از بازه'}</caption>
-    <thead><tr><th>دارایی / واحد</th><th>باید بدهیم</th><th>باید بگیریم</th><th>وضعیت</th></tr></thead>
+    <thead><tr><th>دارایی / واحد</th><th>بس</th><th>بد</th><th>وضعیت</th></tr></thead>
     <tbody>{assets.map(asset => <tr key={asset} data-statement-asset={asset} data-balance={balances[asset] || 0}>
       <th scope="row">{assetLabel(asset)}</th><td>{amount(Math.max(balances[asset] || 0, 0), asset)}</td><td>{amount(Math.max(-(balances[asset] || 0), 0), asset)}</td><td>{balanceSide(balances[asset] || 0)}</td>
     </tr>)}</tbody>

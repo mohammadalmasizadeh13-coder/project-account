@@ -150,8 +150,8 @@ export async function checkPartnerTrading({ cdp, evaluate, ready, until, go, fil
   assert.deepEqual(await reportEntries(), [trade.id, currencyTrade.id, offset.id, combined.id]);
   assert.deepEqual(await reportBalances('final'), { gold: -6, toman: 38000000, 'currency:IQD': -100000, 'coin:گل رز:0.3:999.9': -2 });
   const finalSides = await evaluate(`Object.fromEntries([...document.querySelectorAll('${report} [data-statement-final] [data-statement-asset]')].map(row=>[row.dataset.statementAsset,row.textContent]))`);
-  assert.match(finalSides.gold, /باید بگیریم/); assert.match(finalSides.toman, /باید بدهیم/);
-  assert.match(finalSides['currency:IQD'], /باید بگیریم/); assert.match(finalSides['coin:گل رز:0.3:999.9'], /باید بگیریم/);
+  assert.match(finalSides.gold, /بد/); assert.match(finalSides.toman, /بس/);
+  assert.match(finalSides['currency:IQD'], /بد/); assert.match(finalSides['coin:گل رز:0.3:999.9'], /بد/);
   const reportDescription = await evaluate(`document.querySelector('${report} [data-statement-entry="${combined.id}"]').textContent`);
   for (const description of ['فروش آب‌شده در پایان دوره', 'خرید دو سکه گل رز', 'واریز هم‌زمان معامله']) assert.ok(reportDescription.includes(description), `Statement includes line description: ${description}`);
   assert.ok(await evaluate(`document.querySelectorAll('${report} [data-statement-entry="${combined.id}"] [data-statement-line]').length >= 3`));
